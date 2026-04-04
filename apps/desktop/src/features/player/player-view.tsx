@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Empty, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
+import { useTvAutoFocus } from "@/hooks/use-tv-auto-focus";
 import { usePlayerStore } from "@/store/player-store";
 import { formatRelativeTime } from "@/lib/utils";
 
@@ -12,6 +13,7 @@ export function PlayerView() {
   const source = usePlayerStore((state) => state.source);
   const setSource = usePlayerStore((state) => state.setSource);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  useTvAutoFocus(source ? "[data-player-clear='true']" : null, [source?.title]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -60,11 +62,19 @@ export function PlayerView() {
               </div>
             ) : (
               <div className="overflow-hidden rounded-2xl border border-border/70 bg-black">
-                <video ref={videoRef} controls autoPlay className="aspect-video w-full" aria-label={`Playing ${source.title}`} />
+                <video
+                  ref={videoRef}
+                  controls
+                  autoPlay
+                  tabIndex={0}
+                  data-tv-focusable="true"
+                  className="aspect-video w-full"
+                  aria-label={`Playing ${source.title}`}
+                />
               </div>
             )}
 
-            <Button variant="ghost" onClick={() => setSource(null)}>
+            <Button data-player-clear="true" data-tv-autofocus="true" variant="ghost" onClick={() => setSource(null)}>
               Clear player
             </Button>
           </>

@@ -1,5 +1,5 @@
 import { type InfiniteData, useMutation, useQueryClient } from "@tanstack/react-query";
-import type { Channel, GuideCategoryResponse, RecentChannel, SearchResults } from "@euripus/shared";
+import type { Channel, ChannelSearchResults, GuideCategoryResponse, RecentChannel } from "@euripus/shared";
 import { addFavorite, removeFavorite } from "@/lib/api";
 
 function withFavorite(channel: Channel, isFavorite: boolean): Channel {
@@ -54,14 +54,17 @@ export function useChannelFavoriteMutation() {
         },
       );
 
-      queryClient.setQueriesData<SearchResults>({ queryKey: ["search"] }, (current) => {
+      queryClient.setQueriesData<InfiniteData<ChannelSearchResults, number>>({ queryKey: ["search", "channels"] }, (current) => {
         if (!current) {
           return current;
         }
 
         return {
           ...current,
-          channels: current.channels.map((item) => (item.id === channel.id ? withFavorite(item, nextIsFavorite) : item)),
+          pages: current.pages.map((page) => ({
+            ...page,
+            items: page.items.map((item) => (item.id === channel.id ? withFavorite(item, nextIsFavorite) : item)),
+          })),
         };
       });
 

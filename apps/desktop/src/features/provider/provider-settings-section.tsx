@@ -1,5 +1,6 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import type { SyncJob } from "@euripus/shared";
 import {
   ArrowDown,
   ArrowUp,
@@ -23,6 +24,7 @@ import {
   FieldLabel,
 } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
+import { Progress } from "@/components/ui/progress";
 import {
   Select,
   SelectContent,
@@ -63,10 +65,18 @@ export function ProviderSettingsSection() {
   const providerQuery = useQuery({
     queryKey: ["provider"],
     queryFn: getProvider,
+    refetchInterval: (query) => {
+      const provider = query.state.data;
+      return provider?.status === "syncing" ? 1000 : false;
+    },
   });
   const syncQuery = useQuery({
     queryKey: ["sync-status"],
     queryFn: getSyncStatus,
+    refetchInterval: (query) => {
+      const latestJob = query.state.data;
+      return latestJob?.status === "queued" || latestJob?.status === "running" ? 1000 : false;
+    },
   });
   const form = useForm<ProviderValues>({
     resolver: zodResolver(providerSchema),
@@ -124,6 +134,7 @@ export function ProviderSettingsSection() {
   const provider = providerQuery.data;
   const latestJob = syncQuery.data;
   const watchedEpgSources = form.watch("epgSources");
+  const syncProgressValue = latestJob ? getSyncProgressValue(latestJob) : 0;
 
   function reindexEpgSources(
     items: Array<{
@@ -545,6 +556,24 @@ export function ProviderSettingsSection() {
             <CardTitle>Sync activity</CardTitle>
           </CardHeader>
           <CardContent className="flex flex-col gap-4">
+            {latestJob ? (
+              <div className="rounded-2xl border border-border/70 bg-muted/40 p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex flex-col gap-1">
+                    <span className="text-sm font-medium capitalize">
+                      {latestJob.currentPhase?.replaceAll("-", " ") ?? latestJob.status}
+                    </span>
+                    <span className="text-sm text-muted-foreground">
+                      {latestJob.phaseMessage ?? "Waiting for the next sync update"}
+                    </span>
+                  </div>
+                  <Badge variant={latestJob.status === "failed" ? "destructive" : latestJob.status === "succeeded" ? "accent" : "outline"}>
+                    {latestJob.trigger}
+                  </Badge>
+                </div>
+                <Progress value={syncProgressValue} className="mt-3 h-2.5" />
+              </div>
+            ) : null}
             <StatusRow
               label="Latest job"
               value={latestJob?.status ?? "idle"}
@@ -563,6 +592,13 @@ export function ProviderSettingsSection() {
                   : "Run a sync to populate timing details"
               }
             />
+            {latestJob ? (
+              <StatusRow
+                label="Progress"
+                value={`${latestJob.completedPhases}/${Math.max(latestJob.totalPhases, 0)} phases`}
+                detail={latestJob.currentPhase?.replaceAll("-", " ") ?? "Queued"}
+              />
+            ) : null}
             {latestJob?.errorMessage ? (
               <div className="rounded-2xl border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">
                 {latestJob.errorMessage}
@@ -580,6 +616,15 @@ export function ProviderSettingsSection() {
       </div>
     </div>
   );
+}
+
+function getSyncProgressValue(syncJob: SyncJob) {
+  if (!syncJob.totalPhases) {
+    return 0;
+  }
+
+  const inFlightPhaseBonus = syncJob.status === "running" ? 0.5 : syncJob.status === "succeeded" ? 1 : 0;
+  return Math.min(100, ((syncJob.completedPhases + inFlightPhaseBonus) / syncJob.totalPhases) * 100);
 }
 
 function StatusRow({

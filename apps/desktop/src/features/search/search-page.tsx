@@ -1,6 +1,6 @@
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation } from "@tanstack/react-query";
 import { Clapperboard, Heart, Play, Search as SearchIcon, TvMinimal } from "lucide-react";
-import { useState } from "react";
+import { useDeferredValue, useEffect, useRef, useState } from "react";
 import { PageHeader } from "@/components/layout/page-header";
 import { ChannelAvatar } from "@/components/ui/channel-avatar";
 import { Badge } from "@/components/ui/badge";
@@ -13,19 +13,33 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useChannelFavoriteMutation } from "@/hooks/use-channel-favorite";
 import { useDebounce } from "@/hooks/use-debounce";
-import { searchCatalog, startChannelPlayback, startProgramPlayback } from "@/lib/api";
+import { useTvAutoFocus } from "@/hooks/use-tv-auto-focus";
+import { searchChannels, searchPrograms, startChannelPlayback, startProgramPlayback } from "@/lib/api";
 import { canPlayProgram, formatTimeRange, getProgramPlaybackState, type ProgramPlaybackState } from "@/lib/utils";
 import { usePlayerStore } from "@/store/player-store";
 
+const SEARCH_PAGE_SIZE = 30;
+
 export function SearchPage() {
   const [query, setQuery] = useState("");
-  const debouncedQuery = useDebounce(query, 300);
+  const [activeTab, setActiveTab] = useState<"channels" | "programs">("channels");
+  const deferredQuery = useDeferredValue(query);
+  const debouncedQuery = useDebounce(deferredQuery, 250);
   const hasQuery = debouncedQuery.trim().length > 1;
   const setLoading = usePlayerStore((state) => state.setLoading);
   const setSource = usePlayerStore((state) => state.setSource);
-  const searchQuery = useQuery({
-    queryKey: ["search", debouncedQuery],
-    queryFn: () => searchCatalog(debouncedQuery),
+  const channelQuery = useInfiniteQuery({
+    queryKey: ["search", "channels", debouncedQuery],
+    queryFn: ({ pageParam }) => searchChannels(debouncedQuery, pageParam, SEARCH_PAGE_SIZE),
+    initialPageParam: 0,
+    getNextPageParam: (lastPage) => lastPage.nextOffset ?? undefined,
+    enabled: hasQuery,
+  });
+  const programQuery = useInfiniteQuery({
+    queryKey: ["search", "programs", debouncedQuery],
+    queryFn: ({ pageParam }) => searchPrograms(debouncedQuery, pageParam, SEARCH_PAGE_SIZE),
+    initialPageParam: 0,
+    getNextPageParam: (lastPage) => lastPage.nextOffset ?? undefined,
     enabled: hasQuery,
   });
   const favoriteMutation = useChannelFavoriteMutation();
@@ -42,9 +56,37 @@ export function SearchPage() {
     onSettled: () => setLoading(false),
   });
 
-  const channels = searchQuery.data?.channels ?? [];
-  const programs = searchQuery.data?.programs ?? [];
-  const totalMatches = channels.length + programs.length;
+  const channels = channelQuery.data?.pages.flatMap((page) => page.items) ?? [];
+  const programs = programQuery.data?.pages.flatMap((page) => page.items) ?? [];
+  const channelTotal = channelQuery.data?.pages[0]?.totalCount ?? 0;
+  const programTotal = programQuery.data?.pages[0]?.totalCount ?? 0;
+  const totalMatches = channelTotal + programTotal;
+  const isInitialLoading =
+    hasQuery &&
+    ((channelQuery.isPending && !channels.length) || (programQuery.isPending && !programs.length));
+
+  useEffect(() => {
+    if (!hasQuery) {
+      setActiveTab("channels");
+      return;
+    }
+
+    if (!channelTotal && programTotal) {
+      setActiveTab("programs");
+      return;
+    }
+
+    if (channelTotal) {
+      setActiveTab("channels");
+    }
+  }, [channelTotal, hasQuery, programTotal]);
+
+  useTvAutoFocus(hasQuery ? "[data-search-tab-trigger='true']" : null, [
+    hasQuery,
+    activeTab,
+    channelTotal,
+    programTotal,
+  ]);
 
   return (
     <div className="flex flex-col gap-6">
@@ -54,8 +96,8 @@ export function SearchPage() {
           hasQuery ? (
             <>
               <Badge variant="accent">{totalMatches} matches</Badge>
-              <Badge variant="outline">{channels.length} channels</Badge>
-              <Badge variant="outline">{programs.length} programs</Badge>
+              <Badge variant="outline">{channelTotal} channels</Badge>
+              <Badge variant="outline">{programTotal} programs</Badge>
             </>
           ) : null
         }
@@ -66,6 +108,7 @@ export function SearchPage() {
           <div className="relative">
             <SearchIcon className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
             <Input
+              data-search-input="true"
               className="pl-10"
               placeholder="Search channels, titles, events, teams..."
               value={query}
@@ -90,7 +133,7 @@ export function SearchPage() {
         </Card>
       ) : null}
 
-      {hasQuery && searchQuery.isPending ? (
+      {isInitialLoading ? (
         <Card>
           <CardContent className="flex flex-col gap-3 pt-5">
             {Array.from({ length: 5 }).map((_, index) => (
@@ -107,11 +150,15 @@ export function SearchPage() {
         </Card>
       ) : null}
 
-      {hasQuery && !searchQuery.isPending ? (
-        <Tabs defaultValue={channels.length ? "channels" : "programs"} className="flex flex-col gap-4">
+      {hasQuery && !isInitialLoading ? (
+        <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as "channels" | "programs")} className="flex flex-col gap-4">
           <TabsList>
-            <TabsTrigger value="channels">Channels ({channels.length})</TabsTrigger>
-            <TabsTrigger value="programs">Programs ({programs.length})</TabsTrigger>
+            <TabsTrigger data-search-tab-trigger="true" value="channels" data-tv-autofocus={activeTab === "channels" ? "true" : undefined}>
+              Channels ({channelTotal})
+            </TabsTrigger>
+            <TabsTrigger data-search-tab-trigger="true" value="programs" data-tv-autofocus={activeTab === "programs" ? "true" : undefined}>
+              Programs ({programTotal})
+            </TabsTrigger>
           </TabsList>
 
           <TabsContent value="channels" className="mt-0">
@@ -121,48 +168,55 @@ export function SearchPage() {
               </CardHeader>
               <CardContent className="p-0">
                 {channels.length ? (
-                  channels.map((channel, index) => (
-                    <div key={channel.id}>
-                      {index > 0 ? <Separator /> : null}
-                      <div className="flex flex-col gap-4 p-5 lg:flex-row lg:items-center lg:justify-between">
-                        <div className="flex min-w-0 items-start gap-4">
-                          <ChannelAvatar name={channel.name} logoUrl={channel.logoUrl} />
-                          <div className="flex min-w-0 flex-1 flex-col gap-2">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <h2 className="truncate text-base font-semibold">{channel.name}</h2>
-                              {channel.categoryName ? <Badge variant="outline">{channel.categoryName}</Badge> : null}
-                              {channel.hasCatchup ? <Badge variant="live">Catch-up</Badge> : null}
-                              {channel.isFavorite ? <Badge variant="accent">Favorite</Badge> : null}
+                  <>
+                    {channels.map((channel, index) => (
+                      <div key={channel.id}>
+                        {index > 0 ? <Separator /> : null}
+                        <div className="flex flex-col gap-4 p-5 lg:flex-row lg:items-center lg:justify-between">
+                          <div className="flex min-w-0 items-start gap-4">
+                            <ChannelAvatar name={channel.name} logoUrl={channel.logoUrl} />
+                            <div className="flex min-w-0 flex-1 flex-col gap-2">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <h2 className="truncate text-base font-semibold">{channel.name}</h2>
+                                {channel.categoryName ? <Badge variant="outline">{channel.categoryName}</Badge> : null}
+                                {channel.hasCatchup ? <Badge variant="live">Catch-up</Badge> : null}
+                                {channel.isFavorite ? <Badge variant="accent">Favorite</Badge> : null}
+                              </div>
+                              <p className="text-sm text-muted-foreground">
+                                {channel.streamExtension
+                                  ? `${channel.streamExtension.toUpperCase()} playback available`
+                                  : "Live stream ready for playback"}
+                              </p>
                             </div>
-                            <p className="text-sm text-muted-foreground">
-                              {channel.streamExtension
-                                ? `${channel.streamExtension.toUpperCase()} playback available`
-                                : "Live stream ready for playback"}
-                            </p>
+                          </div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <Button
+                              variant="secondary"
+                              size="sm"
+                              onClick={() => favoriteMutation.mutate(channel)}
+                              disabled={favoriteMutation.isPending && favoriteMutation.variables?.id === channel.id}
+                            >
+                              <Heart data-icon="inline-start" />
+                              {channel.isFavorite ? "Unfavorite" : "Favorite"}
+                            </Button>
+                            <Button
+                              size="sm"
+                              onClick={() => playChannelMutation.mutate(channel.id)}
+                              disabled={playChannelMutation.isPending}
+                            >
+                              <Play data-icon="inline-start" />
+                              Play
+                            </Button>
                           </div>
                         </div>
-                        <div className="flex flex-wrap items-center gap-2">
-                          <Button
-                            variant="secondary"
-                            size="sm"
-                            onClick={() => favoriteMutation.mutate(channel)}
-                            disabled={favoriteMutation.isPending && favoriteMutation.variables?.id === channel.id}
-                          >
-                            <Heart data-icon="inline-start" />
-                            {channel.isFavorite ? "Unfavorite" : "Favorite"}
-                          </Button>
-                          <Button
-                            size="sm"
-                            onClick={() => playChannelMutation.mutate(channel.id)}
-                            disabled={playChannelMutation.isPending}
-                          >
-                            <Play data-icon="inline-start" />
-                            Play
-                          </Button>
-                        </div>
                       </div>
-                    </div>
-                  ))
+                    ))}
+                    <LoadMoreTrigger
+                      hasNextPage={channelQuery.hasNextPage}
+                      isFetchingNextPage={channelQuery.isFetchingNextPage}
+                      onLoadMore={() => channelQuery.fetchNextPage()}
+                    />
+                  </>
                 ) : (
                   <Empty className="border-0">
                     <EmptyHeader>
@@ -184,54 +238,61 @@ export function SearchPage() {
               </CardHeader>
               <CardContent className="p-0">
                 {programs.length ? (
-                  programs.map((program, index) => {
-                    const playbackState = getProgramPlaybackState(program);
+                  <>
+                    {programs.map((program, index) => {
+                      const playbackState = getProgramPlaybackState(program);
 
-                    return (
-                      <div key={program.id}>
-                        {index > 0 ? <Separator /> : null}
-                        <div className="flex flex-col gap-4 p-5 lg:flex-row lg:items-center lg:justify-between">
-                          <div className="flex min-w-0 items-start gap-4">
-                            <ChannelAvatar name={program.channelName ?? program.title} className="size-10" />
-                            <div className="flex min-w-0 flex-1 flex-col gap-2">
-                              <div className="flex flex-wrap items-center gap-2">
-                                <h2 className="truncate text-base font-semibold">{program.title}</h2>
-                                {program.channelName ? <Badge variant="outline">{program.channelName}</Badge> : null}
-                                <ProgramStateBadge state={playbackState} />
+                      return (
+                        <div key={program.id}>
+                          {index > 0 ? <Separator /> : null}
+                          <div className="flex flex-col gap-4 p-5 lg:flex-row lg:items-center lg:justify-between">
+                            <div className="flex min-w-0 items-start gap-4">
+                              <ChannelAvatar name={program.channelName ?? program.title} className="size-10" />
+                              <div className="flex min-w-0 flex-1 flex-col gap-2">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <h2 className="truncate text-base font-semibold">{program.title}</h2>
+                                  {program.channelName ? <Badge variant="outline">{program.channelName}</Badge> : null}
+                                  <ProgramStateBadge state={playbackState} />
+                                </div>
+                                <p className="text-sm text-muted-foreground">
+                                  {program.description ?? `Scheduled for ${formatTimeRange(program.startAt, program.endAt)}.`}
+                                </p>
                               </div>
-                              <p className="text-sm text-muted-foreground">
-                                {program.description ?? `Scheduled for ${formatTimeRange(program.startAt, program.endAt)}.`}
-                              </p>
+                            </div>
+                            <div className="flex items-center gap-3 self-start lg:self-center">
+                              <Badge variant="outline">{formatTimeRange(program.startAt, program.endAt)}</Badge>
+                              {canPlayProgram(program) ? (
+                                <Button
+                                  size="sm"
+                                  variant="secondary"
+                                  onClick={() => {
+                                    if (playbackState === "live" && program.channelId) {
+                                      playChannelMutation.mutate(program.channelId);
+                                      return;
+                                    }
+                                    playProgramMutation.mutate(program.id);
+                                  }}
+                                  disabled={playChannelMutation.isPending || playProgramMutation.isPending}
+                                >
+                                  <Play data-icon="inline-start" />
+                                  Play
+                                </Button>
+                              ) : (
+                                <span className="text-sm text-muted-foreground">
+                                  {playbackState === "upcoming" ? "Upcoming only" : "Info only"}
+                                </span>
+                              )}
                             </div>
                           </div>
-                          <div className="flex items-center gap-3 self-start lg:self-center">
-                            <Badge variant="outline">{formatTimeRange(program.startAt, program.endAt)}</Badge>
-                            {canPlayProgram(program) ? (
-                              <Button
-                                size="sm"
-                                variant="secondary"
-                                onClick={() => {
-                                  if (playbackState === "live" && program.channelId) {
-                                    playChannelMutation.mutate(program.channelId);
-                                    return;
-                                  }
-                                  playProgramMutation.mutate(program.id);
-                                }}
-                                disabled={playChannelMutation.isPending || playProgramMutation.isPending}
-                              >
-                                <Play data-icon="inline-start" />
-                                Play
-                              </Button>
-                            ) : (
-                              <span className="text-sm text-muted-foreground">
-                                {playbackState === "upcoming" ? "Upcoming only" : "Info only"}
-                              </span>
-                            )}
-                          </div>
                         </div>
-                      </div>
-                    );
-                  })
+                      );
+                    })}
+                    <LoadMoreTrigger
+                      hasNextPage={programQuery.hasNextPage}
+                      isFetchingNextPage={programQuery.isFetchingNextPage}
+                      onLoadMore={() => programQuery.fetchNextPage()}
+                    />
+                  </>
                 ) : (
                   <Empty className="border-0">
                     <EmptyHeader>
@@ -265,4 +326,51 @@ function ProgramStateBadge({ state }: { state: ProgramPlaybackState }) {
   }
 
   return <Badge variant="outline">Info only</Badge>;
+}
+
+function LoadMoreTrigger({
+  hasNextPage,
+  isFetchingNextPage,
+  onLoadMore,
+}: {
+  hasNextPage: boolean;
+  isFetchingNextPage: boolean;
+  onLoadMore: () => void;
+}) {
+  const triggerRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!hasNextPage || isFetchingNextPage || !triggerRef.current) {
+      return;
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting) {
+          onLoadMore();
+        }
+      },
+      { rootMargin: "160px" },
+    );
+
+    observer.observe(triggerRef.current);
+    return () => {
+      observer.disconnect();
+    };
+  }, [hasNextPage, isFetchingNextPage, onLoadMore]);
+
+  if (!hasNextPage) {
+    return null;
+  }
+
+  return (
+    <>
+      <Separator />
+      <div ref={triggerRef} className="p-5">
+        <Button variant="outline" onClick={onLoadMore} disabled={isFetchingNextPage}>
+          {isFetchingNextPage ? "Loading more..." : "Load more"}
+        </Button>
+      </div>
+    </>
+  );
 }

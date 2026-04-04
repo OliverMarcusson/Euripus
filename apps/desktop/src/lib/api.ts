@@ -1,6 +1,7 @@
 import type {
   ApiError,
   AuthSession,
+  ChannelSearchResults,
   Channel,
   GuidePreferences,
   GuideCategoryResponse,
@@ -13,7 +14,7 @@ import type {
   RefreshPayload,
   RegisterPayload,
   SaveProviderPayload,
-  SearchResults,
+  ProgramSearchResults,
   Session,
   SyncJob,
   User,
@@ -175,8 +176,22 @@ export function getGuideCategory(categoryId: string, offset = 0, limit = 40) {
   return request<GuideCategoryResponse>(`/guide/category/${encodeURIComponent(categoryId)}?${params.toString()}`);
 }
 
-export function searchCatalog(query: string) {
-  return request<SearchResults>(`/search?q=${encodeURIComponent(query)}`);
+export function searchChannels(query: string, offset = 0, limit = 30) {
+  const params = new URLSearchParams({
+    q: query,
+    offset: offset.toString(),
+    limit: limit.toString(),
+  });
+  return request<ChannelSearchResults>(`/search/channels?${params.toString()}`);
+}
+
+export function searchPrograms(query: string, offset = 0, limit = 30) {
+  const params = new URLSearchParams({
+    q: query,
+    offset: offset.toString(),
+    limit: limit.toString(),
+  });
+  return request<ProgramSearchResults>(`/search/programs?${params.toString()}`);
 }
 
 export function getFavorites() {

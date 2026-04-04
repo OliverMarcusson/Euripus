@@ -29,14 +29,14 @@ use base64::{
     Engine as _,
     engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
 };
-use chrono::{DateTime, Duration as ChronoDuration, Utc};
+use chrono::{DateTime, Duration as ChronoDuration, Local, NaiveDate, Timelike, Utc};
 use config::Config;
 use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation, decode, encode};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::{FromRow, PgPool, Postgres, Transaction, postgres::PgPoolOptions};
-use tokio::task::JoinHandle;
+use tokio::task::{JoinHandle, JoinSet};
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use tracing::{error, info};
 use uuid::Uuid;
@@ -211,9 +211,14 @@ struct SyncJobResponse {
     id: Uuid,
     status: String,
     job_type: String,
+    trigger: String,
     created_at: DateTime<Utc>,
     started_at: Option<DateTime<Utc>>,
     finished_at: Option<DateTime<Utc>>,
+    current_phase: Option<String>,
+    completed_phases: i32,
+    total_phases: i32,
+    phase_message: Option<String>,
     error_message: Option<String>,
 }
 
@@ -256,10 +261,20 @@ struct GuideCategoryResponse {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct SearchResponse {
+struct ChannelSearchResponse {
     query: String,
-    channels: Vec<ChannelResponse>,
-    programs: Vec<ProgramResponse>,
+    items: Vec<ChannelResponse>,
+    total_count: i64,
+    next_offset: Option<i64>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProgramSearchResponse {
+    query: String,
+    items: Vec<ProgramResponse>,
+    total_count: i64,
+    next_offset: Option<i64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -337,8 +352,11 @@ struct ValidateProviderResponse {
 }
 
 #[derive(Debug, Deserialize)]
-struct SearchParams {
+#[serde(rename_all = "camelCase")]
+struct SearchQuery {
     q: String,
+    offset: Option<i64>,
+    limit: Option<i64>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -387,6 +405,7 @@ struct ProviderProfileRecord {
     status: String,
     last_validated_at: Option<DateTime<Utc>>,
     last_sync_at: Option<DateTime<Utc>>,
+    last_scheduled_sync_on: Option<NaiveDate>,
     last_sync_error: Option<String>,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
@@ -450,6 +469,11 @@ struct EpgSourceSyncStatus {
     mark_synced: bool,
 }
 
+enum ExternalEpgFetchResult {
+    Success(FetchedEpgFeed),
+    Failure(EpgSourceSyncStatus),
+}
+
 #[derive(Debug, Clone)]
 struct ResolvedProgramme {
     channel_id: Uuid,
@@ -476,6 +500,11 @@ struct ChannelPlaybackRecord {
 }
 
 const SYNC_BATCH_SIZE: usize = 10_000;
+const EPG_FETCH_CONCURRENCY: usize = 4;
+const FULL_SYNC_TOTAL_PHASES: i32 = 7;
+const EPG_SYNC_TOTAL_PHASES: i32 = 5;
+const SEARCH_DEFAULT_LIMIT: i64 = 30;
+const SEARCH_MAX_LIMIT: i64 = 100;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -495,6 +524,12 @@ async fn main() -> Result<()> {
         .run(&pool)
         .await
         .context("failed to run migrations")?;
+
+    if config.daily_sync_hour_local > 23 {
+        return Err(anyhow!(
+            "APP_DAILY_SYNC_HOUR_LOCAL must be between 0 and 23"
+        ));
+    }
 
     let state = AppState {
         pool,
@@ -531,7 +566,8 @@ async fn main() -> Result<()> {
         )
         .route("/guide/category/{category_id}", get(get_guide_category))
         .route("/guide/channel/{id}", get(get_channel_guide))
-        .route("/search", get(search_catalog))
+        .route("/search/channels", get(search_channels))
+        .route("/search/programs", get(search_programs))
         .route("/favorites", get(list_favorites))
         .route(
             "/favorites/{channel_id}",
@@ -767,7 +803,7 @@ async fn load_provider_profile_response(
         r#"
         SELECT
           id, user_id, provider_type, base_url, username, password_encrypted, output_format,
-          status, last_validated_at, last_sync_at, last_sync_error, created_at, updated_at
+          status, last_validated_at, last_sync_at, last_scheduled_sync_on, last_sync_error, created_at, updated_at
         FROM provider_profiles
         WHERE user_id = $1
         "#,
@@ -991,7 +1027,7 @@ async fn trigger_sync(
         r#"
         SELECT
           id, user_id, provider_type, base_url, username, password_encrypted, output_format,
-          status, last_validated_at, last_sync_at, last_sync_error, created_at, updated_at
+          status, last_validated_at, last_sync_at, last_scheduled_sync_on, last_sync_error, created_at, updated_at
         FROM provider_profiles
         WHERE user_id = $1
         "#,
@@ -1001,17 +1037,8 @@ async fn trigger_sync(
     .await?
     .ok_or_else(|| AppError::BadRequest("Connect a provider before starting sync".to_string()))?;
 
-    let job = sqlx::query_as::<_, SyncJobResponse>(
-        r#"
-        INSERT INTO sync_jobs (user_id, profile_id, status, job_type)
-        VALUES ($1, $2, 'queued', 'full')
-        RETURNING id, status, job_type, created_at, started_at, finished_at, error_message
-        "#,
-    )
-    .bind(auth.user_id)
-    .bind(profile.id)
-    .fetch_one(&state.pool)
-    .await?;
+    ensure_no_active_sync(&state.pool, profile.id).await?;
+    let job = insert_sync_job(&state.pool, auth.user_id, profile.id, "full", "manual").await?;
 
     spawn_sync_job(state.clone(), auth.user_id, profile.id, job.id);
     Ok(Json(job))
@@ -1024,7 +1051,19 @@ async fn get_sync_status(
     let auth = require_auth(&state, &headers).await?;
     let job = sqlx::query_as::<_, SyncJobResponse>(
         r#"
-        SELECT id, status, job_type, created_at, started_at, finished_at, error_message
+        SELECT
+          id,
+          status,
+          job_type,
+          trigger,
+          created_at,
+          started_at,
+          finished_at,
+          current_phase,
+          completed_phases,
+          total_phases,
+          phase_message,
+          error_message
         FROM sync_jobs
         WHERE user_id = $1
         ORDER BY created_at DESC
@@ -1040,56 +1079,173 @@ async fn get_sync_status(
 
 fn spawn_periodic_sync_worker(state: AppState) -> JoinHandle<()> {
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_secs(60 * 30));
+        let mut interval = tokio::time::interval(Duration::from_secs(60 * 5));
         loop {
             interval.tick().await;
-            if let Err(error) = queue_stale_syncs(state.clone()).await {
+            if let Err(error) = queue_daily_syncs(state.clone()).await {
                 error!("periodic sync worker failed: {error:?}");
             }
         }
     })
 }
 
-async fn queue_stale_syncs(state: AppState) -> Result<()> {
-    let stale_profiles = sqlx::query_as::<_, ProviderProfileRecord>(
+async fn queue_daily_syncs(state: AppState) -> Result<()> {
+    let today = Local::now().date_naive();
+    let current_hour = Local::now().hour();
+    if current_hour < state.config.daily_sync_hour_local {
+        return Ok(());
+    }
+
+    let profiles = sqlx::query_as::<_, ProviderProfileRecord>(
         r#"
         SELECT
           id, user_id, provider_type, base_url, username, password_encrypted, output_format,
-          status, last_validated_at, last_sync_at, last_sync_error, created_at, updated_at
+          status, last_validated_at, last_sync_at, last_scheduled_sync_on, last_sync_error, created_at, updated_at
         FROM provider_profiles
         WHERE status = 'valid'
-          AND (last_sync_at IS NULL OR last_sync_at < NOW() - INTERVAL '6 hours')
         "#,
     )
     .fetch_all(&state.pool)
     .await?;
 
-    for profile in stale_profiles {
-        let active_job = sqlx::query_scalar::<_, i64>(
-            r#"SELECT COUNT(*) FROM sync_jobs WHERE profile_id = $1 AND status IN ('queued', 'running')"#,
-        )
-        .bind(profile.id)
-        .fetch_one(&state.pool)
-        .await?;
-
-        if active_job > 0 {
+    for profile in profiles {
+        if profile.last_scheduled_sync_on == Some(today) {
             continue;
         }
 
-        let job = sqlx::query_as::<_, SyncJobResponse>(
+        match ensure_no_active_sync(&state.pool, profile.id).await {
+            Ok(()) => {}
+            Err(AppError::BadRequest(_)) => continue,
+            Err(other) => return Err(anyhow!("failed to inspect active syncs: {other:?}")),
+        }
+
+        sqlx::query(
             r#"
-            INSERT INTO sync_jobs (user_id, profile_id, status, job_type)
-            VALUES ($1, $2, 'queued', 'epg')
-            RETURNING id, status, job_type, created_at, started_at, finished_at, error_message
+            UPDATE provider_profiles
+            SET last_scheduled_sync_on = $2, updated_at = NOW()
+            WHERE id = $1
             "#,
         )
-        .bind(profile.user_id)
         .bind(profile.id)
-        .fetch_one(&state.pool)
+        .bind(today)
+        .execute(&state.pool)
+        .await?;
+
+        let job = insert_sync_job(
+            &state.pool,
+            profile.user_id,
+            profile.id,
+            "full",
+            "scheduled",
+        )
         .await?;
 
         spawn_sync_job(state.clone(), profile.user_id, profile.id, job.id);
     }
+
+    Ok(())
+}
+
+async fn ensure_no_active_sync(pool: &PgPool, profile_id: Uuid) -> Result<(), AppError> {
+    let active_job_count = sqlx::query_scalar::<_, i64>(
+        r#"SELECT COUNT(*) FROM sync_jobs WHERE profile_id = $1 AND status IN ('queued', 'running')"#,
+    )
+    .bind(profile_id)
+    .fetch_one(pool)
+    .await?;
+
+    if active_job_count > 0 {
+        return Err(AppError::BadRequest(
+            "A sync is already queued or running for this provider.".to_string(),
+        ));
+    }
+
+    Ok(())
+}
+
+async fn insert_sync_job(
+    pool: &PgPool,
+    user_id: Uuid,
+    profile_id: Uuid,
+    job_type: &str,
+    trigger: &str,
+) -> Result<SyncJobResponse> {
+    let total_phases = total_phases_for_job(job_type);
+
+    let job = sqlx::query_as::<_, SyncJobResponse>(
+        r#"
+        INSERT INTO sync_jobs (
+          user_id,
+          profile_id,
+          status,
+          job_type,
+          trigger,
+          current_phase,
+          completed_phases,
+          total_phases,
+          phase_message
+        )
+        VALUES ($1, $2, 'queued', $3, $4, 'queued', 0, $5, 'Waiting to start')
+        RETURNING
+          id,
+          status,
+          job_type,
+          trigger,
+          created_at,
+          started_at,
+          finished_at,
+          current_phase,
+          completed_phases,
+          total_phases,
+          phase_message,
+          error_message
+        "#,
+    )
+    .bind(user_id)
+    .bind(profile_id)
+    .bind(job_type)
+    .bind(trigger)
+    .bind(total_phases)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(job)
+}
+
+fn total_phases_for_job(job_type: &str) -> i32 {
+    if job_type == "epg" {
+        EPG_SYNC_TOTAL_PHASES
+    } else {
+        FULL_SYNC_TOTAL_PHASES
+    }
+}
+
+async fn update_sync_job_phase(
+    pool: &PgPool,
+    job_id: Uuid,
+    phase: &str,
+    completed_phases: i32,
+    job_type: &str,
+    phase_message: &str,
+) -> Result<()> {
+    sqlx::query(
+        r#"
+        UPDATE sync_jobs
+        SET
+          current_phase = $2,
+          completed_phases = $3,
+          total_phases = $4,
+          phase_message = $5
+        WHERE id = $1
+        "#,
+    )
+    .bind(job_id)
+    .bind(phase)
+    .bind(completed_phases)
+    .bind(total_phases_for_job(job_type))
+    .bind(phase_message)
+    .execute(pool)
+    .await?;
 
     Ok(())
 }
@@ -1246,14 +1402,32 @@ async fn get_channel_guide(
     Ok(Json(programs))
 }
 
-async fn search_catalog(
+async fn search_channels(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Query(params): Query<SearchParams>,
-) -> ApiResult<SearchResponse> {
+    Query(query): Query<SearchQuery>,
+) -> ApiResult<ChannelSearchResponse> {
     let auth = require_auth(&state, &headers).await?;
-    let channels = sqlx::query_as::<_, ChannelResponse>(
+    let (term, offset, limit) = parse_search_pagination(query)?;
+    let total_count = count_search_results(&state.pool, auth.user_id, "channel", &term).await?;
+    let items = sqlx::query_as::<_, ChannelResponse>(
         r#"
+        WITH page AS (
+          SELECT ranked.entity_id, ROW_NUMBER() OVER () AS ordinal
+          FROM (
+            SELECT sd.entity_id
+            FROM search_documents sd
+            WHERE sd.user_id = $1
+              AND sd.entity_type = 'channel'
+              AND (sd.tsv @@ plainto_tsquery('simple', $2) OR sd.search_text % $2)
+            ORDER BY
+              CASE WHEN lower(sd.title) = lower($2) THEN 0 ELSE 1 END,
+              similarity(sd.search_text, $2) DESC,
+              sd.title ASC
+            OFFSET $3
+            LIMIT $4
+          ) ranked
+        )
         SELECT
           c.id,
           c.name,
@@ -1268,26 +1442,62 @@ async fn search_catalog(
             SELECT 1 FROM favorites f
             WHERE f.user_id = c.user_id AND f.channel_id = c.id
           ) AS is_favorite
-        FROM search_documents sd
-        JOIN channels c ON c.id = sd.entity_id
+        FROM page
+        JOIN channels c ON c.id = page.entity_id
         LEFT JOIN channel_categories cc ON cc.id = c.category_id
-        WHERE sd.user_id = $1
-          AND sd.entity_type = 'channel'
-          AND (sd.tsv @@ plainto_tsquery('simple', $2) OR sd.search_text % $2)
-        ORDER BY
-          CASE WHEN lower(sd.title) = lower($2) THEN 0 ELSE 1 END,
-          similarity(sd.search_text, $2) DESC,
-          sd.title ASC
-        LIMIT 25
+        ORDER BY page.ordinal
         "#,
     )
     .bind(auth.user_id)
-    .bind(&params.q)
+    .bind(&term)
+    .bind(offset)
+    .bind(limit)
     .fetch_all(&state.pool)
     .await?;
 
-    let programs = sqlx::query_as::<_, ProgramResponse>(
+    Ok(Json(ChannelSearchResponse {
+        query: term,
+        next_offset: next_page_offset(offset, limit, total_count),
+        total_count,
+        items,
+    }))
+}
+
+async fn search_programs(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<SearchQuery>,
+) -> ApiResult<ProgramSearchResponse> {
+    let auth = require_auth(&state, &headers).await?;
+    let (term, offset, limit) = parse_search_pagination(query)?;
+    let total_count = count_search_results(&state.pool, auth.user_id, "program", &term).await?;
+    let items = sqlx::query_as::<_, ProgramResponse>(
         r#"
+        WITH page AS (
+          SELECT ranked.entity_id, ROW_NUMBER() OVER () AS ordinal
+          FROM (
+            SELECT
+              sd.entity_id
+            FROM search_documents sd
+            JOIN programs p ON p.id = sd.entity_id
+            WHERE sd.user_id = $1
+              AND sd.entity_type = 'program'
+              AND (sd.tsv @@ plainto_tsquery('simple', $2) OR sd.search_text % $2)
+            ORDER BY
+              CASE
+                WHEN p.channel_id IS NOT NULL AND p.start_at <= NOW() AND p.end_at >= NOW() THEN 0
+                WHEN p.channel_id IS NOT NULL AND p.end_at <= NOW() AND p.can_catchup THEN 1
+                WHEN lower(sd.title) = lower($2) THEN 2
+                WHEN lower(sd.title) LIKE lower($2 || '%') THEN 3
+                WHEN p.start_at > NOW() THEN 4
+                ELSE 5
+              END,
+              similarity(sd.search_text, $2) DESC,
+              p.start_at ASC
+            OFFSET $3
+            LIMIT $4
+          ) ranked
+        )
         SELECT
           p.id,
           p.channel_id,
@@ -1297,34 +1507,23 @@ async fn search_catalog(
           p.start_at,
           p.end_at,
           p.can_catchup
-        FROM search_documents sd
-        JOIN programs p ON p.id = sd.entity_id
-        WHERE sd.user_id = $1
-          AND sd.entity_type = 'program'
-          AND (sd.tsv @@ plainto_tsquery('simple', $2) OR sd.search_text % $2)
-        ORDER BY
-          CASE
-            WHEN p.channel_id IS NOT NULL AND p.start_at <= NOW() AND p.end_at >= NOW() THEN 0
-            WHEN p.channel_id IS NOT NULL AND p.end_at <= NOW() AND p.can_catchup THEN 1
-            WHEN lower(sd.title) = lower($2) THEN 2
-            WHEN lower(sd.title) LIKE lower($2 || '%') THEN 3
-            WHEN p.start_at > NOW() THEN 4
-            ELSE 5
-          END,
-          similarity(sd.search_text, $2) DESC,
-          p.start_at ASC
-        LIMIT 25
+        FROM page
+        JOIN programs p ON p.id = page.entity_id
+        ORDER BY page.ordinal
         "#,
     )
     .bind(auth.user_id)
-    .bind(&params.q)
+    .bind(&term)
+    .bind(offset)
+    .bind(limit)
     .fetch_all(&state.pool)
     .await?;
 
-    Ok(Json(SearchResponse {
-        query: params.q,
-        channels,
-        programs,
+    Ok(Json(ProgramSearchResponse {
+        query: term,
+        next_offset: next_page_offset(offset, limit, total_count),
+        total_count,
+        items,
     }))
 }
 
@@ -1806,6 +2005,61 @@ fn parse_guide_category_pagination(query: GuideCategoryQuery) -> Result<(i64, i6
     Ok((offset, limit.min(GUIDE_MAX_LIMIT)))
 }
 
+fn parse_search_pagination(query: SearchQuery) -> Result<(String, i64, i64), AppError> {
+    let term = query.q.trim().to_string();
+    let offset = query.offset.unwrap_or(0);
+    let limit = query.limit.unwrap_or(SEARCH_DEFAULT_LIMIT);
+
+    if term.len() < 2 {
+        return Err(AppError::BadRequest(
+            "Search query must be at least 2 characters".to_string(),
+        ));
+    }
+
+    if offset < 0 {
+        return Err(AppError::BadRequest(
+            "Search offset must be zero or greater".to_string(),
+        ));
+    }
+
+    if limit <= 0 {
+        return Err(AppError::BadRequest(
+            "Search limit must be greater than zero".to_string(),
+        ));
+    }
+
+    Ok((term, offset, limit.min(SEARCH_MAX_LIMIT)))
+}
+
+async fn count_search_results(
+    pool: &PgPool,
+    user_id: Uuid,
+    entity_type: &str,
+    query: &str,
+) -> Result<i64> {
+    let total_count = sqlx::query_scalar::<_, i64>(
+        r#"
+        SELECT COUNT(*)
+        FROM search_documents sd
+        WHERE sd.user_id = $1
+          AND sd.entity_type = $2
+          AND (sd.tsv @@ plainto_tsquery('simple', $3) OR sd.search_text % $3)
+        "#,
+    )
+    .bind(user_id)
+    .bind(entity_type)
+    .bind(query)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(total_count)
+}
+
+fn next_page_offset(offset: i64, limit: i64, total_count: i64) -> Option<i64> {
+    let next_offset = offset + limit;
+    (next_offset < total_count).then_some(next_offset)
+}
+
 fn map_guide_category_entry(row: GuideCategoryEntryRow) -> GuideChannelEntryResponse {
     GuideChannelEntryResponse {
         channel: ChannelResponse {
@@ -2111,7 +2365,12 @@ fn spawn_sync_job(
             let _ = sqlx::query(
                 r#"
                 UPDATE sync_jobs
-                SET status = 'failed', finished_at = NOW(), error_message = $2
+                SET
+                  status = 'failed',
+                  finished_at = NOW(),
+                  current_phase = 'failed',
+                  phase_message = $2,
+                  error_message = $2
                 WHERE id = $1
                 "#,
             )
@@ -2141,7 +2400,9 @@ async fn run_sync_job(
     profile_id: Uuid,
     job_id: Uuid,
 ) -> Result<()> {
-    sqlx::query("UPDATE sync_jobs SET status = 'running', started_at = NOW() WHERE id = $1")
+    sqlx::query(
+        "UPDATE sync_jobs SET status = 'running', started_at = NOW(), current_phase = 'starting', phase_message = 'Preparing sync' WHERE id = $1",
+    )
         .bind(job_id)
         .execute(&state.pool)
         .await?;
@@ -2160,7 +2421,7 @@ async fn run_sync_job(
         r#"
         SELECT
           id, user_id, provider_type, base_url, username, password_encrypted, output_format,
-          status, last_validated_at, last_sync_at, last_sync_error, created_at, updated_at
+          status, last_validated_at, last_sync_at, last_scheduled_sync_on, last_sync_error, created_at, updated_at
         FROM provider_profiles
         WHERE id = $1 AND user_id = $2
         "#,
@@ -2177,6 +2438,15 @@ async fn run_sync_job(
         output_format: profile.output_format.clone(),
     };
 
+    update_sync_job_phase(
+        &state.pool,
+        job_id,
+        "validating",
+        0,
+        &job_type,
+        "Validating provider",
+    )
+    .await?;
     info!("sync job {job_id}: validating provider");
     let validation = xtreme::validate_profile(&state.http_client, &credentials).await?;
     if !validation.valid {
@@ -2193,9 +2463,27 @@ async fn run_sync_job(
     let refresh_channels = job_type == "full" || existing_channel_count == 0;
 
     let (categories, channels) = if refresh_channels {
+        update_sync_job_phase(
+            &state.pool,
+            job_id,
+            "fetching-categories",
+            1,
+            &job_type,
+            "Fetching live categories",
+        )
+        .await?;
         info!("sync job {job_id}: fetching categories");
         let categories = xtreme::fetch_categories(&state.http_client, &credentials).await?;
         info!("sync job {job_id}: fetched {} categories", categories.len());
+        update_sync_job_phase(
+            &state.pool,
+            job_id,
+            "fetching-channels",
+            2,
+            &job_type,
+            "Fetching live channels",
+        )
+        .await?;
         info!("sync job {job_id}: fetching live streams");
         let channels = xtreme::fetch_live_streams(&state.http_client, &credentials).await?;
         info!("sync job {job_id}: fetched {} live streams", channels.len());
@@ -2217,22 +2505,52 @@ async fn run_sync_job(
     .bind(profile_id)
     .fetch_all(&state.pool)
     .await?;
+    let epg_fetch_completed_phases = if refresh_channels { 3 } else { 1 };
+    update_sync_job_phase(
+        &state.pool,
+        job_id,
+        "fetching-epg",
+        epg_fetch_completed_phases,
+        &job_type,
+        "Fetching EPG feeds",
+    )
+    .await?;
     let (fetched_feeds, mut source_statuses) =
         fetch_epg_feeds(&state.http_client, &credentials, &epg_sources).await?;
 
+    let epg_match_completed_phases = if refresh_channels { 4 } else { 2 };
+    update_sync_job_phase(
+        &state.pool,
+        job_id,
+        "matching-epg",
+        epg_match_completed_phases,
+        &job_type,
+        "Matching guide data",
+    )
+    .await?;
     info!("sync job {job_id}: persisting sync data");
     let persisted_statuses = if refresh_channels {
         persist_full_sync_data(
             &state.pool,
             user_id,
             profile_id,
+            job_id,
+            &job_type,
             categories.as_deref().unwrap_or(&[]),
             channels.as_deref().unwrap_or(&[]),
             &fetched_feeds,
         )
         .await?
     } else {
-        persist_epg_sync_data(&state.pool, user_id, profile_id, &fetched_feeds).await?
+        persist_epg_sync_data(
+            &state.pool,
+            user_id,
+            profile_id,
+            job_id,
+            &job_type,
+            &fetched_feeds,
+        )
+        .await?
     };
     source_statuses.extend(persisted_statuses);
     update_epg_source_statuses(&state.pool, &source_statuses).await?;
@@ -2241,7 +2559,13 @@ async fn run_sync_job(
     sqlx::query(
         r#"
         UPDATE sync_jobs
-        SET status = 'succeeded', finished_at = NOW(), error_message = NULL
+        SET
+          status = 'succeeded',
+          finished_at = NOW(),
+          current_phase = 'finished',
+          completed_phases = total_phases,
+          phase_message = 'Sync complete',
+          error_message = NULL
         WHERE id = $1
         "#,
     )
@@ -2270,38 +2594,27 @@ async fn fetch_epg_feeds(
     let mut fetched_feeds = Vec::new();
     let mut source_statuses = Vec::new();
     let mut built_in_error = None;
+    let mut join_set = JoinSet::new();
+    let mut next_source_index = 0usize;
 
-    for source in external_sources {
-        match url::Url::parse(&source.url) {
-            Ok(url) => match xmltv::fetch_xmltv(client, &url).await {
-                Ok(feed) => fetched_feeds.push(FetchedEpgFeed {
-                    source_id: Some(source.id),
-                    source_kind: source.source_kind.clone(),
-                    source_label: source.url.clone(),
-                    priority: source.priority,
-                    feed,
-                }),
-                Err(error) => {
-                    error!(
-                        "failed to fetch external EPG source {}: {error:?}",
-                        source.url
-                    );
-                    source_statuses.push(EpgSourceSyncStatus {
-                        source_id: source.id,
-                        last_sync_error: Some(error.to_string()),
-                        last_program_count: None,
-                        last_matched_count: None,
-                        mark_synced: false,
-                    });
-                }
-            },
-            Err(error) => source_statuses.push(EpgSourceSyncStatus {
-                source_id: source.id,
-                last_sync_error: Some(format!("Invalid EPG source URL: {error}")),
-                last_program_count: None,
-                last_matched_count: None,
-                mark_synced: false,
-            }),
+    while next_source_index < external_sources.len() && join_set.len() < EPG_FETCH_CONCURRENCY {
+        let source = external_sources[next_source_index].clone();
+        let client = client.clone();
+        join_set.spawn(async move { fetch_external_epg_source(client, source).await });
+        next_source_index += 1;
+    }
+
+    while let Some(result) = join_set.join_next().await {
+        match result? {
+            ExternalEpgFetchResult::Success(feed) => fetched_feeds.push(feed),
+            ExternalEpgFetchResult::Failure(status) => source_statuses.push(status),
+        }
+
+        if next_source_index < external_sources.len() {
+            let source = external_sources[next_source_index].clone();
+            let client = client.clone();
+            join_set.spawn(async move { fetch_external_epg_source(client, source).await });
+            next_source_index += 1;
         }
     }
 
@@ -2336,10 +2649,49 @@ async fn fetch_epg_feeds(
     Ok((fetched_feeds, source_statuses))
 }
 
+async fn fetch_external_epg_source(
+    client: reqwest::Client,
+    source: EpgSourceRecord,
+) -> ExternalEpgFetchResult {
+    match url::Url::parse(&source.url) {
+        Ok(url) => match xmltv::fetch_xmltv(&client, &url).await {
+            Ok(feed) => ExternalEpgFetchResult::Success(FetchedEpgFeed {
+                source_id: Some(source.id),
+                source_kind: source.source_kind,
+                source_label: source.url,
+                priority: source.priority,
+                feed,
+            }),
+            Err(error) => {
+                error!(
+                    "failed to fetch external EPG source {}: {error:?}",
+                    source.url
+                );
+                ExternalEpgFetchResult::Failure(EpgSourceSyncStatus {
+                    source_id: source.id,
+                    last_sync_error: Some(error.to_string()),
+                    last_program_count: None,
+                    last_matched_count: None,
+                    mark_synced: false,
+                })
+            }
+        },
+        Err(error) => ExternalEpgFetchResult::Failure(EpgSourceSyncStatus {
+            source_id: source.id,
+            last_sync_error: Some(format!("Invalid EPG source URL: {error}")),
+            last_program_count: None,
+            last_matched_count: None,
+            mark_synced: false,
+        }),
+    }
+}
+
 async fn persist_full_sync_data(
     pool: &PgPool,
     user_id: Uuid,
     profile_id: Uuid,
+    job_id: Uuid,
+    job_type: &str,
     categories: &[XtreamCategory],
     channels: &[XtreamChannel],
     feeds: &[FetchedEpgFeed],
@@ -2351,6 +2703,15 @@ async fn persist_full_sync_data(
     let channel_lookup = build_channel_lookup_index(&persisted_channels);
     let (programmes, source_statuses) = resolve_epg_programmes(feeds, &channel_lookup);
 
+    update_sync_job_phase(
+        pool,
+        job_id,
+        "saving-programs",
+        5,
+        job_type,
+        "Saving guide entries",
+    )
+    .await?;
     sqlx::query("DELETE FROM programs WHERE user_id = $1 AND profile_id = $2")
         .bind(user_id)
         .bind(profile_id)
@@ -2358,11 +2719,16 @@ async fn persist_full_sync_data(
         .await?;
     bulk_insert_programmes(&mut transaction, user_id, profile_id, &programmes).await?;
 
-    sqlx::query("DELETE FROM search_documents WHERE user_id = $1")
-        .bind(user_id)
-        .execute(&mut *transaction)
-        .await?;
-    rebuild_search_documents(&mut transaction, user_id).await?;
+    update_sync_job_phase(
+        pool,
+        job_id,
+        "rebuilding-search",
+        6,
+        job_type,
+        "Refreshing search index",
+    )
+    .await?;
+    rebuild_all_search_documents(&mut transaction, user_id).await?;
 
     transaction.commit().await?;
     Ok(source_statuses)
@@ -2372,6 +2738,8 @@ async fn persist_epg_sync_data(
     pool: &PgPool,
     user_id: Uuid,
     profile_id: Uuid,
+    job_id: Uuid,
+    job_type: &str,
     feeds: &[FetchedEpgFeed],
 ) -> Result<Vec<EpgSourceSyncStatus>> {
     let mut transaction = pool.begin().await?;
@@ -2379,6 +2747,15 @@ async fn persist_epg_sync_data(
     let channel_lookup = build_channel_lookup_index(&persisted_channels);
     let (programmes, source_statuses) = resolve_epg_programmes(feeds, &channel_lookup);
 
+    update_sync_job_phase(
+        pool,
+        job_id,
+        "saving-programs",
+        3,
+        job_type,
+        "Saving guide entries",
+    )
+    .await?;
     sqlx::query("DELETE FROM programs WHERE user_id = $1 AND profile_id = $2")
         .bind(user_id)
         .bind(profile_id)
@@ -2386,11 +2763,16 @@ async fn persist_epg_sync_data(
         .await?;
     bulk_insert_programmes(&mut transaction, user_id, profile_id, &programmes).await?;
 
-    sqlx::query("DELETE FROM search_documents WHERE user_id = $1")
-        .bind(user_id)
-        .execute(&mut *transaction)
-        .await?;
-    rebuild_search_documents(&mut transaction, user_id).await?;
+    update_sync_job_phase(
+        pool,
+        job_id,
+        "rebuilding-search",
+        4,
+        job_type,
+        "Refreshing program search",
+    )
+    .await?;
+    rebuild_program_search_documents(&mut transaction, user_id).await?;
 
     transaction.commit().await?;
     Ok(source_statuses)
@@ -2856,7 +3238,21 @@ async fn bulk_insert_programmes(
     Ok(())
 }
 
-async fn rebuild_search_documents(
+async fn rebuild_all_search_documents(
+    transaction: &mut Transaction<'_, Postgres>,
+    user_id: Uuid,
+) -> Result<()> {
+    sqlx::query("DELETE FROM search_documents WHERE user_id = $1")
+        .bind(user_id)
+        .execute(&mut **transaction)
+        .await?;
+    rebuild_channel_search_documents(transaction, user_id).await?;
+    rebuild_program_search_documents(transaction, user_id).await?;
+
+    Ok(())
+}
+
+async fn rebuild_channel_search_documents(
     transaction: &mut Transaction<'_, Postgres>,
     user_id: Uuid,
 ) -> Result<()> {
@@ -2880,6 +3276,23 @@ async fn rebuild_search_documents(
         FROM channels c
         LEFT JOIN channel_categories cc ON cc.id = c.category_id
         WHERE c.user_id = $1
+        "#,
+    )
+    .bind(user_id)
+    .execute(&mut **transaction)
+    .await?;
+
+    Ok(())
+}
+
+async fn rebuild_program_search_documents(
+    transaction: &mut Transaction<'_, Postgres>,
+    user_id: Uuid,
+) -> Result<()> {
+    sqlx::query(
+        r#"
+        DELETE FROM search_documents
+        WHERE user_id = $1 AND entity_type = 'program'
         "#,
     )
     .bind(user_id)

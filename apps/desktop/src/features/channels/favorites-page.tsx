@@ -9,6 +9,7 @@ import { Empty, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empt
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useChannelFavoriteMutation } from "@/hooks/use-channel-favorite";
+import { useTvAutoFocus } from "@/hooks/use-tv-auto-focus";
 import { getFavorites, startChannelPlayback } from "@/lib/api";
 import { formatArchiveDuration } from "@/lib/utils";
 import { usePlayerStore } from "@/store/player-store";
@@ -26,6 +27,7 @@ export function FavoritesPage() {
   });
 
   const favorites = favoritesQuery.data ?? [];
+  useTvAutoFocus(favorites.length ? "[data-favorite-play='true']" : null, [favorites.length]);
 
   return (
     <div className="flex flex-col gap-6">
@@ -101,7 +103,13 @@ export function FavoritesPage() {
                       <Heart data-icon="inline-start" />
                       Unfavorite
                     </Button>
-                    <Button size="sm" onClick={() => playMutation.mutate(channel.id)} disabled={playMutation.isPending}>
+                    <Button
+                      data-favorite-play="true"
+                      data-tv-autofocus={index === 0 ? "true" : undefined}
+                      size="sm"
+                      onClick={() => playMutation.mutate(channel.id)}
+                      disabled={playMutation.isPending}
+                    >
                       <Play data-icon="inline-start" />
                       Play
                     </Button>
