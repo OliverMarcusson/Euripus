@@ -1,11 +1,12 @@
 # Euripus
 
-Euripus is a Windows-first IPTV desktop client built with Tauri v2, React, Bun, and a Rust backend service. The backend is designed to remain reusable for a future Android TV client.
+Euripus is a self-hostable IPTV application with a Rust API, a React web client, and a Tauri desktop shell. It can now be deployed behind a reverse proxy as a browser-first homelab service while keeping the desktop client path intact.
 
 ## Workspace
 
-- `apps/desktop`: Tauri v2 + React desktop client.
+- `apps/desktop`: React client used by both the browser build and the Tauri desktop shell.
 - `apps/server`: Axum + PostgreSQL API with Xtreme Codes sync, auth, favorites, search, and playback contracts.
+- `apps/web`: Nginx-based production web service that serves the SPA and proxies `/api` to the Rust server.
 - `packages/shared`: Shared TypeScript contracts for the frontend.
 
 ## Local Development
@@ -14,8 +15,10 @@ Euripus is a Windows-first IPTV desktop client built with Tauri v2, React, Bun, 
 2. Run `bun install`.
 3. Start backend dependencies with `bun run dev:db`.
 4. Run the Rust API with `bun run dev:server`.
-5. Run the desktop web UI with `bun run dev:desktop`.
+5. Run the React client with `bun run dev:desktop`.
 6. Run the Tauri shell with `bun run tauri:dev`.
+
+The Vite dev server proxies `/api` and `/health` to `http://127.0.0.1:8080`, so the browser client uses the same same-origin API shape in development and production.
 
 ## User Testing
 
@@ -36,11 +39,20 @@ Useful variants:
 - `bun run user-test:stop`
   Stops the launched desktop/web process and shuts down the Docker services.
 
-## Docker Compose
+## Homelab Deployment
 
-The backend is built around Docker Compose for local development. PostgreSQL and the server can run together in containers, while the desktop app keeps running locally through Bun and Tauri.
+Use `docker-compose.homelab.yml` for the browser-first self-hosted deployment:
+
+1. Copy `apps/server/.env.example` to `apps/server/.env` and replace the placeholder secrets.
+2. Set `APP_PUBLIC_ORIGIN` to the HTTPS URL exposed by your reverse proxy.
+3. Set `APP_ALLOWED_ORIGINS` to include your public browser origin and any local development origins you still need.
+4. Start the homelab stack with `docker compose -f docker-compose.homelab.yml up --build -d`.
+5. Point your reverse proxy at the host port `8088` by default, or override `EURIPUS_WEB_PORT`.
+
+The `web` service is the only public upstream. It serves the SPA, forwards `/api/*` to the Rust backend, and keeps PostgreSQL private inside the Compose network.
 
 ## Operational Docs
 
 - Server setup handoff: `docs/AI_SERVER_SETUP.md`
+- Homelab deployment guide: `docs/HOMELAB_DEPLOYMENT.md`
 - Future browser and self-hosting plan: `docs/V2_BROWSER_SELF_HOSTED_PLAN.md`

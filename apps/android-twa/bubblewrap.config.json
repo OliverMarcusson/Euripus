@@ -1,0 +1,17 @@
+{
+  "packageId": "se.euripus.twa",
+  "host": "euripus.example.com",
+  "name": "Euripus",
+  "launcherName": "Euripus",
+  "display": "standalone",
+  "themeColor": "#8226d4",
+  "backgroundColor": "#140b2b",
+  "startUrl": "/",
+  "iconUrl": "https://euripus.example.com/icon.svg",
+  "maskableIconUrl": "https://euripus.example.com/icon.svg",
+  "appVersionName": "0.1.0",
+  "appVersionCode": 1,
+  "enableNotifications": false,
+  "isChromeOSOnly": false,
+  "fallbackType": "customtabs"
+}

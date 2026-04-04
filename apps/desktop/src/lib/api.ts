@@ -3,6 +3,7 @@ import type {
   AuthSession,
   ChannelSearchResults,
   Channel,
+  DesktopAuthSession,
   GuidePreferences,
   GuideCategoryResponse,
   GuideResponse,
@@ -11,7 +12,6 @@ import type {
   Program,
   ProviderProfile,
   RecentChannel,
-  RefreshPayload,
   RegisterPayload,
   SaveProviderPayload,
   ProgramSearchResults,
@@ -20,37 +20,74 @@ import type {
   User,
   ValidateProviderResponse,
 } from "@euripus/shared";
-import { clearRefreshToken, loadRefreshToken, saveRefreshToken } from "@/lib/tauri";
+import { clearRefreshToken, isTauriRuntime, loadRefreshToken, saveRefreshToken } from "@/lib/tauri";
 import { useAuthStore } from "@/store/auth-store";
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8080";
+const DESKTOP_RUNTIME = isTauriRuntime();
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? (DESKTOP_RUNTIME ? "http://127.0.0.1:8080" : "/api");
+const CSRF_COOKIE_NAME = "euripus.csrf";
 
-async function request<T>(path: string, init: RequestInit = {}, retry = true): Promise<T> {
+type RequestOptions = {
+  retry?: boolean;
+  includeCsrf?: boolean;
+};
+
+function readCookie(name: string) {
+  if (typeof document === "undefined") {
+    return null;
+  }
+
+  const cookies = document.cookie ? document.cookie.split(/;\s*/) : [];
+  const prefix = `${name}=`;
+  for (const cookie of cookies) {
+    if (cookie.startsWith(prefix)) {
+      return decodeURIComponent(cookie.slice(prefix.length));
+    }
+  }
+
+  return null;
+}
+
+function withJsonHeaders(headers: Headers) {
+  if (!headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
+}
+
+async function request<T>(
+  path: string,
+  init: RequestInit = {},
+  { retry = true, includeCsrf = false }: RequestOptions = {},
+): Promise<T> {
   const { accessToken, setSession, clearSession } = useAuthStore.getState();
   const headers = new Headers(init.headers);
-  headers.set("Content-Type", "application/json");
+  withJsonHeaders(headers);
 
   if (accessToken) {
     headers.set("Authorization", `Bearer ${accessToken}`);
   }
 
+  if (includeCsrf && !DESKTOP_RUNTIME) {
+    const csrfToken = readCookie(CSRF_COOKIE_NAME);
+    if (csrfToken) {
+      headers.set("X-CSRF-Token", csrfToken);
+    }
+  }
+
   const response = await fetch(`${API_BASE_URL}${path}`, {
     ...init,
     headers,
+    credentials: DESKTOP_RUNTIME ? init.credentials : "include",
   });
 
   if (response.status === 401 && retry) {
-    const refreshToken = await loadRefreshToken();
-    if (refreshToken) {
-      try {
-        const nextSession = await refresh({ refreshToken });
-        setSession(nextSession);
-        await saveRefreshToken(nextSession.refreshToken);
-        return request<T>(path, init, false);
-      } catch {
-        await clearRefreshToken();
-        clearSession();
-      }
+    try {
+      const nextSession = await refresh();
+      setSession(nextSession);
+      return request<T>(path, init, { retry: false, includeCsrf });
+    } catch {
+      await clearRefreshToken();
+      clearSession();
     }
   }
 
@@ -72,39 +109,110 @@ async function request<T>(path: string, init: RequestInit = {}, retry = true): P
 }
 
 export async function register(payload: RegisterPayload) {
-  const session = await request<AuthSession>("/auth/register", {
-    method: "POST",
-    body: JSON.stringify(payload),
-  });
-  await saveRefreshToken(session.refreshToken);
+  const session = DESKTOP_RUNTIME
+    ? await request<DesktopAuthSession>(
+        "/auth/register",
+        {
+          method: "POST",
+          body: JSON.stringify(payload),
+        },
+        { retry: false },
+      )
+    : await request<AuthSession>(
+        "/auth/register",
+        {
+          method: "POST",
+          body: JSON.stringify(payload),
+        },
+        { retry: false },
+      );
+
+  if (DESKTOP_RUNTIME) {
+    await saveRefreshToken((session as DesktopAuthSession).refreshToken);
+  }
+
   return session;
 }
 
 export async function login(payload: LoginPayload) {
-  const session = await request<AuthSession>("/auth/login", {
-    method: "POST",
-    body: JSON.stringify(payload),
-  });
-  await saveRefreshToken(session.refreshToken);
+  const session = DESKTOP_RUNTIME
+    ? await request<DesktopAuthSession>(
+        "/auth/login",
+        {
+          method: "POST",
+          body: JSON.stringify(payload),
+        },
+        { retry: false },
+      )
+    : await request<AuthSession>(
+        "/auth/login",
+        {
+          method: "POST",
+          body: JSON.stringify(payload),
+        },
+        { retry: false },
+      );
+
+  if (DESKTOP_RUNTIME) {
+    await saveRefreshToken((session as DesktopAuthSession).refreshToken);
+  }
+
   return session;
 }
 
-export async function refresh(payload: RefreshPayload) {
-  return request<AuthSession>("/auth/refresh", {
-    method: "POST",
-    body: JSON.stringify(payload),
-  });
+export async function refresh() {
+  if (DESKTOP_RUNTIME) {
+    const refreshToken = await loadRefreshToken();
+    if (!refreshToken) {
+      throw new Error("No saved session.");
+    }
+
+    const session = await request<DesktopAuthSession>(
+      "/auth/refresh",
+      {
+        method: "POST",
+        body: JSON.stringify({ refreshToken }),
+      },
+      { retry: false },
+    );
+    await saveRefreshToken(session.refreshToken);
+    return session;
+  }
+
+  return request<AuthSession>(
+    "/auth/refresh",
+    {
+      method: "POST",
+    },
+    { retry: false, includeCsrf: true },
+  );
 }
 
 export async function logout() {
-  const refreshToken = await loadRefreshToken();
-  if (refreshToken) {
-    await request<void>("/auth/logout", {
-      method: "POST",
-      body: JSON.stringify({ refreshToken }),
-    }).catch(() => undefined);
+  if (DESKTOP_RUNTIME) {
+    const refreshToken = await loadRefreshToken();
+    if (refreshToken) {
+      await request<void>(
+        "/auth/logout",
+        {
+          method: "POST",
+          body: JSON.stringify({ refreshToken }),
+        },
+        { retry: false },
+      ).catch(() => undefined);
+    }
+
+    await clearRefreshToken();
+    return;
   }
-  await clearRefreshToken();
+
+  await request<void>(
+    "/auth/logout",
+    {
+      method: "POST",
+    },
+    { retry: false, includeCsrf: true },
+  ).catch(() => undefined);
 }
 
 export function getCurrentUser() {

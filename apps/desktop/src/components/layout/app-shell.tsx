@@ -16,7 +16,6 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { logout } from "@/lib/api";
-import { clearRefreshToken } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
 import { useAuthStore } from "@/store/auth-store";
 import { useTvModeStore } from "@/store/tv-mode-store";
@@ -43,7 +42,6 @@ export function AppShell() {
 
   async function handleLogout() {
     await logout();
-    await clearRefreshToken();
     clearSession();
   }
 

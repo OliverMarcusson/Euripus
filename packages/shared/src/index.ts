@@ -22,8 +22,11 @@ export type Session = {
 export type AuthSession = {
   user: User;
   accessToken: string;
-  refreshToken: string;
   expiresAt: string;
+};
+
+export type DesktopAuthSession = AuthSession & {
+  refreshToken: string;
 };
 
 export type ProviderStatus = "missing" | "valid" | "error" | "syncing";
@@ -163,10 +166,6 @@ export type RegisterPayload = {
 };
 
 export type LoginPayload = RegisterPayload;
-
-export type RefreshPayload = {
-  refreshToken: string;
-};
 
 export type SaveProviderPayload = {
   baseUrl: string;

@@ -1,6 +1,5 @@
 import { useEffect } from "react";
 import { refresh } from "@/lib/api";
-import { loadRefreshToken } from "@/lib/tauri";
 import { useAuthStore } from "@/store/auth-store";
 
 export function useBootstrapSession() {
@@ -13,15 +12,7 @@ export function useBootstrapSession() {
 
     async function bootstrap() {
       try {
-        const refreshToken = await loadRefreshToken();
-        if (!refreshToken) {
-          if (mounted) {
-            setHydrated(true);
-          }
-          return;
-        }
-
-        const session = await refresh({ refreshToken });
+        const session = await refresh();
         if (mounted) {
           setSession(session);
         }
@@ -43,4 +34,3 @@ export function useBootstrapSession() {
     };
   }, [clearSession, setHydrated, setSession]);
 }
-

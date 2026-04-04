@@ -12,3 +12,6 @@ coverage
 .DS_Store
 bun.lock
 *.tsbuildinfo
+.claude/
+SKILL.md
+test-results/

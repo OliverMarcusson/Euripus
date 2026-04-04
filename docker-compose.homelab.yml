@@ -1,0 +1,44 @@
+services:
+  postgres:
+    image: postgres:17
+    restart: unless-stopped
+    env_file:
+      - apps/server/.env
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-euripus}
+      POSTGRES_USER: ${POSTGRES_USER:-euripus}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-euripus}
+    volumes:
+      - homelab-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  server:
+    build:
+      context: .
+      dockerfile: apps/server/Dockerfile
+    restart: unless-stopped
+    env_file:
+      - apps/server/.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    expose:
+      - "8080"
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      server:
+        condition: service_started
+    ports:
+      - "${EURIPUS_WEB_PORT:-8088}:80"
+
+volumes:
+  homelab-postgres-data:
