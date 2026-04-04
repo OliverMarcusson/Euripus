@@ -25,6 +25,30 @@ docker compose -f docker-compose.homelab.yml up --build -d
 
 By default, the `web` service is published on host port `8088`. Override it with `EURIPUS_WEB_PORT` if needed.
 
+## Optional NordVPN Routing
+
+If you want Euripus server-side traffic to leave through NordVPN, start the stack with the override file:
+
+```bash
+docker compose -f docker-compose.homelab.yml -f docker-compose.homelab.nordvpn.yml up --build -d
+```
+
+This override adds a `gluetun` container configured for NordVPN and places the Rust server inside Gluetun's network namespace.
+
+Copy `apps/server/.env.nordvpn.example` to `apps/server/.env.nordvpn`, then set the NordVPN values there:
+
+- `VPN_TYPE=openvpn` with `OPENVPN_USER` and `OPENVPN_PASSWORD`
+- Or `VPN_TYPE=wireguard` with `WIREGUARD_PRIVATE_KEY`
+- Optional server selectors such as `SERVER_COUNTRIES`, `SERVER_REGIONS`, `SERVER_CITIES`, `SERVER_HOSTNAMES`, and `SERVER_CATEGORIES`
+
+Use NordVPN service credentials for OpenVPN, not your regular Nord Account email and password.
+
+Important limitation:
+
+- This only routes server-originated traffic through NordVPN.
+- Browser and Tauri playback still connect directly to the IPTV provider.
+- If you need stream playback itself to use NordVPN, the client device must also be on VPN.
+
 ## Reverse Proxy Expectations
 
 Route your dedicated Euripus host to the single upstream `http://YOUR-HOST:8088`.
@@ -39,6 +63,7 @@ Route your dedicated Euripus host to the single upstream `http://YOUR-HOST:8088`
 - The SPA uses `/api/*` for all browser traffic.
 - Desktop auth remains available on the legacy unprefixed API routes for the Tauri shell.
 - `/health` is exposed by the public `web` service and proxied through to the Rust backend.
+- With the NordVPN override enabled, the `web` service proxies `/api` and `/health` to the `gluetun` container, which exposes the Rust server on port `8080` inside the VPN network namespace.
 
 ## Validation Checklist
 

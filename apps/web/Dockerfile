@@ -10,7 +10,7 @@ RUN bun run build:shared && bun run build:desktop
 
 FROM nginx:1.27-alpine
 
-COPY apps/web/nginx.conf /etc/nginx/conf.d/default.conf
+COPY apps/web/nginx.conf /etc/nginx/templates/default.conf.template
 COPY --from=build /app/apps/desktop/dist /usr/share/nginx/html
 
 EXPOSE 80

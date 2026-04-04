@@ -1,0 +1,30 @@
+services:
+  gluetun:
+    image: qmcgaw/gluetun:v3.41.1
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    env_file:
+      - apps/server/.env.nordvpn
+    environment:
+      VPN_SERVICE_PROVIDER: nordvpn
+      FIREWALL_INPUT_PORTS: 8080
+
+  server:
+    network_mode: "service:gluetun"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      gluetun:
+        condition: service_started
+
+  web:
+    environment:
+      EURIPUS_API_UPSTREAM: gluetun
+    depends_on:
+      gluetun:
+        condition: service_started
+      server:
+        condition: service_started
