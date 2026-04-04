@@ -48,10 +48,10 @@ export function AppShell() {
 
   return (
     <TooltipProvider delayDuration={300}>
-      <div className="grid h-screen grid-cols-[240px_minmax(0,1fr)_360px] bg-muted/30 max-xl:grid-cols-[240px_minmax(0,1fr)] max-xl:grid-rows-[minmax(0,1fr)_320px] max-md:grid-cols-1 max-md:grid-rows-[auto_minmax(0,1fr)_320px]">
-        <aside className="flex min-h-0 flex-col border-r border-border bg-sidebar">
-          <div className="flex items-center gap-3 border-b border-border px-5 py-5">
-            <div className="flex size-10 items-center justify-center rounded-xl bg-primary text-primary-foreground">
+      <div className="grid h-screen grid-cols-[240px_minmax(0,1fr)_360px] bg-background max-xl:grid-cols-[240px_minmax(0,1fr)] max-xl:grid-rows-[minmax(0,1fr)_320px] max-md:grid-cols-1 max-md:grid-rows-[auto_minmax(0,1fr)_320px]">
+        <aside className="flex min-h-0 flex-col border-r border-border/40 bg-sidebar shadow-[4px_0_24px_rgba(0,0,0,0.02)] z-10">
+          <div className="flex items-center gap-3 border-b border-border/40 px-5 py-6">
+            <div className="flex size-10 items-center justify-center rounded-xl bg-primary text-primary-foreground shadow-lg shadow-primary/20">
               <Tv className="size-4" aria-hidden="true" />
             </div>
             <div className="flex flex-col">
@@ -75,10 +75,10 @@ export function AppShell() {
                           <Link
                             to={item.to}
                             className={cn(
-                              "flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors",
+                              "flex items-center gap-3 rounded-xl px-3 py-3 text-sm font-semibold transition-all duration-200",
                               active
-                                ? "bg-primary text-primary-foreground shadow-sm"
-                                : "text-muted-foreground hover:bg-accent hover:text-accent-foreground",
+                                ? "bg-primary text-primary-foreground shadow-md shadow-primary/20 translate-x-1"
+                                : "text-muted-foreground hover:bg-muted/50 hover:text-foreground",
                             )}
                           >
                             <Icon className="size-4" aria-hidden="true" />
@@ -135,7 +135,7 @@ export function AppShell() {
           </main>
         </ScrollArea>
 
-        <aside className="min-h-0 border-l border-border bg-background max-xl:col-span-2 max-xl:border-l-0 max-xl:border-t max-md:order-3 max-md:col-span-1">
+        <aside className="min-h-0 border-l border-border/40 bg-sidebar shadow-[-4px_0_24px_rgba(0,0,0,0.02)] z-10 max-xl:col-span-2 max-xl:border-l-0 max-xl:border-t max-md:order-3 max-md:col-span-1">
           <ScrollArea className="h-full">
             <div className="p-5 lg:p-6">
               <PlayerView />
