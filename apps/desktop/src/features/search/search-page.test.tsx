@@ -8,6 +8,8 @@ vi.mock("@/hooks/use-debounce", () => ({
 }));
 
 vi.mock("@/lib/api", () => ({
+  addFavorite: vi.fn(),
+  removeFavorite: vi.fn(),
   searchCatalog: vi.fn(),
   startChannelPlayback: vi.fn(),
   startProgramPlayback: vi.fn(),
@@ -103,12 +105,33 @@ describe("SearchPage", () => {
     expect(screen.getByText("Upcoming only")).toBeInTheDocument();
   });
 
-  it("frames search as channels plus full EPG metadata", () => {
-    renderSearchPage();
+  it("renders favorite controls for channel matches", async () => {
+    mockedSearchCatalog.mockResolvedValue({
+      query: "arena",
+      channels: [
+        {
+          id: "channel-1",
+          name: "Arena 1",
+          logoUrl: null,
+          categoryName: "Sports",
+          remoteStreamId: 1,
+          epgChannelId: null,
+          hasCatchup: true,
+          archiveDurationHours: 24,
+          streamExtension: "m3u8",
+          isFavorite: false,
+        },
+      ],
+      programs: [],
+    });
 
-    expect(
-      screen.getByText(/Search channel names and full EPG metadata from one place/i),
-    ).toBeInTheDocument();
-    expect(screen.getByText(/Search channels and EPG/i)).toBeInTheDocument();
+    renderSearchPage();
+    fireEvent.change(screen.getByPlaceholderText(/search channels, titles, events, teams/i), {
+      target: { value: "arena" },
+    });
+
+    await waitFor(() => expect(mockedSearchCatalog).toHaveBeenCalledWith("arena"));
+    expect(await screen.findByRole("button", { name: /favorite/i })).toBeInTheDocument();
+    expect(screen.getByText("Channel matches")).toBeInTheDocument();
   });
 });

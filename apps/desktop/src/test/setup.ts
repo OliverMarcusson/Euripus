@@ -2,6 +2,12 @@ import "@testing-library/jest-dom";
 
 const storage = new Map<string, string>();
 
+class ResizeObserverMock {
+  observe = vi.fn();
+  unobserve = vi.fn();
+  disconnect = vi.fn();
+}
+
 Object.defineProperty(window, "localStorage", {
   writable: true,
   value: {
@@ -30,4 +36,14 @@ Object.defineProperty(window, "matchMedia", {
     removeListener: vi.fn(),
     dispatchEvent: vi.fn(),
   })),
+});
+
+Object.defineProperty(window, "ResizeObserver", {
+  writable: true,
+  value: ResizeObserverMock,
+});
+
+Object.defineProperty(globalThis, "ResizeObserver", {
+  writable: true,
+  value: ResizeObserverMock,
 });

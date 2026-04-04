@@ -1,30 +1,20 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { Clapperboard, Play, Radio, Search as SearchIcon, TvMinimal } from "lucide-react";
+import { Clapperboard, Heart, Play, Search as SearchIcon, TvMinimal } from "lucide-react";
 import { useState } from "react";
 import { PageHeader } from "@/components/layout/page-header";
 import { ChannelAvatar } from "@/components/ui/channel-avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import {
-  Empty,
-  EmptyDescription,
-  EmptyHeader,
-  EmptyMedia,
-  EmptyTitle,
-} from "@/components/ui/empty";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Empty, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useChannelFavoriteMutation } from "@/hooks/use-channel-favorite";
 import { useDebounce } from "@/hooks/use-debounce";
 import { searchCatalog, startChannelPlayback, startProgramPlayback } from "@/lib/api";
-import {
-  canPlayProgram,
-  formatTimeRange,
-  getProgramPlaybackState,
-  type ProgramPlaybackState,
-} from "@/lib/utils";
+import { canPlayProgram, formatTimeRange, getProgramPlaybackState, type ProgramPlaybackState } from "@/lib/utils";
 import { usePlayerStore } from "@/store/player-store";
 
 export function SearchPage() {
@@ -38,6 +28,7 @@ export function SearchPage() {
     queryFn: () => searchCatalog(debouncedQuery),
     enabled: hasQuery,
   });
+  const favoriteMutation = useChannelFavoriteMutation();
   const playChannelMutation = useMutation({
     mutationFn: startChannelPlayback,
     onMutate: () => setLoading(true),
@@ -59,7 +50,6 @@ export function SearchPage() {
     <div className="flex flex-col gap-6">
       <PageHeader
         title="Master Search"
-        description="Search channel names and full EPG metadata from one place, then jump into live playback or archived results when available."
         meta={
           hasQuery ? (
             <>
@@ -71,12 +61,8 @@ export function SearchPage() {
         }
       />
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Search channels and EPG</CardTitle>
-          <CardDescription>Try a channel name, team, event, league, category, or program title.</CardDescription>
-        </CardHeader>
-        <CardContent>
+      <Card className="border-border/80 bg-gradient-to-r from-card via-card to-primary/5">
+        <CardContent className="pt-5">
           <div className="relative">
             <SearchIcon className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
             <Input
@@ -98,9 +84,6 @@ export function SearchPage() {
                   <SearchIcon aria-hidden="true" />
                 </EmptyMedia>
                 <EmptyTitle>Start typing to search</EmptyTitle>
-                <EmptyDescription>
-                  Search pulls from channels and synced EPG entries once your query is at least two characters.
-                </EmptyDescription>
               </EmptyHeader>
             </Empty>
           </CardContent>
@@ -135,7 +118,6 @@ export function SearchPage() {
             <Card>
               <CardHeader>
                 <CardTitle>Channel matches</CardTitle>
-                <CardDescription>Direct matches for channel names and categories.</CardDescription>
               </CardHeader>
               <CardContent className="p-0">
                 {channels.length ? (
@@ -150,6 +132,7 @@ export function SearchPage() {
                               <h2 className="truncate text-base font-semibold">{channel.name}</h2>
                               {channel.categoryName ? <Badge variant="outline">{channel.categoryName}</Badge> : null}
                               {channel.hasCatchup ? <Badge variant="live">Catch-up</Badge> : null}
+                              {channel.isFavorite ? <Badge variant="accent">Favorite</Badge> : null}
                             </div>
                             <p className="text-sm text-muted-foreground">
                               {channel.streamExtension
@@ -158,14 +141,25 @@ export function SearchPage() {
                             </p>
                           </div>
                         </div>
-                        <Button
-                          size="sm"
-                          onClick={() => playChannelMutation.mutate(channel.id)}
-                          disabled={playChannelMutation.isPending}
-                        >
-                          <Play data-icon="inline-start" />
-                          Play
-                        </Button>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            onClick={() => favoriteMutation.mutate(channel)}
+                            disabled={favoriteMutation.isPending && favoriteMutation.variables?.id === channel.id}
+                          >
+                            <Heart data-icon="inline-start" />
+                            {channel.isFavorite ? "Unfavorite" : "Favorite"}
+                          </Button>
+                          <Button
+                            size="sm"
+                            onClick={() => playChannelMutation.mutate(channel.id)}
+                            disabled={playChannelMutation.isPending}
+                          >
+                            <Play data-icon="inline-start" />
+                            Play
+                          </Button>
+                        </div>
                       </div>
                     </div>
                   ))
@@ -176,7 +170,6 @@ export function SearchPage() {
                         <TvMinimal aria-hidden="true" />
                       </EmptyMedia>
                       <EmptyTitle>No channel matches</EmptyTitle>
-                      <EmptyDescription>Try a broader term or switch to the programs tab for EPG hits.</EmptyDescription>
                     </EmptyHeader>
                   </Empty>
                 )}
@@ -188,7 +181,6 @@ export function SearchPage() {
             <Card>
               <CardHeader>
                 <CardTitle>EPG matches</CardTitle>
-                <CardDescription>Program results can be live, archived, upcoming, or informational depending on provider availability.</CardDescription>
               </CardHeader>
               <CardContent className="p-0">
                 {programs.length ? (
@@ -247,7 +239,6 @@ export function SearchPage() {
                         <Clapperboard aria-hidden="true" />
                       </EmptyMedia>
                       <EmptyTitle>No EPG matches</EmptyTitle>
-                      <EmptyDescription>Try a title, team, league, or event keyword with synced guide data.</EmptyDescription>
                     </EmptyHeader>
                   </Empty>
                 )}

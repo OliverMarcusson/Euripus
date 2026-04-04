@@ -1,22 +1,28 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { GuidePage } from "@/features/channels/guide-page";
-import { getGuide, getGuideCategory } from "@/lib/api";
+import { getGuide, getGuideCategory, getGuidePreferences, saveGuidePreferences } from "@/lib/api";
 
 vi.mock("@/lib/api", () => ({
   addFavorite: vi.fn(),
   getGuide: vi.fn(),
   getGuideCategory: vi.fn(),
+  getGuidePreferences: vi.fn(),
   removeFavorite: vi.fn(),
+  saveGuidePreferences: vi.fn(),
   startChannelPlayback: vi.fn(),
 }));
 
 const mockedGetGuide = vi.mocked(getGuide);
 const mockedGetGuideCategory = vi.mocked(getGuideCategory);
+const mockedGetGuidePreferences = vi.mocked(getGuidePreferences);
+const mockedSaveGuidePreferences = vi.mocked(saveGuidePreferences);
 
 describe("GuidePage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockedGetGuidePreferences.mockResolvedValue({ includedCategoryIds: [] });
+    mockedSaveGuidePreferences.mockResolvedValue({ includedCategoryIds: [] });
     mockedGetGuide.mockResolvedValue({
       categories: [
         {
@@ -48,7 +54,7 @@ describe("GuidePage", () => {
   it("loads only guide categories on first render", async () => {
     renderGuidePage();
 
-    expect(await screen.findByText("Sports")).toBeInTheDocument();
+    expect((await screen.findAllByText("Sports")).length).toBeGreaterThan(0);
     expect(mockedGetGuide).toHaveBeenCalledTimes(1);
     expect(mockedGetGuideCategory).not.toHaveBeenCalled();
   });
@@ -220,7 +226,10 @@ describe("GuidePage", () => {
     expect(screen.getByText("No current program metadata synced yet.")).toBeInTheDocument();
   });
 
-  it("filters only by category name without using loaded channel entries", async () => {
+  it("shows only saved included categories", async () => {
+    mockedGetGuidePreferences.mockResolvedValue({
+      includedCategoryIds: ["sports"],
+    });
     mockedGetGuide.mockResolvedValue({
       categories: [
         {
@@ -237,55 +246,98 @@ describe("GuidePage", () => {
         },
       ],
     });
-    mockedGetGuideCategory.mockResolvedValue({
-      category: {
-        id: "sports",
-        name: "Sports",
-        channelCount: 2,
-        liveNowCount: 1,
-      },
-      entries: [
+
+    renderGuidePage();
+
+    expect(await screen.findByRole("button", { name: /show channels/i })).toBeInTheDocument();
+    expect(screen.getAllByText("Sports").length).toBeGreaterThan(0);
+    expect(screen.getAllByRole("button", { name: /show channels/i })).toHaveLength(1);
+  });
+
+  it("applies a custom filter only after pressing Enter", async () => {
+    mockedGetGuide.mockResolvedValue({
+      categories: [
         {
-          channel: {
-            id: "channel-1",
-            name: "Arena 1",
-            logoUrl: null,
-            categoryName: "Sports",
-            remoteStreamId: 1,
-            epgChannelId: null,
-            hasCatchup: true,
-            archiveDurationHours: 24,
-            streamExtension: "m3u8",
-            isFavorite: false,
-          },
-          program: {
-            id: "program-1",
-            channelId: "channel-1",
-            channelName: "Arena 1",
-            title: "Matchday Live",
-            description: null,
-            startAt: "2026-04-04T10:00:00.000Z",
-            endAt: "2026-04-04T12:00:00.000Z",
-            canCatchup: true,
-          },
+          id: "sports",
+          name: "Sports",
+          channelCount: 2,
+          liveNowCount: 1,
+        },
+        {
+          id: "news",
+          name: "News",
+          channelCount: 1,
+          liveNowCount: 0,
         },
       ],
-      totalCount: 1,
-      nextOffset: null,
     });
 
     renderGuidePage();
-    fireEvent.click((await screen.findAllByRole("button", { name: /show channels/i }))[0]);
-    expect(await screen.findByText("Arena 1")).toBeInTheDocument();
 
-    fireEvent.change(screen.getByPlaceholderText(/filter guide categories/i), {
-      target: { value: "arena" },
+    fireEvent.change(await screen.findByPlaceholderText(/type 2\+ characters, then press enter/i), {
+      target: { value: "news" },
     });
 
+    expect(screen.getByRole("button", { name: /sports/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /news/i })).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: /show channels/i })).toHaveLength(2);
+
+    fireEvent.keyDown(screen.getByPlaceholderText(/type 2\+ characters, then press enter/i), {
+      key: "Enter",
+      code: "Enter",
+    });
+
+    expect(screen.getByRole("button", { name: /news/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /sports/i })).not.toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: /show channels/i })).toHaveLength(1);
+    expect(screen.getAllByText("News").length).toBeGreaterThan(0);
     expect(screen.queryByText("Sports")).not.toBeInTheDocument();
-    expect(screen.queryByText("Arena 1")).not.toBeInTheDocument();
-    expect(screen.queryByText("News")).not.toBeInTheDocument();
-    expect(screen.getByText("No guide matches")).toBeInTheDocument();
-    expect(mockedGetGuideCategory).toHaveBeenCalledTimes(1);
+    expect(mockedGetGuideCategory).not.toHaveBeenCalled();
+  });
+
+  it("applies the custom filter on top of the selected categories", async () => {
+    mockedGetGuide.mockResolvedValue({
+      categories: [
+        {
+          id: "sports",
+          name: "Sports",
+          channelCount: 2,
+          liveNowCount: 1,
+        },
+        {
+          id: "news",
+          name: "News",
+          channelCount: 1,
+          liveNowCount: 0,
+        },
+      ],
+    });
+    mockedGetGuidePreferences.mockResolvedValue({
+      includedCategoryIds: ["sports"],
+    });
+
+    renderGuidePage();
+
+    fireEvent.change(await screen.findByPlaceholderText(/type 2\+ characters, then press enter/i), {
+      target: { value: "news" },
+    });
+    fireEvent.keyDown(screen.getByPlaceholderText(/type 2\+ characters, then press enter/i), {
+      key: "Enter",
+      code: "Enter",
+    });
+
+    expect(screen.getByRole("button", { name: /news/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /sports/i })).not.toBeInTheDocument();
+    expect(screen.queryAllByRole("button", { name: /show channels/i })).toHaveLength(0);
+    expect(screen.getByText("No categories match this filter")).toBeInTheDocument();
+  });
+
+  it("can collapse the filter panel", async () => {
+    renderGuidePage();
+
+    fireEvent.click(await screen.findByRole("button", { name: /hide filter/i }));
+
+    expect(screen.queryByPlaceholderText(/type 2\+ characters, then press enter/i)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /show filter/i })).toBeInTheDocument();
   });
 });
