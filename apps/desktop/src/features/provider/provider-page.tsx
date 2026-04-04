@@ -1,12 +1,15 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect } from "react";
 import { z } from "zod";
-import { useForm } from "react-hook-form";
+import { Controller, useForm } from "react-hook-form";
 import { saveProvider, getProvider, getSyncStatus, triggerProviderSync, validateProvider } from "@/lib/api";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Badge } from "@/components/ui/badge";
+import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { formatDateTime } from "@/lib/utils";
 
 const providerSchema = z.object({
@@ -31,6 +34,17 @@ export function ProviderPage() {
       outputFormat: "m3u8",
     },
   });
+
+  useEffect(() => {
+    if (providerQuery.data) {
+      form.reset({
+        baseUrl: providerQuery.data.baseUrl ?? "",
+        username: providerQuery.data.username ?? "",
+        password: "",
+        outputFormat: providerQuery.data.outputFormat ?? "m3u8",
+      });
+    }
+  }, [providerQuery.data, form]);
 
   const validateMutation = useMutation({ mutationFn: validateProvider });
   const saveMutation = useMutation({
@@ -63,38 +77,36 @@ export function ProviderPage() {
         <CardContent className="grid gap-6 lg:grid-cols-[1.2fr_0.8fr]">
           <form className="flex flex-col gap-4" onSubmit={form.handleSubmit((values) => saveMutation.mutate(values))}>
             <div className="flex flex-col gap-2">
-              <label className="text-sm font-medium" htmlFor="baseUrl">
-                Base URL
-              </label>
-              <Input id="baseUrl" defaultValue={provider?.baseUrl} placeholder="https://provider.example.com" {...form.register("baseUrl")} />
+              <Label htmlFor="baseUrl">Base URL</Label>
+              <Input id="baseUrl" placeholder="https://provider.example.com" {...form.register("baseUrl")} />
             </div>
             <div className="grid gap-4 md:grid-cols-2">
               <div className="flex flex-col gap-2">
-                <label className="text-sm font-medium" htmlFor="providerUsername">
-                  Provider username
-                </label>
-                <Input id="providerUsername" defaultValue={provider?.username} {...form.register("username")} />
+                <Label htmlFor="providerUsername">Provider username</Label>
+                <Input id="providerUsername" {...form.register("username")} />
               </div>
               <div className="flex flex-col gap-2">
-                <label className="text-sm font-medium" htmlFor="providerPassword">
-                  Provider password
-                </label>
+                <Label htmlFor="providerPassword">Provider password</Label>
                 <Input id="providerPassword" type="password" {...form.register("password")} />
               </div>
             </div>
             <div className="flex flex-col gap-2">
-              <label className="text-sm font-medium" htmlFor="outputFormat">
-                Preferred output format
-              </label>
-              <select
-                id="outputFormat"
-                className="flex h-11 rounded-lg border border-input bg-card px-3 py-2 text-sm"
-                defaultValue={provider?.outputFormat ?? "m3u8"}
-                {...form.register("outputFormat")}
-              >
-                <option value="m3u8">m3u8 (recommended)</option>
-                <option value="ts">ts</option>
-              </select>
+              <Label>Preferred output format</Label>
+              <Controller
+                control={form.control}
+                name="outputFormat"
+                render={({ field }) => (
+                  <Select value={field.value} onValueChange={field.onChange}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select format" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="m3u8">m3u8 (recommended)</SelectItem>
+                      <SelectItem value="ts">ts</SelectItem>
+                    </SelectContent>
+                  </Select>
+                )}
+              />
             </div>
             <div className="flex flex-wrap gap-3">
               <Button
