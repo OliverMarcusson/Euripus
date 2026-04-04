@@ -2,6 +2,7 @@ import type {
   ApiError,
   AuthSession,
   Channel,
+  GuideCategoryResponse,
   GuideResponse,
   LoginPayload,
   PlaybackSource,
@@ -154,6 +155,14 @@ export function getGuide() {
   return request<GuideResponse>("/guide");
 }
 
+export function getGuideCategory(categoryId: string, offset = 0, limit = 40) {
+  const params = new URLSearchParams({
+    offset: offset.toString(),
+    limit: limit.toString(),
+  });
+  return request<GuideCategoryResponse>(`/guide/category/${encodeURIComponent(categoryId)}?${params.toString()}`);
+}
+
 export function searchCatalog(query: string) {
   return request<SearchResults>(`/search?q=${encodeURIComponent(query)}`);
 }
@@ -181,4 +190,3 @@ export function startChannelPlayback(channelId: string) {
 export function startProgramPlayback(programId: string) {
   return request<PlaybackSource>(`/playback/program/${programId}`, { method: "POST" });
 }
-

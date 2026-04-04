@@ -76,9 +76,27 @@ export type Program = {
   canCatchup: boolean;
 };
 
+export type GuideCategorySummary = {
+  id: string;
+  name: string;
+  channelCount: number;
+  liveNowCount: number;
+};
+
+export type GuideChannelEntry = {
+  channel: Channel;
+  program: Program | null;
+};
+
 export type GuideResponse = {
-  channels: Channel[];
-  programs: Program[];
+  categories: GuideCategorySummary[];
+};
+
+export type GuideCategoryResponse = {
+  category: GuideCategorySummary;
+  entries: GuideChannelEntry[];
+  totalCount: number;
+  nextOffset: number | null;
 };
 
 export type SearchResults = {

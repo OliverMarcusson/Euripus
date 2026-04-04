@@ -5,6 +5,7 @@ target
 dist
 build
 coverage
+.runtime
 *.log
 .env
 .env.local

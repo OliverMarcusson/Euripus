@@ -1,0 +1,6 @@
+{
+  "build": {
+    "beforeDevCommand": "powershell -NoProfile -Command \"Write-Output frontend-ready\"",
+    "devUrl": "http://127.0.0.1:5173"
+  }
+}
