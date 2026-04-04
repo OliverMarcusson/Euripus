@@ -1774,12 +1774,15 @@ async fn search_programs(
               p.start_at,
               p.end_at,
               p.can_catchup,
-              concat_ws(' ', p.title, p.channel_name, p.description) AS search_text
+              coalesce(p.title, '') || ' ' || coalesce(p.channel_name, '') || ' ' || coalesce(p.description, '') AS search_text
             FROM programs p
             WHERE p.user_id = $1
               AND (
-                to_tsvector('simple', concat_ws(' ', p.title, p.channel_name, p.description)) @@ plainto_tsquery('simple', $2)
-                OR concat_ws(' ', p.title, p.channel_name, p.description) % $2
+                to_tsvector(
+                  'simple',
+                  coalesce(p.title, '') || ' ' || coalesce(p.channel_name, '') || ' ' || coalesce(p.description, '')
+                ) @@ plainto_tsquery('simple', $2)
+                OR (coalesce(p.title, '') || ' ' || coalesce(p.channel_name, '') || ' ' || coalesce(p.description, '')) % $2
               )
             ORDER BY
               CASE
@@ -1790,7 +1793,10 @@ async fn search_programs(
                 WHEN p.start_at > NOW() THEN 4
                 ELSE 5
               END,
-              similarity(concat_ws(' ', p.title, p.channel_name, p.description), $2) DESC,
+              similarity(
+                coalesce(p.title, '') || ' ' || coalesce(p.channel_name, '') || ' ' || coalesce(p.description, ''),
+                $2
+              ) DESC,
               p.start_at ASC
             OFFSET $3
             LIMIT $4
@@ -2459,8 +2465,11 @@ async fn count_program_search_results(pool: &PgPool, user_id: Uuid, query: &str)
         FROM programs p
         WHERE p.user_id = $1
           AND (
-            to_tsvector('simple', concat_ws(' ', p.title, p.channel_name, p.description)) @@ plainto_tsquery('simple', $2)
-            OR concat_ws(' ', p.title, p.channel_name, p.description) % $2
+            to_tsvector(
+              'simple',
+              coalesce(p.title, '') || ' ' || coalesce(p.channel_name, '') || ' ' || coalesce(p.description, '')
+            ) @@ plainto_tsquery('simple', $2)
+            OR (coalesce(p.title, '') || ' ' || coalesce(p.channel_name, '') || ' ' || coalesce(p.description, '')) % $2
           )
         "#,
     )

@@ -3,8 +3,17 @@ CREATE INDEX IF NOT EXISTS programs_user_profile_idx
 
 CREATE INDEX IF NOT EXISTS programs_search_tsv_idx
   ON programs
-  USING GIN (to_tsvector('simple', concat_ws(' ', title, channel_name, description)));
+  USING GIN (
+    to_tsvector(
+      'simple',
+      coalesce(title, '') || ' ' || coalesce(channel_name, '') || ' ' || coalesce(description, '')
+    )
+  );
 
 CREATE INDEX IF NOT EXISTS programs_search_trgm_idx
   ON programs
-  USING GIN ((concat_ws(' ', title, channel_name, description)) gin_trgm_ops);
+  USING GIN (
+    (
+      coalesce(title, '') || ' ' || coalesce(channel_name, '') || ' ' || coalesce(description, '')
+    ) gin_trgm_ops
+  );
