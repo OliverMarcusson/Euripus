@@ -1,5 +1,7 @@
 @import "tailwindcss";
 
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300..800&display=swap');
+
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
@@ -31,6 +33,9 @@
   --radius-xl: calc(var(--radius) + 4px);
   --animate-collapsible-down: collapsible-down 150ms ease-out;
   --animate-collapsible-up: collapsible-up 150ms ease-out;
+
+  /* Font mappings */
+  --font-sans: "Outfit", ui-sans-serif, system-ui, sans-serif;
 }
 
 @keyframes collapsible-down {
@@ -44,59 +49,60 @@
 }
 
 :root {
-  --background: oklch(0.985 0.002 260);
-  --foreground: oklch(0.145 0.015 260);
+  /* Default to a crisp light theme if not forced dark, but we usually want dark by default */
+  --background: oklch(0.98 0 0);
+  --foreground: oklch(0.12 0.01 260);
   --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0.015 260);
+  --card-foreground: oklch(0.12 0.01 260);
   --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0.015 260);
-  --primary: oklch(0.42 0.12 260);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.95 0.005 260);
-  --secondary-foreground: oklch(0.25 0.015 260);
-  --muted: oklch(0.96 0.003 260);
-  --muted-foreground: oklch(0.55 0.015 260);
-  --accent: oklch(0.95 0.01 260);
-  --accent-foreground: oklch(0.25 0.015 260);
-  --destructive: oklch(0.58 0.22 27);
-  --destructive-foreground: oklch(0.985 0 0);
-  --border: oklch(0.915 0.005 260);
-  --input: oklch(0.915 0.005 260);
-  --ring: oklch(0.42 0.12 260);
-  --sidebar: oklch(0.975 0.003 260);
-  --sidebar-foreground: oklch(0.145 0.015 260);
-  --sidebar-accent: oklch(0.42 0.12 260);
-  --live: oklch(0.63 0.21 25);
-  --live-foreground: oklch(0.985 0 0);
-  /* Shell outer radius > card inner radius (concentric pattern) */
-  --radius: 0.625rem;
+  --popover-foreground: oklch(0.12 0.01 260);
+  --primary: oklch(0.55 0.25 300); /* Vibrant Purple */
+  --primary-foreground: oklch(0.98 0 0);
+  --secondary: oklch(0.95 0 0);
+  --secondary-foreground: oklch(0.2 0 0);
+  --muted: oklch(0.96 0 0);
+  --muted-foreground: oklch(0.5 0.01 260);
+  --accent: oklch(0.94 0 0);
+  --accent-foreground: oklch(0.2 0 0);
+  --destructive: oklch(0.6 0.2 25);
+  --destructive-foreground: oklch(0.98 0 0);
+  --border: oklch(0.9 0 0);
+  --input: oklch(0.9 0 0);
+  --ring: oklch(0.55 0.25 300);
+  --sidebar: oklch(0.98 0 0);
+  --sidebar-foreground: oklch(0.12 0.01 260);
+  --sidebar-accent: oklch(0.94 0 0);
+  --live: oklch(0.6 0.2 25);
+  --live-foreground: oklch(0.98 0 0);
+  --radius: 0.75rem; /* radius-xl equivalent */
 }
 
 .dark {
-  --background: oklch(0.13 0.015 260);
-  --foreground: oklch(0.93 0.005 260);
-  --card: oklch(0.18 0.012 260);
-  --card-foreground: oklch(0.93 0.005 260);
-  --popover: oklch(0.18 0.012 260);
-  --popover-foreground: oklch(0.93 0.005 260);
-  --primary: oklch(0.68 0.14 260);
-  --primary-foreground: oklch(0.13 0.015 260);
+  /* Deep Obsidian cinematic dark */
+  --background: oklch(0.14 0.01 260);
+  --foreground: oklch(0.95 0.005 260);
+  --card: oklch(0.17 0.01 260);
+  --card-foreground: oklch(0.95 0.005 260);
+  --popover: oklch(0.17 0.01 260);
+  --popover-foreground: oklch(0.95 0.005 260);
+  --primary: oklch(0.65 0.25 300); /* Neon Purple */
+  --primary-foreground: oklch(0.14 0.01 260);
   --secondary: oklch(0.22 0.01 260);
-  --secondary-foreground: oklch(0.90 0.005 260);
-  --muted: oklch(0.22 0.01 260);
-  --muted-foreground: oklch(0.65 0.01 260);
-  --accent: oklch(0.24 0.012 260);
-  --accent-foreground: oklch(0.90 0.005 260);
+  --secondary-foreground: oklch(0.95 0.005 260);
+  --muted: oklch(0.2 0.01 260);
+  --muted-foreground: oklch(0.7 0.01 260);
+  --accent: oklch(0.2 0.01 260);
+  --accent-foreground: oklch(0.95 0.005 260);
   --destructive: oklch(0.65 0.2 25);
-  --destructive-foreground: oklch(0.985 0 0);
-  --border: oklch(0.26 0.01 260);
-  --input: oklch(0.26 0.01 260);
-  --ring: oklch(0.68 0.14 260);
-  --sidebar: oklch(0.155 0.012 260);
-  --sidebar-foreground: oklch(0.93 0.005 260);
-  --sidebar-accent: oklch(0.68 0.14 260);
+  --destructive-foreground: oklch(0.95 0.005 260);
+  --border: oklch(0.2 0.01 260);
+  --input: oklch(0.22 0.01 260);
+  --ring: oklch(0.65 0.25 300);
+  --sidebar: oklch(0.15 0.01 260);
+  --sidebar-foreground: oklch(0.95 0.005 260);
+  --sidebar-accent: oklch(0.2 0.01 260);
   --live: oklch(0.65 0.2 25);
-  --live-foreground: oklch(0.985 0 0);
+  --live-foreground: oklch(0.98 0 0);
 }
 
 * {
@@ -108,11 +114,13 @@ html {
 }
 
 body {
-  @apply min-h-screen bg-background text-foreground antialiased;
-  font-family: "Segoe UI Variable", "Aptos", -apple-system, system-ui, sans-serif;
+  @apply min-h-screen bg-background text-foreground antialiased selection:bg-primary/30 selection:text-primary;
+  /* Applying Outfit globally */
+  font-family: var(--font-sans);
   transition: background-color 150ms ease, color 150ms ease;
 }
 
+/* Base utility for dramatic reveals & smoothing */
 #root {
   @apply min-h-screen;
 }
