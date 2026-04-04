@@ -1,5 +1,5 @@
 import { Link, Outlet, useRouterState } from "@tanstack/react-router";
-import { ChevronDown, Heart, LogOut, Search, Settings, ShieldCheck, Tv, TvMinimal } from "lucide-react";
+import { ChevronDown, Heart, LogOut, Search, Settings, Tv, TvMinimal } from "lucide-react";
 import { PlayerView } from "@/features/player/player-view";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -24,7 +24,6 @@ const navigation = [
   { to: "/guide", label: "Guide", icon: TvMinimal },
   { to: "/search", label: "Search", icon: Search },
   { to: "/favorites", label: "Favorites", icon: Heart },
-  { to: "/provider", label: "Provider", icon: ShieldCheck },
   { to: "/settings", label: "Settings", icon: Settings },
 ] as const;
 

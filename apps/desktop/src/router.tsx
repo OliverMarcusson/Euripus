@@ -4,7 +4,6 @@ import { AppShell } from "@/components/layout/app-shell";
 import { AuthPage } from "@/features/auth/auth-page";
 import { FavoritesPage } from "@/features/channels/favorites-page";
 import { GuidePage } from "@/features/channels/guide-page";
-import { ProviderPage } from "@/features/provider/provider-page";
 import { SearchPage } from "@/features/search/search-page";
 import { SettingsPage } from "@/features/auth/settings-page";
 import { useAuthStore } from "@/store/auth-store";
@@ -58,12 +57,6 @@ const favoritesRoute = createRoute({
   component: FavoritesPage,
 });
 
-const providerRoute = createRoute({
-  getParentRoute: () => authenticatedRoute,
-  path: "/provider",
-  component: ProviderPage,
-});
-
 const settingsRoute = createRoute({
   getParentRoute: () => authenticatedRoute,
   path: "/settings",
@@ -82,7 +75,7 @@ const indexRoute = createRoute({
 const routeTree = rootRoute.addChildren([
   indexRoute,
   authRoute,
-  authenticatedRoute.addChildren([guideRoute, searchRoute, favoritesRoute, providerRoute, settingsRoute]),
+  authenticatedRoute.addChildren([guideRoute, searchRoute, favoritesRoute, settingsRoute]),
 ]);
 
 export const router = createRouter({

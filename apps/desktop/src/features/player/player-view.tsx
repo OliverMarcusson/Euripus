@@ -3,14 +3,8 @@ import Hls from "hls.js";
 import { Radio } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import {
-  Empty,
-  EmptyDescription,
-  EmptyHeader,
-  EmptyMedia,
-  EmptyTitle,
-} from "@/components/ui/empty";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Empty, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { usePlayerStore } from "@/store/player-store";
 import { formatRelativeTime } from "@/lib/utils";
 
@@ -46,7 +40,6 @@ export function PlayerView() {
     <Card className="h-full">
       <CardHeader>
         <CardTitle>Now Playing</CardTitle>
-        <CardDescription>Browser-compatible playback for live TV and catch-up.</CardDescription>
       </CardHeader>
       <CardContent className="flex h-full flex-col gap-5">
         {source ? (
@@ -59,9 +52,6 @@ export function PlayerView() {
 
             <div className="flex flex-col gap-1.5">
               <h2 className="text-lg font-semibold">{source.title}</h2>
-              <p className="text-sm text-muted-foreground">
-                {source.catchup ? "Catch-up capable source prepared for playback." : "Live stream source prepared for playback."}
-              </p>
             </div>
 
             {source.kind === "unsupported" ? (
@@ -79,17 +69,14 @@ export function PlayerView() {
             </Button>
           </>
         ) : (
-          <Empty className="min-h-[320px] border-0">
-            <EmptyHeader>
-              <EmptyMedia variant="icon">
-                <Radio aria-hidden="true" />
-              </EmptyMedia>
-              <EmptyTitle>Choose a channel or program</EmptyTitle>
-              <EmptyDescription>
-                Playback sources appear here after a guide, favorites, or search action.
-              </EmptyDescription>
-            </EmptyHeader>
-          </Empty>
+            <Empty className="min-h-[320px] border-0">
+              <EmptyHeader>
+                <EmptyMedia variant="icon">
+                  <Radio aria-hidden="true" />
+                </EmptyMedia>
+                <EmptyTitle>Choose a channel or program</EmptyTitle>
+              </EmptyHeader>
+            </Empty>
         )}
       </CardContent>
     </Card>

@@ -18,7 +18,7 @@ describe("AuthPage", () => {
       </QueryClientProvider>,
     );
 
-    expect(screen.getByText("Welcome to Euripus")).toBeInTheDocument();
+    expect(screen.getByText("Welcome back")).toBeInTheDocument();
     expect(screen.getByLabelText("Username")).toBeInTheDocument();
   });
 });

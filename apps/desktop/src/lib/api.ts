@@ -2,6 +2,7 @@ import type {
   ApiError,
   AuthSession,
   Channel,
+  GuidePreferences,
   GuideCategoryResponse,
   GuideResponse,
   LoginPayload,
@@ -153,6 +154,17 @@ export function getChannelGuide(id: string) {
 
 export function getGuide() {
   return request<GuideResponse>("/guide");
+}
+
+export function getGuidePreferences() {
+  return request<GuidePreferences>("/guide/preferences");
+}
+
+export function saveGuidePreferences(payload: GuidePreferences) {
+  return request<GuidePreferences>("/guide/preferences", {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
 }
 
 export function getGuideCategory(categoryId: string, offset = 0, limit = 40) {

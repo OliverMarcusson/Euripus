@@ -92,6 +92,10 @@ export type GuideResponse = {
   categories: GuideCategorySummary[];
 };
 
+export type GuidePreferences = {
+  includedCategoryIds: string[];
+};
+
 export type GuideCategoryResponse = {
   category: GuideCategorySummary;
   entries: GuideChannelEntry[];

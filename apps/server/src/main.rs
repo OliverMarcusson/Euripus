@@ -1,7 +1,12 @@
 mod config;
 mod xtreme;
 
-use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    net::SocketAddr,
+    sync::Arc,
+    time::Duration,
+};
 
 use aes_gcm::{
     Aes256Gcm, Nonce,
@@ -199,6 +204,12 @@ struct GuideResponse {
     categories: Vec<GuideCategorySummaryResponse>,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GuidePreferencesResponse {
+    included_category_ids: Vec<String>,
+}
+
 #[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct GuideCategorySummaryResponse {
@@ -263,6 +274,12 @@ struct CredentialsPayload {
 #[serde(rename_all = "camelCase")]
 struct RefreshPayload {
     refresh_token: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SaveGuidePreferencesPayload {
+    included_category_ids: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -409,6 +426,10 @@ async fn main() -> Result<()> {
         .route("/channels", get(list_channels))
         .route("/channels/{id}", get(get_channel))
         .route("/guide", get(get_guide))
+        .route(
+            "/guide/preferences",
+            get(get_guide_preferences).put(save_guide_preferences),
+        )
         .route("/guide/category/{category_id}", get(get_guide_category))
         .route("/guide/channel/{id}", get(get_channel_guide))
         .route("/search", get(search_catalog))
@@ -882,6 +903,46 @@ async fn get_guide(State(state): State<AppState>, headers: HeaderMap) -> ApiResu
     let auth = require_auth(&state, &headers).await?;
     let categories = fetch_guide_categories(&state.pool, auth.user_id).await?;
     Ok(Json(GuideResponse { categories }))
+}
+
+async fn get_guide_preferences(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> ApiResult<GuidePreferencesResponse> {
+    let auth = require_auth(&state, &headers).await?;
+    let included_category_ids = load_guide_preferences(&state.pool, auth.user_id).await?;
+
+    Ok(Json(GuidePreferencesResponse {
+        included_category_ids,
+    }))
+}
+
+async fn save_guide_preferences(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<SaveGuidePreferencesPayload>,
+) -> ApiResult<GuidePreferencesResponse> {
+    let auth = require_auth(&state, &headers).await?;
+    let included_category_ids = normalize_category_ids(payload.included_category_ids);
+
+    sqlx::query(
+        r#"
+        INSERT INTO user_guide_preferences (user_id, included_category_ids, updated_at)
+        VALUES ($1, $2, NOW())
+        ON CONFLICT (user_id)
+        DO UPDATE SET
+          included_category_ids = EXCLUDED.included_category_ids,
+          updated_at = NOW()
+        "#,
+    )
+    .bind(auth.user_id)
+    .bind(&included_category_ids)
+    .execute(&state.pool)
+    .await?;
+
+    Ok(Json(GuidePreferencesResponse {
+        included_category_ids,
+    }))
 }
 
 async fn get_guide_category(
@@ -1471,6 +1532,21 @@ async fn fetch_channels(pool: &PgPool, user_id: Uuid) -> Result<Vec<ChannelRespo
     Ok(channels)
 }
 
+async fn load_guide_preferences(pool: &PgPool, user_id: Uuid) -> Result<Vec<String>> {
+    let included_category_ids = sqlx::query_scalar::<_, Vec<String>>(
+        r#"
+        SELECT included_category_ids
+        FROM user_guide_preferences
+        WHERE user_id = $1
+        "#,
+    )
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(included_category_ids.unwrap_or_default())
+}
+
 fn parse_guide_category_pagination(query: GuideCategoryQuery) -> Result<(i64, i64), AppError> {
     let offset = query.offset.unwrap_or(0);
     let limit = query.limit.unwrap_or(GUIDE_DEFAULT_LIMIT);
@@ -1524,6 +1600,24 @@ fn map_guide_category_entry(row: GuideCategoryEntryRow) -> GuideChannelEntryResp
 fn next_guide_offset(offset: i64, limit: i64, total_count: i64) -> Option<i64> {
     let next_offset = offset + limit;
     (next_offset < total_count).then_some(next_offset)
+}
+
+fn normalize_category_ids(category_ids: Vec<String>) -> Vec<String> {
+    let mut seen = HashSet::new();
+    let mut normalized = Vec::with_capacity(category_ids.len());
+
+    for category_id in category_ids {
+        let category_id = category_id.trim();
+        if category_id.is_empty() {
+            continue;
+        }
+
+        if seen.insert(category_id.to_string()) {
+            normalized.push(category_id.to_string());
+        }
+    }
+
+    normalized
 }
 
 async fn touch_recent(pool: &PgPool, user_id: Uuid, channel_id: Uuid) -> Result<()> {
@@ -2458,6 +2552,26 @@ mod tests {
         assert_eq!(next_guide_offset(0, 40, 81), Some(40));
         assert_eq!(next_guide_offset(40, 40, 80), None);
         assert_eq!(next_guide_offset(80, 40, 80), None);
+    }
+
+    #[test]
+    fn guide_preferences_normalization_deduplicates_and_trims() {
+        let normalized = normalize_category_ids(vec![
+            " sports ".to_string(),
+            "sports".to_string(),
+            "".to_string(),
+            "news".to_string(),
+            "news".to_string(),
+        ]);
+
+        assert_eq!(normalized, vec!["sports".to_string(), "news".to_string()]);
+    }
+
+    #[test]
+    fn guide_preferences_normalization_preserves_empty_arrays() {
+        let normalized = normalize_category_ids(Vec::new());
+
+        assert!(normalized.is_empty());
     }
 
     #[test]
