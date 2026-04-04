@@ -573,7 +573,7 @@ struct RelayTokenQuery {
 const SYNC_BATCH_SIZE: usize = 10_000;
 const EPG_FETCH_CONCURRENCY: usize = 4;
 const FULL_SYNC_TOTAL_PHASES: i32 = 7;
-const EPG_SYNC_TOTAL_PHASES: i32 = 5;
+const EPG_SYNC_TOTAL_PHASES: i32 = 4;
 const SEARCH_DEFAULT_LIMIT: i64 = 30;
 const SEARCH_MAX_LIMIT: i64 = 100;
 const REFRESH_COOKIE_NAME: &str = "euripus.refresh";
@@ -1700,7 +1700,7 @@ async fn search_channels(
 ) -> ApiResult<ChannelSearchResponse> {
     let auth = require_auth(&state, &headers).await?;
     let (term, offset, limit) = parse_search_pagination(query)?;
-    let total_count = count_search_results(&state.pool, auth.user_id, "channel", &term).await?;
+    let total_count = count_channel_search_results(&state.pool, auth.user_id, &term).await?;
     let items = sqlx::query_as::<_, ChannelResponse>(
         r#"
         WITH page AS (
@@ -1761,29 +1761,36 @@ async fn search_programs(
 ) -> ApiResult<ProgramSearchResponse> {
     let auth = require_auth(&state, &headers).await?;
     let (term, offset, limit) = parse_search_pagination(query)?;
-    let total_count = count_search_results(&state.pool, auth.user_id, "program", &term).await?;
+    let total_count = count_program_search_results(&state.pool, auth.user_id, &term).await?;
     let items = sqlx::query_as::<_, ProgramResponse>(
         r#"
         WITH page AS (
-          SELECT ranked.entity_id, ROW_NUMBER() OVER () AS ordinal
+          SELECT ranked.id, ROW_NUMBER() OVER () AS ordinal
           FROM (
             SELECT
-              sd.entity_id
-            FROM search_documents sd
-            JOIN programs p ON p.id = sd.entity_id
-            WHERE sd.user_id = $1
-              AND sd.entity_type = 'program'
-              AND (sd.tsv @@ plainto_tsquery('simple', $2) OR sd.search_text % $2)
+              p.id,
+              p.title,
+              p.channel_id,
+              p.start_at,
+              p.end_at,
+              p.can_catchup,
+              concat_ws(' ', p.title, p.channel_name, p.description) AS search_text
+            FROM programs p
+            WHERE p.user_id = $1
+              AND (
+                to_tsvector('simple', concat_ws(' ', p.title, p.channel_name, p.description)) @@ plainto_tsquery('simple', $2)
+                OR concat_ws(' ', p.title, p.channel_name, p.description) % $2
+              )
             ORDER BY
               CASE
                 WHEN p.channel_id IS NOT NULL AND p.start_at <= NOW() AND p.end_at >= NOW() THEN 0
                 WHEN p.channel_id IS NOT NULL AND p.end_at <= NOW() AND p.can_catchup THEN 1
-                WHEN lower(sd.title) = lower($2) THEN 2
-                WHEN lower(sd.title) LIKE lower($2 || '%') THEN 3
+                WHEN lower(p.title) = lower($2) THEN 2
+                WHEN lower(p.title) LIKE lower($2 || '%') THEN 3
                 WHEN p.start_at > NOW() THEN 4
                 ELSE 5
               END,
-              similarity(sd.search_text, $2) DESC,
+              similarity(concat_ws(' ', p.title, p.channel_name, p.description), $2) DESC,
               p.start_at ASC
             OFFSET $3
             LIMIT $4
@@ -1799,7 +1806,7 @@ async fn search_programs(
           p.end_at,
           p.can_catchup
         FROM page
-        JOIN programs p ON p.id = page.entity_id
+        JOIN programs p ON p.id = page.id
         ORDER BY page.ordinal
         "#,
     )
@@ -2427,23 +2434,37 @@ fn parse_search_pagination(query: SearchQuery) -> Result<(String, i64, i64), App
     Ok((term, offset, limit.min(SEARCH_MAX_LIMIT)))
 }
 
-async fn count_search_results(
-    pool: &PgPool,
-    user_id: Uuid,
-    entity_type: &str,
-    query: &str,
-) -> Result<i64> {
+async fn count_channel_search_results(pool: &PgPool, user_id: Uuid, query: &str) -> Result<i64> {
     let total_count = sqlx::query_scalar::<_, i64>(
         r#"
         SELECT COUNT(*)
         FROM search_documents sd
         WHERE sd.user_id = $1
-          AND sd.entity_type = $2
-          AND (sd.tsv @@ plainto_tsquery('simple', $3) OR sd.search_text % $3)
+          AND sd.entity_type = 'channel'
+          AND (sd.tsv @@ plainto_tsquery('simple', $2) OR sd.search_text % $2)
         "#,
     )
     .bind(user_id)
-    .bind(entity_type)
+    .bind(query)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(total_count)
+}
+
+async fn count_program_search_results(pool: &PgPool, user_id: Uuid, query: &str) -> Result<i64> {
+    let total_count = sqlx::query_scalar::<_, i64>(
+        r#"
+        SELECT COUNT(*)
+        FROM programs p
+        WHERE p.user_id = $1
+          AND (
+            to_tsvector('simple', concat_ws(' ', p.title, p.channel_name, p.description)) @@ plainto_tsquery('simple', $2)
+            OR concat_ws(' ', p.title, p.channel_name, p.description) % $2
+          )
+        "#,
+    )
+    .bind(user_id)
     .bind(query)
     .fetch_one(pool)
     .await?;
@@ -3665,10 +3686,10 @@ async fn persist_full_sync_data(
         "rebuilding-search",
         6,
         job_type,
-        "Refreshing search index",
+        "Refreshing channel search",
     )
     .await?;
-    rebuild_all_search_documents(&mut transaction, user_id).await?;
+    rebuild_channel_search_documents(&mut transaction, user_id).await?;
 
     transaction.commit().await?;
     Ok(source_statuses)
@@ -3702,17 +3723,6 @@ async fn persist_epg_sync_data(
         .execute(&mut *transaction)
         .await?;
     bulk_insert_programmes(&mut transaction, user_id, profile_id, &programmes).await?;
-
-    update_sync_job_phase(
-        pool,
-        job_id,
-        "rebuilding-search",
-        4,
-        job_type,
-        "Refreshing program search",
-    )
-    .await?;
-    rebuild_program_search_documents(&mut transaction, user_id).await?;
 
     transaction.commit().await?;
     Ok(source_statuses)
@@ -4285,24 +4295,21 @@ async fn bulk_insert_programmes(
     Ok(())
 }
 
-async fn rebuild_all_search_documents(
-    transaction: &mut Transaction<'_, Postgres>,
-    user_id: Uuid,
-) -> Result<()> {
-    sqlx::query("DELETE FROM search_documents WHERE user_id = $1")
-        .bind(user_id)
-        .execute(&mut **transaction)
-        .await?;
-    rebuild_channel_search_documents(transaction, user_id).await?;
-    rebuild_program_search_documents(transaction, user_id).await?;
-
-    Ok(())
-}
-
 async fn rebuild_channel_search_documents(
     transaction: &mut Transaction<'_, Postgres>,
     user_id: Uuid,
 ) -> Result<()> {
+    sqlx::query(
+        r#"
+        DELETE FROM search_documents
+        WHERE user_id = $1
+          AND entity_type IN ('channel', 'program')
+        "#,
+    )
+    .bind(user_id)
+    .execute(&mut **transaction)
+    .await?;
+
     sqlx::query(
         r#"
         INSERT INTO search_documents (user_id, entity_type, entity_id, title, subtitle, search_text, starts_at, ends_at)
@@ -4323,43 +4330,6 @@ async fn rebuild_channel_search_documents(
         FROM channels c
         LEFT JOIN channel_categories cc ON cc.id = c.category_id
         WHERE c.user_id = $1
-        "#,
-    )
-    .bind(user_id)
-    .execute(&mut **transaction)
-    .await?;
-
-    Ok(())
-}
-
-async fn rebuild_program_search_documents(
-    transaction: &mut Transaction<'_, Postgres>,
-    user_id: Uuid,
-) -> Result<()> {
-    sqlx::query(
-        r#"
-        DELETE FROM search_documents
-        WHERE user_id = $1 AND entity_type = 'program'
-        "#,
-    )
-    .bind(user_id)
-    .execute(&mut **transaction)
-    .await?;
-
-    sqlx::query(
-        r#"
-        INSERT INTO search_documents (user_id, entity_type, entity_id, title, subtitle, search_text, starts_at, ends_at)
-        SELECT
-          $1,
-          'program',
-          p.id,
-          p.title,
-          p.channel_name,
-          concat_ws(' ', p.title, p.channel_name, p.description),
-          p.start_at,
-          p.end_at
-        FROM programs p
-        WHERE p.user_id = $1
         "#,
     )
     .bind(user_id)
