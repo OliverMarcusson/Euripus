@@ -22,6 +22,9 @@ services:
     env_file:
       - apps/server/.env
       - apps/server/.env.nordvpn.server
+    environment:
+      APP_VPN_ENABLED: "true"
+      APP_VPN_PROVIDER_NAME: "NordVPN"
     depends_on:
       postgres:
         condition: service_healthy

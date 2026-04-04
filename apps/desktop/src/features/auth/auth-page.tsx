@@ -5,6 +5,7 @@ import { Tv, Sparkles } from "lucide-react";
 import { useState } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
+import { ServerNetworkStatusCard } from "@/components/server/server-network-status-card";
 import { Button } from "@/components/ui/button";
 import { Field, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
@@ -166,6 +167,11 @@ export function AuthPage() {
                 {mutation.isPending ? "Authenticating..." : mode === "login" ? "Sign In" : "Create account"}
               </Button>
             </form>
+
+            <ServerNetworkStatusCard
+              className="border-border/70 bg-muted/20"
+              description="Use this before signing in to confirm that the hosted Euripus server is up and whether it is using the VPN route you expect."
+            />
           </div>
         </div>
       </div>

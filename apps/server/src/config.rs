@@ -18,6 +18,8 @@ pub struct Config {
     pub public_origin: Option<Url>,
     pub allowed_origins: Vec<String>,
     pub browser_cookie_secure: bool,
+    pub vpn_enabled: bool,
+    pub vpn_provider_name: Option<String>,
 }
 
 impl Config {
@@ -55,6 +57,11 @@ impl Config {
                     .map(|origin| origin.scheme() == "https")
                     .unwrap_or(false)
             });
+        let vpn_enabled = parse_bool_env(
+            "APP_VPN_ENABLED",
+            &read_env_or_default("APP_VPN_ENABLED", "false")?,
+        )?;
+        let vpn_provider_name = read_optional_env("APP_VPN_PROVIDER_NAME")?;
         let decoded_key = STANDARD
             .decode(read_env("APP_ENCRYPTION_KEY_B64")?)
             .context("APP_ENCRYPTION_KEY_B64 must be valid base64")?;
@@ -75,6 +82,8 @@ impl Config {
             public_origin,
             allowed_origins,
             browser_cookie_secure,
+            vpn_enabled,
+            vpn_provider_name,
         })
     }
 }

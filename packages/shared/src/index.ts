@@ -182,3 +182,12 @@ export type ValidateProviderResponse = {
   status: ProviderStatus;
   message: string;
 };
+
+export type ServerNetworkStatus = {
+  serverStatus: "online";
+  vpnActive: boolean;
+  vpnProvider: string | null;
+  publicIp: string | null;
+  publicIpCheckedAt: string;
+  publicIpError: string | null;
+};
