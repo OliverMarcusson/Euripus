@@ -58,6 +58,7 @@ export type ProviderProfile = {
   baseUrl: string;
   username: string;
   outputFormat: "m3u8" | "ts";
+  playbackMode: "direct" | "relay";
   status: ProviderStatus;
   lastValidatedAt: string | null;
   lastSyncAt: string | null;
@@ -172,6 +173,7 @@ export type SaveProviderPayload = {
   username: string;
   password: string;
   outputFormat: "m3u8" | "ts";
+  playbackMode: "direct" | "relay";
   epgSources: SaveEpgSourceInput[];
 };
 

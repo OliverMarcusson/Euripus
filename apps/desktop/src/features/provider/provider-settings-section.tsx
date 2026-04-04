@@ -48,6 +48,7 @@ const providerSchema = z.object({
   username: z.string().min(1),
   password: z.string(),
   outputFormat: z.enum(["m3u8", "ts"]),
+  playbackMode: z.enum(["direct", "relay"]),
   epgSources: z.array(
     z.object({
       id: z.string().uuid().optional(),
@@ -85,6 +86,7 @@ export function ProviderSettingsSection() {
       username: "",
       password: "",
       outputFormat: "m3u8",
+      playbackMode: "direct",
       epgSources: [],
     },
   });
@@ -108,6 +110,7 @@ export function ProviderSettingsSection() {
       username: providerQuery.data.username ?? "",
       password: "",
       outputFormat: providerQuery.data.outputFormat ?? "m3u8",
+      playbackMode: providerQuery.data.playbackMode ?? "direct",
       epgSources: providerQuery.data.epgSources.map((source) => ({
         id: source.id,
         url: source.url,
@@ -127,6 +130,7 @@ export function ProviderSettingsSection() {
         username: provider.username ?? "",
         password: "",
         outputFormat: provider.outputFormat ?? "m3u8",
+        playbackMode: provider.playbackMode ?? "direct",
         epgSources: provider.epgSources.map((source) => ({
           id: source.id,
           url: source.url,
@@ -313,6 +317,43 @@ export function ProviderSettingsSection() {
                   )}
                 />
                 <FieldError errors={[form.formState.errors.outputFormat]} />
+              </Field>
+
+              <Field
+                data-invalid={
+                  form.formState.errors.playbackMode ? true : undefined
+                }
+              >
+                <FieldLabel htmlFor="playbackMode">
+                  Playback routing
+                </FieldLabel>
+                <Controller
+                  control={form.control}
+                  name="playbackMode"
+                  render={({ field }) => (
+                    <Select value={field.value} onValueChange={field.onChange}>
+                      <SelectTrigger
+                        id="playbackMode"
+                        aria-invalid={
+                          form.formState.errors.playbackMode ? true : undefined
+                        }
+                      >
+                        <SelectValue placeholder="Select routing mode" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectGroup>
+                          <SelectItem value="direct">
+                            Direct provider connection
+                          </SelectItem>
+                          <SelectItem value="relay">
+                            Relay through Euripus
+                          </SelectItem>
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+                  )}
+                />
+                <FieldError errors={[form.formState.errors.playbackMode]} />
               </Field>
 
               <div className="rounded-2xl border border-border/70 bg-muted/30 p-4">
@@ -576,6 +617,17 @@ export function ProviderSettingsSection() {
                 form.watch("outputFormat").toUpperCase()
               }
               detail="Used for future playback."
+            />
+            <Separator />
+            <StatusRow
+              label="Playback routing"
+              value={provider?.playbackMode ?? form.watch("playbackMode")}
+              detail={
+                (provider?.playbackMode ?? form.watch("playbackMode")) ===
+                "relay"
+                  ? "Playback flows through the Euripus relay."
+                  : "Playback connects directly to the provider."
+              }
             />
             <Separator />
             <StatusRow
