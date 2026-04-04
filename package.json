@@ -15,6 +15,7 @@
     "user-test:stop": "powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ./scripts/stop-user-test-stack.ps1",
     "build:shared": "bun --cwd packages/shared build",
     "build:desktop": "bun --cwd apps/desktop build",
+    "build:android-tv": "powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ./scripts/build-android-tv.ps1",
     "check:desktop": "bun --cwd apps/desktop typecheck",
     "test:desktop": "bun --cwd apps/desktop test",
     "test:server": "cargo test --manifest-path apps/server/Cargo.toml",
