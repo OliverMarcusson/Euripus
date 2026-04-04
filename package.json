@@ -1,0 +1,22 @@
+{
+  "name": "euripus",
+  "private": true,
+  "packageManager": "bun@1.3.11",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:desktop": "bun --cwd apps/desktop dev",
+    "dev:server": "docker compose up --build server",
+    "dev:db": "docker compose up -d postgres",
+    "build:shared": "bun --cwd packages/shared build",
+    "build:desktop": "bun --cwd apps/desktop build",
+    "check:desktop": "bun --cwd apps/desktop typecheck",
+    "test:desktop": "bun --cwd apps/desktop test",
+    "test:server": "cargo test --manifest-path apps/server/Cargo.toml",
+    "tauri:dev": "bun --cwd apps/desktop tauri dev",
+    "tauri:build": "bun --cwd apps/desktop tauri build"
+  }
+}
+

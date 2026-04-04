@@ -1,0 +1,13 @@
+node_modules
+.idea
+.vscode
+target
+dist
+build
+coverage
+*.log
+.env
+.env.local
+.DS_Store
+bun.lock
+*.tsbuildinfo
