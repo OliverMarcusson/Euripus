@@ -8,12 +8,16 @@ import { SearchPage } from "@/features/search/search-page";
 import { SettingsPage } from "@/features/auth/settings-page";
 import { useAuthStore } from "@/store/auth-store";
 
-function RequireAuth({ children }: { children: ReactNode }) {
+export function SessionBootstrapFallback() {
+  return <div className="grid min-h-screen place-items-center">Loading session...</div>;
+}
+
+export function RequireAuth({ children }: { children: ReactNode }) {
   const hydrated = useAuthStore((state) => state.hydrated);
   const user = useAuthStore((state) => state.user);
 
   if (!hydrated) {
-    return <div className="grid min-h-screen place-items-center">Loading session...</div>;
+    return <SessionBootstrapFallback />;
   }
 
   if (!user) {
@@ -21,6 +25,32 @@ function RequireAuth({ children }: { children: ReactNode }) {
   }
 
   return <>{children}</>;
+}
+
+export function AuthEntry() {
+  const hydrated = useAuthStore((state) => state.hydrated);
+  const user = useAuthStore((state) => state.user);
+
+  if (!hydrated) {
+    return <SessionBootstrapFallback />;
+  }
+
+  if (user) {
+    return <Navigate to="/guide" />;
+  }
+
+  return <AuthPage />;
+}
+
+export function IndexRedirect() {
+  const hydrated = useAuthStore((state) => state.hydrated);
+  const user = useAuthStore((state) => state.user);
+
+  if (!hydrated) {
+    return <SessionBootstrapFallback />;
+  }
+
+  return <Navigate to={user ? "/guide" : "/auth"} />;
 }
 
 const rootRoute = createRootRoute({
@@ -36,7 +66,7 @@ const authenticatedRoute = createRoute({
 const authRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/auth",
-  component: AuthPage,
+  component: AuthEntry,
 });
 
 const guideRoute = createRoute({
@@ -66,10 +96,7 @@ const settingsRoute = createRoute({
 const indexRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/",
-  component: () => {
-    const user = useAuthStore((state) => state.user);
-    return <Navigate to={user ? "/guide" : "/auth"} />;
-  },
+  component: IndexRedirect,
 });
 
 const routeTree = rootRoute.addChildren([
