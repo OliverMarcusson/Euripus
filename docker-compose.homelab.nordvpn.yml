@@ -1,6 +1,10 @@
 services:
+  postgres:
+    ports:
+      - "${EURIPUS_POSTGRES_HOST_PORT:-15432}:5432"
+
   gluetun:
-    image: qmcgaw/gluetun:v3.41.1
+    image: docker.io/qmcgaw/gluetun:v3.41.1
     restart: unless-stopped
     cap_add:
       - NET_ADMIN
@@ -11,9 +15,13 @@ services:
     environment:
       VPN_SERVICE_PROVIDER: nordvpn
       FIREWALL_INPUT_PORTS: 8080
+      FIREWALL_OUTBOUND_SUBNETS: 10.89.0.1/32
 
   server:
     network_mode: "service:gluetun"
+    env_file:
+      - apps/server/.env
+      - apps/server/.env.nordvpn.server
     depends_on:
       postgres:
         condition: service_healthy
