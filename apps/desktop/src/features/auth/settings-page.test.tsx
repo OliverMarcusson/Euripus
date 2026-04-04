@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { SettingsPage } from "@/features/auth/settings-page";
-import { getProvider, getRecents, getSyncStatus, saveProvider } from "@/lib/api";
+import { getProvider, getRecents, getServerNetworkStatus, getSyncStatus, saveProvider } from "@/lib/api";
 import { useThemeStore } from "@/store/theme-store";
 import { useTvModeStore } from "@/store/tv-mode-store";
 
@@ -9,6 +9,7 @@ vi.mock("@/lib/api", () => ({
   addFavorite: vi.fn(),
   getProvider: vi.fn(),
   getRecents: vi.fn(),
+  getServerNetworkStatus: vi.fn(),
   getSyncStatus: vi.fn(),
   removeFavorite: vi.fn(),
   saveProvider: vi.fn(),
@@ -18,6 +19,7 @@ vi.mock("@/lib/api", () => ({
 
 const mockedGetRecents = vi.mocked(getRecents);
 const mockedGetProvider = vi.mocked(getProvider);
+const mockedGetServerNetworkStatus = vi.mocked(getServerNetworkStatus);
 const mockedGetSyncStatus = vi.mocked(getSyncStatus);
 const mockedSaveProvider = vi.mocked(saveProvider);
 
@@ -26,6 +28,14 @@ describe("SettingsPage", () => {
     vi.clearAllMocks();
     mockedGetRecents.mockResolvedValue([]);
     mockedGetProvider.mockResolvedValue(null);
+    mockedGetServerNetworkStatus.mockResolvedValue({
+      serverStatus: "online",
+      vpnActive: false,
+      vpnProvider: null,
+      publicIp: "203.0.113.42",
+      publicIpCheckedAt: "2026-04-05T10:00:00.000Z",
+      publicIpError: null,
+    });
     mockedGetSyncStatus.mockResolvedValue(null);
     mockedSaveProvider.mockImplementation(async (payload) => ({
       id: "provider-1",

@@ -4,7 +4,8 @@ mod xtreme;
 
 use std::{
     collections::{HashMap, HashSet},
-    net::SocketAddr,
+    net::{IpAddr, SocketAddr},
+    str::FromStr,
     sync::Arc,
     time::Duration,
 };
@@ -44,7 +45,7 @@ use tower_http::{
     cors::{AllowOrigin, CorsLayer},
     trace::TraceLayer,
 };
-use tracing::{error, info};
+use tracing::{error, info, warn};
 use url::Url;
 use uuid::Uuid;
 use xmltv::{XmltvChannel, XmltvFeed, XmltvProgramme};
@@ -241,6 +242,17 @@ struct SyncJobResponse {
     total_phases: i32,
     phase_message: Option<String>,
     error_message: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ServerNetworkStatusResponse {
+    server_status: String,
+    vpn_active: bool,
+    vpn_provider: Option<String>,
+    public_ip: Option<String>,
+    public_ip_checked_at: DateTime<Utc>,
+    public_ip_error: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -568,6 +580,8 @@ const REFRESH_COOKIE_NAME: &str = "euripus.refresh";
 const CSRF_COOKIE_NAME: &str = "euripus.csrf";
 const CSRF_HEADER_NAME: &str = "x-csrf-token";
 const RELAY_PLAYLIST_MAX_BYTES: usize = 1024 * 1024;
+const PUBLIC_IP_LOOKUP_URL: &str = "https://api.ipify.org";
+const PUBLIC_IP_LOOKUP_TIMEOUT_SECONDS: u64 = 5;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -631,6 +645,7 @@ async fn health() -> StatusCode {
 
 fn shared_api_router() -> Router<AppState> {
     Router::new()
+        .route("/server/network", get(get_server_network_status))
         .route("/me", get(me))
         .route("/sessions", get(list_sessions))
         .route("/sessions/{id}", delete(revoke_session))
@@ -877,6 +892,51 @@ async fn me(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<User
     .await?;
 
     Ok(Json(user))
+}
+
+async fn lookup_public_ip(client: &reqwest::Client) -> Result<String, anyhow::Error> {
+    let response = client
+        .get(PUBLIC_IP_LOOKUP_URL)
+        .timeout(Duration::from_secs(PUBLIC_IP_LOOKUP_TIMEOUT_SECONDS))
+        .send()
+        .await
+        .context("failed to request public IP")?
+        .error_for_status()
+        .context("public IP lookup returned an error status")?;
+    let public_ip = response
+        .text()
+        .await
+        .context("failed to read public IP response body")?;
+    let public_ip = public_ip.trim();
+    IpAddr::from_str(public_ip)
+        .with_context(|| format!("public IP lookup returned an invalid IP address: {public_ip}"))?;
+
+    Ok(public_ip.to_string())
+}
+
+async fn get_server_network_status(
+    State(state): State<AppState>,
+) -> ApiResult<ServerNetworkStatusResponse> {
+    let public_ip_checked_at = Utc::now();
+    let (public_ip, public_ip_error) = match lookup_public_ip(&state.http_client).await {
+        Ok(public_ip) => (Some(public_ip), None),
+        Err(error) => {
+            warn!("public IP lookup failed: {error:?}");
+            (
+                None,
+                Some("Public IP lookup is temporarily unavailable.".to_string()),
+            )
+        }
+    };
+
+    Ok(Json(ServerNetworkStatusResponse {
+        server_status: "online".to_string(),
+        vpn_active: state.config.vpn_enabled,
+        vpn_provider: state.config.vpn_provider_name.clone(),
+        public_ip,
+        public_ip_checked_at,
+        public_ip_error,
+    }))
 }
 
 async fn list_sessions(
@@ -4975,6 +5035,8 @@ mod tests {
                 public_origin: Some(Url::parse("https://app.example.com").expect("public origin")),
                 allowed_origins: vec!["https://app.example.com".to_string()],
                 browser_cookie_secure: true,
+                vpn_enabled: false,
+                vpn_provider_name: None,
             }),
             http_client: reqwest::Client::new(),
         }

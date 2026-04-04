@@ -12,6 +12,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { useEffect } from "react";
+import { ServerNetworkStatusCard } from "@/components/server/server-network-status-card";
 import { Controller, useFieldArray, useForm } from "react-hook-form";
 import { z } from "zod";
 import { Badge } from "@/components/ui/badge";
@@ -645,6 +646,8 @@ export function ProviderSettingsSection() {
             ) : null}
           </CardContent>
         </Card>
+
+        <ServerNetworkStatusCard />
 
         <Card>
           <CardHeader>

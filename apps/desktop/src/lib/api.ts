@@ -16,6 +16,7 @@ import type {
   SaveProviderPayload,
   ProgramSearchResults,
   Session,
+  ServerNetworkStatus,
   SyncJob,
   User,
   ValidateProviderResponse,
@@ -217,6 +218,10 @@ export async function logout() {
 
 export function getCurrentUser() {
   return request<User>("/me");
+}
+
+export function getServerNetworkStatus() {
+  return request<ServerNetworkStatus>("/server/network");
 }
 
 export function getSessions() {
