@@ -16,6 +16,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useChannelFavoriteMutation } from "@/hooks/use-channel-favorite";
+import { useTvAutoFocus } from "@/hooks/use-tv-auto-focus";
 import { getGuide, getGuideCategory, getGuidePreferences, saveGuidePreferences, startChannelPlayback } from "@/lib/api";
 import { cn, formatArchiveDuration, formatTimeRange, getTimeProgress } from "@/lib/utils";
 import { usePlayerStore } from "@/store/player-store";
@@ -138,6 +139,10 @@ export function GuidePage() {
 
     return selectedCategories.filter((category) => category.name.toLowerCase().includes(normalizedAppliedFilter));
   }, [normalizedAppliedFilter, selectedCategories, shouldApplyFilter]);
+  useTvAutoFocus(
+    visibleCategories.length ? "[data-guide-category-filter='true']" : "[data-guide-category-toggle='true']",
+    [visibleCategories.length, openCategories.join("|")],
+  );
 
   useEffect(() => {
     if (!preferencesQuery.data || !categories.length || savePreferencesMutation.isPending) {
@@ -363,6 +368,9 @@ function GuideCategoryFilterCard({
                       <button
                         key={category.id}
                         type="button"
+                        data-tv-focusable="true"
+                        data-guide-category-filter="true"
+                        data-tv-autofocus={selected ? "true" : undefined}
                         aria-pressed={selected}
                         disabled={!preferencesReady || saving}
                         onClick={() => onToggleCategory(category.id)}
@@ -436,7 +444,7 @@ function GuideCategorySection({
             </div>
           </div>
           <CollapsibleTrigger asChild>
-            <Button variant="ghost" aria-expanded={open}>
+            <Button variant="ghost" aria-expanded={open} data-guide-category-toggle="true" data-tv-autofocus={open ? "true" : undefined}>
               <Icon data-icon="inline-start" />
               {open ? "Hide channels" : "Show channels"}
             </Button>

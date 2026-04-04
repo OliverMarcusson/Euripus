@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { SearchPage } from "@/features/search/search-page";
-import { searchCatalog } from "@/lib/api";
+import { searchChannels, searchPrograms } from "@/lib/api";
 
 vi.mock("@/hooks/use-debounce", () => ({
   useDebounce: (value: string) => value,
@@ -10,12 +10,14 @@ vi.mock("@/hooks/use-debounce", () => ({
 vi.mock("@/lib/api", () => ({
   addFavorite: vi.fn(),
   removeFavorite: vi.fn(),
-  searchCatalog: vi.fn(),
+  searchChannels: vi.fn(),
+  searchPrograms: vi.fn(),
   startChannelPlayback: vi.fn(),
   startProgramPlayback: vi.fn(),
 }));
 
-const mockedSearchCatalog = vi.mocked(searchCatalog);
+const mockedSearchChannels = vi.mocked(searchChannels);
+const mockedSearchPrograms = vi.mocked(searchPrograms);
 
 describe("SearchPage", () => {
   beforeEach(() => {
@@ -44,10 +46,15 @@ describe("SearchPage", () => {
   }
 
   it("renders EPG program states and play buttons only for playable results", async () => {
-    mockedSearchCatalog.mockResolvedValue({
+    mockedSearchChannels.mockResolvedValue({
       query: "hammarby",
-      channels: [],
-      programs: [
+      items: [],
+      totalCount: 0,
+      nextOffset: null,
+    });
+    mockedSearchPrograms.mockResolvedValue({
+      query: "hammarby",
+      items: [
         {
           id: "live-program",
           channelId: "channel-live",
@@ -89,6 +96,8 @@ describe("SearchPage", () => {
           canCatchup: false,
         },
       ],
+      totalCount: 4,
+      nextOffset: null,
     });
 
     renderSearchPage();
@@ -96,7 +105,7 @@ describe("SearchPage", () => {
       target: { value: "hammarby" },
     });
 
-    await waitFor(() => expect(mockedSearchCatalog).toHaveBeenCalledWith("hammarby"));
+    await waitFor(() => expect(mockedSearchPrograms).toHaveBeenCalledWith("hammarby", 0, 30));
     expect(await screen.findByText("Live now")).toBeInTheDocument();
     expect(screen.getByText("Catch-up")).toBeInTheDocument();
     expect(screen.getByText("Upcoming")).toBeInTheDocument();
@@ -106,9 +115,9 @@ describe("SearchPage", () => {
   });
 
   it("renders favorite controls for channel matches", async () => {
-    mockedSearchCatalog.mockResolvedValue({
+    mockedSearchChannels.mockResolvedValue({
       query: "arena",
-      channels: [
+      items: [
         {
           id: "channel-1",
           name: "Arena 1",
@@ -122,7 +131,14 @@ describe("SearchPage", () => {
           isFavorite: false,
         },
       ],
-      programs: [],
+      totalCount: 1,
+      nextOffset: null,
+    });
+    mockedSearchPrograms.mockResolvedValue({
+      query: "arena",
+      items: [],
+      totalCount: 0,
+      nextOffset: null,
     });
 
     renderSearchPage();
@@ -130,7 +146,7 @@ describe("SearchPage", () => {
       target: { value: "arena" },
     });
 
-    await waitFor(() => expect(mockedSearchCatalog).toHaveBeenCalledWith("arena"));
+    await waitFor(() => expect(mockedSearchChannels).toHaveBeenCalledWith("arena", 0, 30));
     expect(await screen.findByRole("button", { name: /favorite/i })).toBeInTheDocument();
     expect(screen.getByText("Channel matches")).toBeInTheDocument();
   });

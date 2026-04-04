@@ -68,9 +68,14 @@ export type SyncJob = {
   id: string;
   status: "queued" | "running" | "succeeded" | "failed";
   jobType: "full" | "epg";
+  trigger: "manual" | "scheduled";
   createdAt: string;
   startedAt: string | null;
   finishedAt: string | null;
+  currentPhase: string | null;
+  completedPhases: number;
+  totalPhases: number;
+  phaseMessage: string | null;
   errorMessage: string | null;
 };
 
@@ -125,11 +130,16 @@ export type GuideCategoryResponse = {
   nextOffset: number | null;
 };
 
-export type SearchResults = {
+export type SearchResultPage<T> = {
   query: string;
-  channels: Channel[];
-  programs: Program[];
+  items: T[];
+  totalCount: number;
+  nextOffset: number | null;
 };
+
+export type ChannelSearchResults = SearchResultPage<Channel>;
+
+export type ProgramSearchResults = SearchResultPage<Program>;
 
 export type RecentChannel = {
   channel: Channel;

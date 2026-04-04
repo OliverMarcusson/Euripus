@@ -40,6 +40,7 @@ const ToggleGroupItem = React.forwardRef<
   return (
     <ToggleGroupPrimitive.Item
       ref={ref}
+      data-tv-focusable={props.disabled ? undefined : "true"}
       className={cn(
         toggleVariants({
           variant: context.variant || variant,

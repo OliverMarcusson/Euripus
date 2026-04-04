@@ -15,6 +15,8 @@ import { getProvider, getRecents } from "@/lib/api";
 import { formatDateTime, formatRelativeTime } from "@/lib/utils";
 import type { ThemePreference } from "@/store/theme-store";
 import { useThemeStore } from "@/store/theme-store";
+import type { TvModePreference } from "@/store/tv-mode-store";
+import { useTvModeStore } from "@/store/tv-mode-store";
 
 const themeOptions: Array<{
   value: ThemePreference;
@@ -26,6 +28,15 @@ const themeOptions: Array<{
   { value: "dark", label: "Dark", icon: Moon },
 ] as const;
 
+const tvModeOptions: Array<{
+  value: TvModePreference;
+  label: string;
+}> = [
+  { value: "auto", label: "Auto" },
+  { value: "on", label: "TV mode" },
+  { value: "off", label: "Desktop" },
+] as const;
+
 export function SettingsPage() {
   const recentsQuery = useQuery({ queryKey: ["recents"], queryFn: getRecents });
   const providerQuery = useQuery({ queryKey: ["provider"], queryFn: getProvider });
@@ -33,6 +44,9 @@ export function SettingsPage() {
   const preference = useThemeStore((state) => state.preference);
   const resolvedTheme = useThemeStore((state) => state.resolvedTheme);
   const setPreference = useThemeStore((state) => state.setPreference);
+  const tvModePreference = useTvModeStore((state) => state.preference);
+  const isTvMode = useTvModeStore((state) => state.isTvMode);
+  const setTvModePreference = useTvModeStore((state) => state.setPreference);
   const recents = recentsQuery.data ?? [];
   const provider = providerQuery.data;
 
@@ -43,6 +57,7 @@ export function SettingsPage() {
         meta={
           <>
             <Badge variant="accent">{resolvedTheme} theme</Badge>
+            <Badge variant="outline">{isTvMode ? "TV mode on" : "TV mode off"}</Badge>
             <Badge variant="outline">{recents.length} recent channels</Badge>
             <Badge variant="outline">{provider?.status ?? "provider missing"}</Badge>
           </>
@@ -76,6 +91,31 @@ export function SettingsPage() {
                 );
               })}
             </ToggleGroup>
+
+            <Separator />
+
+            <div className="flex flex-col gap-3">
+              <div className="flex flex-col gap-1">
+                <span className="text-sm font-medium">Remote-friendly UI</span>
+                <span className="text-sm text-muted-foreground">Auto-detect Android TV or force TV mode manually.</span>
+              </div>
+              <ToggleGroup
+                type="single"
+                value={tvModePreference}
+                onValueChange={(value) => {
+                  if (value) {
+                    setTvModePreference(value as TvModePreference);
+                  }
+                }}
+                className="grid w-full grid-cols-1 gap-2 rounded-2xl bg-secondary/60 p-2"
+              >
+                {tvModeOptions.map((option) => (
+                  <ToggleGroupItem key={option.value} value={option.value} className="justify-start rounded-xl px-3 py-2.5">
+                    {option.label}
+                  </ToggleGroupItem>
+                ))}
+              </ToggleGroup>
+            </div>
           </CardContent>
         </Card>
 

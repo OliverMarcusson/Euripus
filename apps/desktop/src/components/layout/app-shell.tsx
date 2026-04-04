@@ -19,6 +19,7 @@ import { logout } from "@/lib/api";
 import { clearRefreshToken } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
 import { useAuthStore } from "@/store/auth-store";
+import { useTvModeStore } from "@/store/tv-mode-store";
 
 const navigation = [
   { to: "/guide", label: "Guide", icon: TvMinimal },
@@ -31,6 +32,7 @@ export function AppShell() {
   const pathname = useRouterState({ select: (state) => state.location.pathname });
   const user = useAuthStore((state) => state.user);
   const clearSession = useAuthStore((state) => state.clearSession);
+  const isTvMode = useTvModeStore((state) => state.isTvMode);
   const initials = (user?.username ?? "Guest")
     .split(/\s+/)
     .filter(Boolean)
@@ -47,9 +49,17 @@ export function AppShell() {
 
   return (
     <TooltipProvider delayDuration={300}>
-      <div className="grid h-screen grid-cols-[240px_minmax(0,1fr)_360px] bg-background max-xl:grid-cols-[240px_minmax(0,1fr)] max-xl:grid-rows-[minmax(0,1fr)_320px] max-md:grid-cols-1 max-md:grid-rows-[auto_minmax(0,1fr)_320px]">
+      <div
+        data-tv-mode={isTvMode ? "true" : "false"}
+        className={cn(
+          "grid h-screen bg-background",
+          isTvMode
+            ? "grid-cols-[280px_minmax(0,1fr)_420px]"
+            : "grid-cols-[240px_minmax(0,1fr)_360px] max-xl:grid-cols-[240px_minmax(0,1fr)] max-xl:grid-rows-[minmax(0,1fr)_320px] max-md:grid-cols-1 max-md:grid-rows-[auto_minmax(0,1fr)_320px]",
+        )}
+      >
         <aside className="flex min-h-0 flex-col border-r border-border/40 bg-sidebar shadow-[4px_0_24px_rgba(0,0,0,0.02)] z-10">
-          <div className="flex items-center gap-3 border-b border-border/40 px-5 py-6">
+          <div className={cn("flex items-center gap-3 border-b border-border/40 px-5 py-6", isTvMode && "px-6 py-7")}>
             <div className="flex size-10 items-center justify-center rounded-xl bg-primary text-primary-foreground shadow-lg shadow-primary/20">
               <Tv className="size-4" aria-hidden="true" />
             </div>
@@ -73,8 +83,11 @@ export function AppShell() {
                         <TooltipTrigger asChild>
                           <Link
                             to={item.to}
+                            data-tv-focusable="true"
+                            data-tv-autofocus={active ? "true" : undefined}
                             className={cn(
-                              "flex items-center gap-3 rounded-xl px-3 py-3 text-sm font-semibold transition-all duration-200",
+                              "flex items-center gap-3 rounded-xl px-3 py-3 text-sm font-semibold transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+                              isTvMode && "min-h-14 px-4 text-base",
                               active
                                 ? "bg-primary text-primary-foreground shadow-md shadow-primary/20 translate-x-1"
                                 : "text-muted-foreground hover:bg-muted/50 hover:text-foreground",
@@ -129,12 +142,17 @@ export function AppShell() {
         </aside>
 
         <ScrollArea className="min-h-0 max-md:order-2">
-          <main className="mx-auto flex min-h-full w-full max-w-[1200px] flex-col p-6 lg:p-8">
+          <main className={cn("mx-auto flex min-h-full w-full max-w-[1200px] flex-col p-6 lg:p-8", isTvMode && "max-w-[1440px] p-8 lg:p-10")}>
             <Outlet />
           </main>
         </ScrollArea>
 
-        <aside className="min-h-0 border-l border-border/40 bg-sidebar shadow-[-4px_0_24px_rgba(0,0,0,0.02)] z-10 max-xl:col-span-2 max-xl:border-l-0 max-xl:border-t max-md:order-3 max-md:col-span-1">
+        <aside
+          className={cn(
+            "min-h-0 border-l border-border/40 bg-sidebar shadow-[-4px_0_24px_rgba(0,0,0,0.02)] z-10",
+            !isTvMode && "max-xl:col-span-2 max-xl:border-l-0 max-xl:border-t max-md:order-3 max-md:col-span-1",
+          )}
+        >
           <ScrollArea className="h-full">
             <div className="p-5 lg:p-6">
               <PlayerView />

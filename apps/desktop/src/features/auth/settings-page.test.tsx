@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { SettingsPage } from "@/features/auth/settings-page";
 import { getProvider, getRecents, getSyncStatus } from "@/lib/api";
 import { useThemeStore } from "@/store/theme-store";
+import { useTvModeStore } from "@/store/tv-mode-store";
 
 vi.mock("@/lib/api", () => ({
   addFavorite: vi.fn(),
@@ -26,6 +27,7 @@ describe("SettingsPage", () => {
     mockedGetProvider.mockResolvedValue(null);
     mockedGetSyncStatus.mockResolvedValue(null);
     useThemeStore.getState().setPreference("system");
+    useTvModeStore.getState().setPreference("auto");
   });
 
   it("updates the theme when a toggle is selected", async () => {
