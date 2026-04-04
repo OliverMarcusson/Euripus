@@ -1003,9 +1003,12 @@ async fn search_catalog(
           AND (sd.tsv @@ plainto_tsquery('simple', $2) OR sd.search_text % $2)
         ORDER BY
           CASE
-            WHEN lower(sd.title) = lower($2) THEN 0
-            WHEN p.start_at <= NOW() AND p.end_at >= NOW() THEN 1
-            ELSE 2
+            WHEN p.channel_id IS NOT NULL AND p.start_at <= NOW() AND p.end_at >= NOW() THEN 0
+            WHEN p.channel_id IS NOT NULL AND p.end_at <= NOW() AND p.can_catchup THEN 1
+            WHEN lower(sd.title) = lower($2) THEN 2
+            WHEN lower(sd.title) LIKE lower($2 || '%') THEN 3
+            WHEN p.start_at > NOW() THEN 4
+            ELSE 5
           END,
           similarity(sd.search_text, $2) DESC,
           p.start_at ASC
@@ -1229,6 +1232,8 @@ async fn play_program(
     .await?
     .ok_or_else(|| AppError::NotFound("Program not found".to_string()))?;
 
+    let behavior = determine_program_playback_behavior(&row, Utc::now());
+
     let Some(channel_id) = row.channel_id else {
         return Ok(Json(unsupported_playback(
             &row.title,
@@ -1237,35 +1242,57 @@ async fn play_program(
     };
     touch_recent(&state.pool, auth.user_id, channel_id).await?;
 
-    if !row.can_catchup || !row.has_catchup {
-        return Ok(Json(unsupported_playback(
-            &row.title,
-            "Catch-up is not available for this program on the provider.",
-        )));
+    match behavior {
+        ProgramPlaybackBehavior::Live => {
+            let credentials = XtreamCredentials {
+                base_url: row.base_url,
+                username: row.provider_username,
+                password: decrypt_secret(&state.config.encryption_key, &row.password_encrypted)?,
+                output_format: row.output_format,
+            };
+            let url = xtreme::build_live_stream_url(
+                &credentials,
+                row.remote_stream_id,
+                row.stream_extension.as_deref(),
+            )?;
+
+            Ok(Json(playback_source_from_url(
+                &row.channel_name,
+                url,
+                true,
+                false,
+                row.stream_extension.as_deref(),
+                None,
+            )))
+        }
+        ProgramPlaybackBehavior::Catchup => {
+            let credentials = XtreamCredentials {
+                base_url: row.base_url,
+                username: row.provider_username,
+                password: decrypt_secret(&state.config.encryption_key, &row.password_encrypted)?,
+                output_format: row.output_format,
+            };
+            let url = xtreme::build_catchup_url(
+                &credentials,
+                row.remote_stream_id,
+                row.stream_extension.as_deref(),
+                row.start_at,
+                row.end_at,
+            )?;
+
+            Ok(Json(playback_source_from_url(
+                &row.title,
+                url,
+                false,
+                true,
+                row.stream_extension.as_deref(),
+                None,
+            )))
+        }
+        ProgramPlaybackBehavior::Unsupported(reason) => {
+            Ok(Json(unsupported_playback(&row.title, reason)))
+        }
     }
-
-    let credentials = XtreamCredentials {
-        base_url: row.base_url,
-        username: row.provider_username,
-        password: decrypt_secret(&state.config.encryption_key, &row.password_encrypted)?,
-        output_format: row.output_format,
-    };
-    let url = xtreme::build_catchup_url(
-        &credentials,
-        row.remote_stream_id,
-        row.stream_extension.as_deref(),
-        row.start_at,
-        row.end_at,
-    )?;
-
-    Ok(Json(playback_source_from_url(
-        &row.title,
-        url,
-        false,
-        true,
-        row.stream_extension.as_deref(),
-        None,
-    )))
 }
 
 const GUIDE_DEFAULT_LIMIT: i64 = 40;
@@ -2307,6 +2334,36 @@ struct ProgramPlaybackRow {
     output_format: String,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum ProgramPlaybackBehavior {
+    Live,
+    Catchup,
+    Unsupported(&'static str),
+}
+
+fn determine_program_playback_behavior(
+    row: &ProgramPlaybackRow,
+    now: DateTime<Utc>,
+) -> ProgramPlaybackBehavior {
+    if row.channel_id.is_none() {
+        return ProgramPlaybackBehavior::Unsupported(
+            "This program is not mapped to a playable channel.",
+        );
+    }
+
+    if row.start_at <= now && row.end_at > now {
+        return ProgramPlaybackBehavior::Live;
+    }
+
+    if row.end_at <= now && row.can_catchup && row.has_catchup {
+        return ProgramPlaybackBehavior::Catchup;
+    }
+
+    ProgramPlaybackBehavior::Unsupported(
+        "Catch-up is not available for this program on the provider.",
+    )
+}
+
 #[derive(Debug, FromRow)]
 struct GuideCategorySummaryRow {
     id: String,
@@ -2475,5 +2532,90 @@ mod tests {
 
         assert_eq!(entry.channel.name, "Arena 2");
         assert!(entry.program.is_none());
+    }
+
+    #[test]
+    fn program_playback_uses_live_channel_when_program_is_airing() {
+        let now = Utc::now();
+        let row = sample_program_playback_row(
+            now - ChronoDuration::minutes(15),
+            now + ChronoDuration::minutes(45),
+        );
+
+        let behavior = determine_program_playback_behavior(&row, now);
+
+        assert_eq!(behavior, ProgramPlaybackBehavior::Live);
+    }
+
+    #[test]
+    fn program_playback_uses_catchup_when_program_has_ended_and_archive_is_available() {
+        let now = Utc::now();
+        let row = sample_program_playback_row(
+            now - ChronoDuration::hours(2),
+            now - ChronoDuration::hours(1),
+        );
+
+        let behavior = determine_program_playback_behavior(&row, now);
+
+        assert_eq!(behavior, ProgramPlaybackBehavior::Catchup);
+    }
+
+    #[test]
+    fn program_playback_is_unsupported_for_upcoming_programs() {
+        let now = Utc::now();
+        let row = sample_program_playback_row(
+            now + ChronoDuration::minutes(10),
+            now + ChronoDuration::minutes(70),
+        );
+
+        let behavior = determine_program_playback_behavior(&row, now);
+
+        assert_eq!(
+            behavior,
+            ProgramPlaybackBehavior::Unsupported(
+                "Catch-up is not available for this program on the provider.",
+            )
+        );
+    }
+
+    #[test]
+    fn program_playback_is_unsupported_when_program_is_not_mapped_to_a_channel() {
+        let now = Utc::now();
+        let mut row = sample_program_playback_row(
+            now - ChronoDuration::minutes(15),
+            now + ChronoDuration::minutes(45),
+        );
+        row.channel_id = None;
+
+        let behavior = determine_program_playback_behavior(&row, now);
+
+        assert_eq!(
+            behavior,
+            ProgramPlaybackBehavior::Unsupported(
+                "This program is not mapped to a playable channel.",
+            )
+        );
+    }
+
+    fn sample_program_playback_row(
+        start_at: DateTime<Utc>,
+        end_at: DateTime<Utc>,
+    ) -> ProgramPlaybackRow {
+        ProgramPlaybackRow {
+            id: Uuid::from_u128(7),
+            title: "Matchday Live".to_string(),
+            start_at,
+            end_at,
+            can_catchup: true,
+            channel_id: Some(Uuid::from_u128(8)),
+            remote_stream_id: 42,
+            stream_extension: Some("m3u8".to_string()),
+            channel_name: "Arena 1".to_string(),
+            has_catchup: true,
+            base_url: "https://provider.example.com".to_string(),
+            provider_username: "demo".to_string(),
+            password_encrypted: "encrypted".to_string(),
+            output_format: "m3u8".to_string(),
+        }
     }
 }

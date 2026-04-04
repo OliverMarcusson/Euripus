@@ -92,7 +92,7 @@ describe("GuidePage", () => {
     });
 
     renderGuidePage();
-    fireEvent.click(await screen.findByRole("button", { name: /show channels/i }));
+    fireEvent.click((await screen.findAllByRole("button", { name: /show channels/i }))[0]);
 
     await waitFor(() => expect(mockedGetGuideCategory).toHaveBeenCalledWith("sports", 0, 40));
     expect(await screen.findByText("Matchday Live")).toBeInTheDocument();
@@ -174,7 +174,7 @@ describe("GuidePage", () => {
       });
 
     renderGuidePage();
-    fireEvent.click(await screen.findByRole("button", { name: /show channels/i }));
+    fireEvent.click((await screen.findAllByRole("button", { name: /show channels/i }))[0]);
 
     expect(await screen.findByText("Matchday Live")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /load more/i }));
@@ -214,9 +214,78 @@ describe("GuidePage", () => {
     });
 
     renderGuidePage();
-    fireEvent.click(await screen.findByRole("button", { name: /show channels/i }));
+    fireEvent.click((await screen.findAllByRole("button", { name: /show channels/i }))[0]);
 
     expect(await screen.findByText("Arena 3")).toBeInTheDocument();
     expect(screen.getByText("No current program metadata synced yet.")).toBeInTheDocument();
+  });
+
+  it("filters only by category name without using loaded channel entries", async () => {
+    mockedGetGuide.mockResolvedValue({
+      categories: [
+        {
+          id: "sports",
+          name: "Sports",
+          channelCount: 2,
+          liveNowCount: 1,
+        },
+        {
+          id: "news",
+          name: "News",
+          channelCount: 1,
+          liveNowCount: 0,
+        },
+      ],
+    });
+    mockedGetGuideCategory.mockResolvedValue({
+      category: {
+        id: "sports",
+        name: "Sports",
+        channelCount: 2,
+        liveNowCount: 1,
+      },
+      entries: [
+        {
+          channel: {
+            id: "channel-1",
+            name: "Arena 1",
+            logoUrl: null,
+            categoryName: "Sports",
+            remoteStreamId: 1,
+            epgChannelId: null,
+            hasCatchup: true,
+            archiveDurationHours: 24,
+            streamExtension: "m3u8",
+            isFavorite: false,
+          },
+          program: {
+            id: "program-1",
+            channelId: "channel-1",
+            channelName: "Arena 1",
+            title: "Matchday Live",
+            description: null,
+            startAt: "2026-04-04T10:00:00.000Z",
+            endAt: "2026-04-04T12:00:00.000Z",
+            canCatchup: true,
+          },
+        },
+      ],
+      totalCount: 1,
+      nextOffset: null,
+    });
+
+    renderGuidePage();
+    fireEvent.click((await screen.findAllByRole("button", { name: /show channels/i }))[0]);
+    expect(await screen.findByText("Arena 1")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByPlaceholderText(/filter guide categories/i), {
+      target: { value: "arena" },
+    });
+
+    expect(screen.queryByText("Sports")).not.toBeInTheDocument();
+    expect(screen.queryByText("Arena 1")).not.toBeInTheDocument();
+    expect(screen.queryByText("News")).not.toBeInTheDocument();
+    expect(screen.getByText("No guide matches")).toBeInTheDocument();
+    expect(mockedGetGuideCategory).toHaveBeenCalledTimes(1);
   });
 });

@@ -3,20 +3,27 @@ import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "@/lib/utils";
 
 const buttonVariants = cva(
-  "inline-flex items-center justify-center gap-2 rounded-lg text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50",
+  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-lg text-sm font-medium transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&_svg]:size-4 [&_svg]:shrink-0",
   {
     variants: {
       variant: {
-        default: "bg-primary px-4 py-2 text-primary-foreground shadow-sm hover:opacity-90",
-        secondary: "bg-secondary px-4 py-2 text-secondary-foreground hover:bg-secondary/85",
-        ghost: "px-3 py-2 text-foreground hover:bg-secondary/70",
-        outline: "border border-border bg-card px-4 py-2 text-foreground hover:bg-secondary/60",
+        default:
+          "bg-primary px-4 py-2 text-primary-foreground shadow-sm hover:bg-primary/90 active:scale-[0.98]",
+        secondary:
+          "bg-secondary px-4 py-2 text-secondary-foreground hover:bg-secondary/80 active:scale-[0.98]",
+        ghost:
+          "px-3 py-2 text-muted-foreground hover:bg-accent hover:text-accent-foreground",
+        outline:
+          "border border-border bg-background px-4 py-2 text-foreground shadow-sm hover:bg-accent hover:text-accent-foreground active:scale-[0.98]",
+        destructive:
+          "bg-destructive px-4 py-2 text-destructive-foreground shadow-sm hover:bg-destructive/90 active:scale-[0.98]",
+        link: "text-primary underline-offset-4 hover:underline",
       },
       size: {
-        default: "h-10",
-        sm: "h-9 px-3",
-        lg: "h-11 px-5",
-        icon: "size-10",
+        default: "h-9",
+        sm: "h-8 px-3 text-xs",
+        lg: "h-10 px-5",
+        icon: "size-9",
       },
     },
     defaultVariants: {
@@ -37,4 +44,3 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
 );
 
 Button.displayName = "Button";
-

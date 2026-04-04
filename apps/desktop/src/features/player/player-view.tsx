@@ -1,8 +1,18 @@
 import { useEffect, useRef } from "react";
 import Hls from "hls.js";
+import { Radio } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty";
 import { usePlayerStore } from "@/store/player-store";
+import { formatRelativeTime } from "@/lib/utils";
 
 export function PlayerView() {
   const source = usePlayerStore((state) => state.source);
@@ -33,38 +43,55 @@ export function PlayerView() {
   }, [source]);
 
   return (
-    <div className="flex h-full flex-col">
-      <div className="flex flex-col gap-1.5 pb-6">
-        <h2 className="text-xl font-semibold tracking-tight">Now Playing</h2>
-        <p className="text-sm text-muted-foreground">Browser-compatible playback for live TV and catch-up.</p>
-      </div>
-      <div className="flex flex-1 flex-col gap-4">
+    <Card className="h-full">
+      <CardHeader>
+        <CardTitle>Now Playing</CardTitle>
+        <CardDescription>Browser-compatible playback for live TV and catch-up.</CardDescription>
+      </CardHeader>
+      <CardContent className="flex h-full flex-col gap-5">
         {source ? (
           <>
             <div className="flex flex-wrap items-center gap-2">
-              <Badge>{source.live ? "Live" : "Archive"}</Badge>
-              <Badge>{source.kind.toUpperCase()}</Badge>
+              <Badge variant={source.live ? "live" : "outline"}>{source.live ? "Live" : "Archive"}</Badge>
+              <Badge variant="outline">{source.kind.toUpperCase()}</Badge>
+              {source.expiresAt ? <Badge variant="outline">Expires {formatRelativeTime(source.expiresAt)}</Badge> : null}
             </div>
-            <h3 className="text-lg font-semibold">{source.title}</h3>
+
+            <div className="flex flex-col gap-1.5">
+              <h2 className="text-lg font-semibold">{source.title}</h2>
+              <p className="text-sm text-muted-foreground">
+                {source.catchup ? "Catch-up capable source prepared for playback." : "Live stream source prepared for playback."}
+              </p>
+            </div>
+
             {source.kind === "unsupported" ? (
-              <div className="rounded-xl border border-border bg-card p-4 text-sm text-muted-foreground">
+              <div className="rounded-2xl border border-border/70 bg-muted/40 p-4 text-sm text-muted-foreground">
                 {source.unsupportedReason ?? "This provider stream is not browser-compatible in v1."}
               </div>
             ) : (
-              <video ref={videoRef} controls autoPlay className="aspect-video w-full rounded-xl bg-black" aria-label={`Playing ${source.title}`} />
+              <div className="overflow-hidden rounded-2xl border border-border/70 bg-black">
+                <video ref={videoRef} controls autoPlay className="aspect-video w-full" aria-label={`Playing ${source.title}`} />
+              </div>
             )}
+
             <Button variant="ghost" onClick={() => setSource(null)}>
               Clear player
             </Button>
           </>
         ) : (
-          <div className="flex h-full flex-col items-center justify-center rounded-2xl border border-dashed border-border bg-card/50 px-8 text-center">
-            <p className="text-lg font-semibold">Choose a channel or program</p>
-            <p className="mt-2 text-sm text-muted-foreground">Playback sources appear here after a guide, favorites, or search action.</p>
-          </div>
+          <Empty className="min-h-[320px] border-0">
+            <EmptyHeader>
+              <EmptyMedia variant="icon">
+                <Radio aria-hidden="true" />
+              </EmptyMedia>
+              <EmptyTitle>Choose a channel or program</EmptyTitle>
+              <EmptyDescription>
+                Playback sources appear here after a guide, favorites, or search action.
+              </EmptyDescription>
+            </EmptyHeader>
+          </Empty>
         )}
-      </div>
-    </div>
+      </CardContent>
+    </Card>
   );
 }
-
