@@ -1,7 +1,7 @@
 use std::{env, net::SocketAddr, str::FromStr};
 
 use anyhow::{Context, Result};
-use base64::{engine::general_purpose::STANDARD, Engine as _};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 
 #[derive(Clone)]
 pub struct Config {
@@ -24,9 +24,9 @@ impl Config {
         let decoded_key = STANDARD
             .decode(read_env("APP_ENCRYPTION_KEY_B64")?)
             .context("APP_ENCRYPTION_KEY_B64 must be valid base64")?;
-        let encryption_key: [u8; 32] = decoded_key
-            .try_into()
-            .map_err(|_| anyhow::anyhow!("APP_ENCRYPTION_KEY_B64 must decode to exactly 32 bytes"))?;
+        let encryption_key: [u8; 32] = decoded_key.try_into().map_err(|_| {
+            anyhow::anyhow!("APP_ENCRYPTION_KEY_B64 must decode to exactly 32 bytes")
+        })?;
 
         Ok(Self {
             bind_address,
@@ -42,4 +42,3 @@ impl Config {
 fn read_env(name: &str) -> Result<String> {
     env::var(name).with_context(|| format!("missing environment variable {name}"))
 }
-

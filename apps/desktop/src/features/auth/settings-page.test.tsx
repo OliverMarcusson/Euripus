@@ -59,6 +59,34 @@ describe("SettingsPage", () => {
         lastPlayedAt: "2026-04-04T12:00:00.000Z",
       },
     ]);
+    mockedGetProvider.mockResolvedValue({
+      id: "provider-1",
+      providerType: "xtreme",
+      baseUrl: "https://provider.example.com",
+      username: "demo",
+      outputFormat: "m3u8",
+      status: "valid",
+      lastValidatedAt: "2026-04-04T12:00:00.000Z",
+      lastSyncAt: "2026-04-04T12:30:00.000Z",
+      lastSyncError: null,
+      createdAt: "2026-04-04T10:00:00.000Z",
+      updatedAt: "2026-04-04T12:30:00.000Z",
+      epgSources: [
+        {
+          id: "epg-source-1",
+          url: "https://open-epg.com/files/sweden4.xml.gz",
+          priority: 0,
+          enabled: true,
+          sourceKind: "external",
+          lastSyncAt: "2026-04-04T12:30:00.000Z",
+          lastSyncError: null,
+          lastProgramCount: 500,
+          lastMatchedCount: 291,
+          createdAt: "2026-04-04T10:00:00.000Z",
+          updatedAt: "2026-04-04T12:30:00.000Z",
+        },
+      ],
+    });
 
     render(
       <QueryClientProvider client={new QueryClient()}>
@@ -68,7 +96,14 @@ describe("SettingsPage", () => {
 
     expect(await screen.findByText("Provider")).toBeInTheDocument();
     expect(await screen.findByText("Arena 1")).toBeInTheDocument();
+    expect(
+      await screen.findByDisplayValue(
+        "https://open-epg.com/files/sweden4.xml.gz",
+      ),
+    ).toBeInTheDocument();
     expect(screen.queryByText("Sessions")).not.toBeInTheDocument();
-    expect(screen.getByTestId("recent-channels-scroll-area")).toBeInTheDocument();
+    expect(
+      screen.getByTestId("recent-channels-scroll-area"),
+    ).toBeInTheDocument();
   });
 });

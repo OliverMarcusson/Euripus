@@ -1,4 +1,5 @@
 mod config;
+mod xmltv;
 mod xtreme;
 
 use std::{
@@ -39,7 +40,8 @@ use tokio::task::JoinHandle;
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use tracing::{error, info};
 use uuid::Uuid;
-use xtreme::{XtreamCategory, XtreamChannel, XtreamCredentials, XtreamProgramme};
+use xmltv::{XmltvChannel, XmltvFeed, XmltvProgramme};
+use xtreme::{XtreamCategory, XtreamChannel, XtreamCredentials};
 
 #[derive(Clone)]
 struct AppState {
@@ -142,7 +144,7 @@ struct SessionResponse {
     current: bool,
 }
 
-#[derive(Debug, Serialize, FromRow)]
+#[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ProviderProfileResponse {
     id: Uuid,
@@ -154,6 +156,23 @@ struct ProviderProfileResponse {
     last_validated_at: Option<DateTime<Utc>>,
     last_sync_at: Option<DateTime<Utc>>,
     last_sync_error: Option<String>,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+    epg_sources: Vec<EpgSourceResponse>,
+}
+
+#[derive(Debug, Serialize, FromRow, Clone)]
+#[serde(rename_all = "camelCase")]
+struct EpgSourceResponse {
+    id: Uuid,
+    url: String,
+    priority: i32,
+    enabled: bool,
+    source_kind: String,
+    last_sync_at: Option<DateTime<Utc>>,
+    last_sync_error: Option<String>,
+    last_program_count: Option<i32>,
+    last_matched_count: Option<i32>,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
 }
@@ -296,6 +315,17 @@ struct SaveProviderPayload {
     username: String,
     password: String,
     output_format: String,
+    #[serde(default)]
+    epg_sources: Vec<SaveEpgSourcePayload>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct SaveEpgSourcePayload {
+    id: Option<Uuid>,
+    url: String,
+    enabled: bool,
+    priority: i32,
 }
 
 #[derive(Debug, Serialize)]
@@ -360,6 +390,75 @@ struct ProviderProfileRecord {
     last_sync_error: Option<String>,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, FromRow, Clone)]
+struct EpgSourceRecord {
+    id: Uuid,
+    profile_id: Uuid,
+    url: String,
+    priority: i32,
+    enabled: bool,
+    source_kind: String,
+    last_sync_at: Option<DateTime<Utc>>,
+    last_sync_error: Option<String>,
+    last_program_count: Option<i32>,
+    last_matched_count: Option<i32>,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, FromRow)]
+struct PersistedChannelRecord {
+    id: Uuid,
+    name: String,
+    remote_stream_id: i32,
+    epg_channel_id: Option<String>,
+    has_catchup: bool,
+    updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone)]
+struct ChannelResolution {
+    channel_id: Uuid,
+    channel_name: String,
+    has_catchup: bool,
+}
+
+#[derive(Debug, Clone, Default)]
+struct ChannelLookupIndex {
+    epg_channel_ids: HashMap<String, ChannelResolution>,
+    remote_stream_ids: HashMap<String, ChannelResolution>,
+    normalized_names: HashMap<String, ChannelResolution>,
+}
+
+#[derive(Debug, Clone)]
+struct FetchedEpgFeed {
+    source_id: Option<Uuid>,
+    source_kind: String,
+    source_label: String,
+    priority: i32,
+    feed: XmltvFeed,
+}
+
+#[derive(Debug, Clone)]
+struct EpgSourceSyncStatus {
+    source_id: Uuid,
+    last_sync_error: Option<String>,
+    last_program_count: Option<i32>,
+    last_matched_count: Option<i32>,
+    mark_synced: bool,
+}
+
+#[derive(Debug, Clone)]
+struct ResolvedProgramme {
+    channel_id: Uuid,
+    channel_name: String,
+    title: String,
+    description: Option<String>,
+    start_at: DateTime<Utc>,
+    end_at: DateTime<Utc>,
+    can_catchup: bool,
 }
 
 #[derive(Debug, FromRow)]
@@ -630,32 +729,175 @@ async fn revoke_session(
     Ok(StatusCode::NO_CONTENT)
 }
 
+async fn load_epg_sources(
+    pool: &PgPool,
+    profile_id: Uuid,
+) -> Result<Vec<EpgSourceResponse>, AppError> {
+    let sources = sqlx::query_as::<_, EpgSourceResponse>(
+        r#"
+        SELECT
+          id,
+          url,
+          priority,
+          enabled,
+          source_kind,
+          last_sync_at,
+          last_sync_error,
+          last_program_count,
+          last_matched_count,
+          created_at,
+          updated_at
+        FROM epg_sources
+        WHERE profile_id = $1
+        ORDER BY priority ASC, created_at ASC
+        "#,
+    )
+    .bind(profile_id)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(sources)
+}
+
+async fn load_provider_profile_response(
+    pool: &PgPool,
+    user_id: Uuid,
+) -> Result<Option<ProviderProfileResponse>, AppError> {
+    let provider = sqlx::query_as::<_, ProviderProfileRecord>(
+        r#"
+        SELECT
+          id, user_id, provider_type, base_url, username, password_encrypted, output_format,
+          status, last_validated_at, last_sync_at, last_sync_error, created_at, updated_at
+        FROM provider_profiles
+        WHERE user_id = $1
+        "#,
+    )
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await?;
+
+    let Some(provider) = provider else {
+        return Ok(None);
+    };
+
+    Ok(Some(ProviderProfileResponse {
+        id: provider.id,
+        provider_type: provider.provider_type,
+        base_url: provider.base_url,
+        username: provider.username,
+        output_format: provider.output_format,
+        status: provider.status,
+        last_validated_at: provider.last_validated_at,
+        last_sync_at: provider.last_sync_at,
+        last_sync_error: provider.last_sync_error,
+        created_at: provider.created_at,
+        updated_at: provider.updated_at,
+        epg_sources: load_epg_sources(pool, provider.id).await?,
+    }))
+}
+
+fn normalize_epg_source_payloads(
+    payloads: Vec<SaveEpgSourcePayload>,
+) -> Result<Vec<SaveEpgSourcePayload>, AppError> {
+    let mut deduped = Vec::new();
+    let mut seen_urls = HashSet::new();
+
+    let mut ordered = payloads
+        .into_iter()
+        .map(|payload| SaveEpgSourcePayload {
+            id: payload.id,
+            url: payload.url.trim().to_string(),
+            enabled: payload.enabled,
+            priority: payload.priority,
+        })
+        .filter(|payload| !payload.url.is_empty())
+        .collect::<Vec<_>>();
+    ordered.sort_by_key(|payload| payload.priority);
+
+    for (index, payload) in ordered.into_iter().enumerate() {
+        url::Url::parse(&payload.url).map_err(|_| {
+            AppError::BadRequest(format!("Invalid EPG source URL: {}", payload.url))
+        })?;
+        if seen_urls.insert(payload.url.clone()) {
+            deduped.push(SaveEpgSourcePayload {
+                id: payload.id,
+                url: payload.url,
+                enabled: payload.enabled,
+                priority: index as i32,
+            });
+        }
+    }
+
+    Ok(deduped)
+}
+
+async fn store_epg_sources(
+    pool: &PgPool,
+    profile_id: Uuid,
+    payloads: &[SaveEpgSourcePayload],
+) -> Result<(), AppError> {
+    let existing_ids =
+        sqlx::query_scalar::<_, Uuid>("SELECT id FROM epg_sources WHERE profile_id = $1")
+            .bind(profile_id)
+            .fetch_all(pool)
+            .await?;
+    let existing_ids = existing_ids.into_iter().collect::<HashSet<_>>();
+
+    let mut retained_ids = Vec::new();
+
+    for payload in payloads {
+        let source_id = match payload.id.filter(|id| existing_ids.contains(id)) {
+            Some(source_id) => source_id,
+            None => Uuid::new_v4(),
+        };
+        retained_ids.push(source_id);
+
+        sqlx::query(
+            r#"
+            INSERT INTO epg_sources (
+              id, profile_id, url, priority, enabled, source_kind, updated_at
+            )
+            VALUES ($1, $2, $3, $4, $5, 'external', NOW())
+            ON CONFLICT (id)
+            DO UPDATE SET
+              url = EXCLUDED.url,
+              priority = EXCLUDED.priority,
+              enabled = EXCLUDED.enabled,
+              source_kind = EXCLUDED.source_kind,
+              updated_at = NOW()
+            "#,
+        )
+        .bind(source_id)
+        .bind(profile_id)
+        .bind(&payload.url)
+        .bind(payload.priority)
+        .bind(payload.enabled)
+        .execute(pool)
+        .await?;
+    }
+
+    if retained_ids.is_empty() {
+        sqlx::query("DELETE FROM epg_sources WHERE profile_id = $1")
+            .bind(profile_id)
+            .execute(pool)
+            .await?;
+    } else {
+        sqlx::query("DELETE FROM epg_sources WHERE profile_id = $1 AND id <> ALL($2::uuid[])")
+            .bind(profile_id)
+            .bind(&retained_ids)
+            .execute(pool)
+            .await?;
+    }
+
+    Ok(())
+}
+
 async fn get_provider(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> ApiResult<Option<ProviderProfileResponse>> {
     let auth = require_auth(&state, &headers).await?;
-    let provider = sqlx::query_as::<_, ProviderProfileResponse>(
-        r#"
-        SELECT
-          id,
-          provider_type,
-          base_url,
-          username,
-          output_format,
-          status,
-          last_validated_at,
-          last_sync_at,
-          last_sync_error,
-          created_at,
-          updated_at
-        FROM provider_profiles
-        WHERE user_id = $1
-        "#,
-    )
-    .bind(auth.user_id)
-    .fetch_optional(&state.pool)
-    .await?;
+    let provider = load_provider_profile_response(&state.pool, auth.user_id).await?;
 
     Ok(Json(provider))
 }
@@ -687,6 +929,7 @@ async fn save_provider(
     Json(payload): Json<SaveProviderPayload>,
 ) -> ApiResult<ProviderProfileResponse> {
     let auth = require_auth(&state, &headers).await?;
+    let epg_sources = normalize_epg_source_payloads(payload.epg_sources)?;
     let credentials = XtreamCredentials {
         base_url: payload.base_url.clone(),
         username: payload.username.clone(),
@@ -700,7 +943,7 @@ async fn save_provider(
     }
 
     let encrypted_password = encrypt_secret(&state.config.encryption_key, &payload.password)?;
-    let provider = sqlx::query_as::<_, ProviderProfileResponse>(
+    let profile_id = sqlx::query_scalar::<_, Uuid>(
         r#"
         INSERT INTO provider_profiles (
           user_id, provider_type, base_url, username, password_encrypted, output_format, status, last_validated_at, last_sync_error
@@ -718,17 +961,7 @@ async fn save_provider(
           last_sync_error = NULL,
           updated_at = NOW()
         RETURNING
-          id,
-          provider_type,
-          base_url,
-          username,
-          output_format,
-          status,
-          last_validated_at,
-          last_sync_at,
-          last_sync_error,
-          created_at,
-          updated_at
+          id
         "#,
     )
     .bind(auth.user_id)
@@ -738,6 +971,13 @@ async fn save_provider(
     .bind(payload.output_format)
     .fetch_one(&state.pool)
     .await?;
+
+    store_epg_sources(&state.pool, profile_id, &epg_sources).await?;
+    let provider = load_provider_profile_response(&state.pool, auth.user_id)
+        .await?
+        .ok_or_else(|| {
+            AppError::NotFound("Provider profile was not found after saving.".to_string())
+        })?;
 
     Ok(Json(provider))
 }
@@ -1911,6 +2151,10 @@ async fn run_sync_job(
     .bind(profile_id)
     .execute(&state.pool)
     .await?;
+    let job_type = sqlx::query_scalar::<_, String>("SELECT job_type FROM sync_jobs WHERE id = $1")
+        .bind(job_id)
+        .fetch_one(&state.pool)
+        .await?;
 
     let profile = sqlx::query_as::<_, ProviderProfileRecord>(
         r#"
@@ -1939,29 +2183,59 @@ async fn run_sync_job(
         return Err(anyhow!("provider validation failed during sync"));
     }
 
-    info!("sync job {job_id}: fetching categories");
-    let categories = xtreme::fetch_categories(&state.http_client, &credentials).await?;
-    info!("sync job {job_id}: fetched {} categories", categories.len());
-    info!("sync job {job_id}: fetching live streams");
-    let channels = xtreme::fetch_live_streams(&state.http_client, &credentials).await?;
-    info!("sync job {job_id}: fetched {} live streams", channels.len());
-    info!("sync job {job_id}: fetching xmltv");
-    let programmes = xtreme::fetch_xmltv(&state.http_client, &credentials).await?;
-    info!(
-        "sync job {job_id}: parsed {} xmltv programmes",
-        programmes.len()
-    );
+    let existing_channel_count = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM channels WHERE user_id = $1 AND profile_id = $2",
+    )
+    .bind(user_id)
+    .bind(profile_id)
+    .fetch_one(&state.pool)
+    .await?;
+    let refresh_channels = job_type == "full" || existing_channel_count == 0;
+
+    let (categories, channels) = if refresh_channels {
+        info!("sync job {job_id}: fetching categories");
+        let categories = xtreme::fetch_categories(&state.http_client, &credentials).await?;
+        info!("sync job {job_id}: fetched {} categories", categories.len());
+        info!("sync job {job_id}: fetching live streams");
+        let channels = xtreme::fetch_live_streams(&state.http_client, &credentials).await?;
+        info!("sync job {job_id}: fetched {} live streams", channels.len());
+        (Some(categories), Some(channels))
+    } else {
+        (None, None)
+    };
+
+    let epg_sources = sqlx::query_as::<_, EpgSourceRecord>(
+        r#"
+        SELECT
+          id, profile_id, url, priority, enabled, source_kind, last_sync_at, last_sync_error,
+          last_program_count, last_matched_count, created_at, updated_at
+        FROM epg_sources
+        WHERE profile_id = $1 AND enabled = TRUE
+        ORDER BY priority ASC, created_at ASC
+        "#,
+    )
+    .bind(profile_id)
+    .fetch_all(&state.pool)
+    .await?;
+    let (fetched_feeds, mut source_statuses) =
+        fetch_epg_feeds(&state.http_client, &credentials, &epg_sources).await?;
 
     info!("sync job {job_id}: persisting sync data");
-    persist_sync_data(
-        &state.pool,
-        user_id,
-        profile_id,
-        &categories,
-        &channels,
-        &programmes,
-    )
-    .await?;
+    let persisted_statuses = if refresh_channels {
+        persist_full_sync_data(
+            &state.pool,
+            user_id,
+            profile_id,
+            categories.as_deref().unwrap_or(&[]),
+            channels.as_deref().unwrap_or(&[]),
+            &fetched_feeds,
+        )
+        .await?
+    } else {
+        persist_epg_sync_data(&state.pool, user_id, profile_id, &fetched_feeds).await?
+    };
+    source_statuses.extend(persisted_statuses);
+    update_epg_source_statuses(&state.pool, &source_statuses).await?;
     info!("sync job {job_id}: finished persisting sync data");
 
     sqlx::query(
@@ -1988,35 +2262,163 @@ async fn run_sync_job(
     Ok(())
 }
 
-async fn persist_sync_data(
+async fn fetch_epg_feeds(
+    client: &reqwest::Client,
+    credentials: &XtreamCredentials,
+    external_sources: &[EpgSourceRecord],
+) -> Result<(Vec<FetchedEpgFeed>, Vec<EpgSourceSyncStatus>)> {
+    let mut fetched_feeds = Vec::new();
+    let mut source_statuses = Vec::new();
+    let mut built_in_error = None;
+
+    for source in external_sources {
+        match url::Url::parse(&source.url) {
+            Ok(url) => match xmltv::fetch_xmltv(client, &url).await {
+                Ok(feed) => fetched_feeds.push(FetchedEpgFeed {
+                    source_id: Some(source.id),
+                    source_kind: source.source_kind.clone(),
+                    source_label: source.url.clone(),
+                    priority: source.priority,
+                    feed,
+                }),
+                Err(error) => {
+                    error!(
+                        "failed to fetch external EPG source {}: {error:?}",
+                        source.url
+                    );
+                    source_statuses.push(EpgSourceSyncStatus {
+                        source_id: source.id,
+                        last_sync_error: Some(error.to_string()),
+                        last_program_count: None,
+                        last_matched_count: None,
+                        mark_synced: false,
+                    });
+                }
+            },
+            Err(error) => source_statuses.push(EpgSourceSyncStatus {
+                source_id: source.id,
+                last_sync_error: Some(format!("Invalid EPG source URL: {error}")),
+                last_program_count: None,
+                last_matched_count: None,
+                mark_synced: false,
+            }),
+        }
+    }
+
+    match xtreme::fetch_xmltv(client, credentials).await {
+        Ok(feed) => fetched_feeds.push(FetchedEpgFeed {
+            source_id: None,
+            source_kind: "xtream".to_string(),
+            source_label: xtreme::build_xmltv_url(credentials)?.to_string(),
+            priority: external_sources
+                .iter()
+                .map(|source| source.priority)
+                .max()
+                .unwrap_or(-1)
+                + 1,
+            feed,
+        }),
+        Err(error) => {
+            built_in_error = Some(error.to_string());
+            error!("failed to fetch built-in Xtream XMLTV feed: {error:?}");
+        }
+    }
+
+    fetched_feeds.sort_by_key(|feed| feed.priority);
+
+    if fetched_feeds.is_empty() {
+        return Err(anyhow!(
+            "no EPG feed could be ingested: {}",
+            built_in_error.unwrap_or_else(|| "All configured EPG sources failed.".to_string())
+        ));
+    }
+
+    Ok((fetched_feeds, source_statuses))
+}
+
+async fn persist_full_sync_data(
     pool: &PgPool,
     user_id: Uuid,
     profile_id: Uuid,
     categories: &[XtreamCategory],
     channels: &[XtreamChannel],
-    programmes: &[XtreamProgramme],
-) -> Result<()> {
+    feeds: &[FetchedEpgFeed],
+) -> Result<Vec<EpgSourceSyncStatus>> {
     let mut transaction = pool.begin().await?;
     bulk_upsert_categories(&mut transaction, user_id, profile_id, categories).await?;
     bulk_upsert_channels(&mut transaction, user_id, profile_id, channels).await?;
+    let persisted_channels = load_persisted_channels(&mut transaction, user_id, profile_id).await?;
+    let channel_lookup = build_channel_lookup_index(&persisted_channels);
+    let (programmes, source_statuses) = resolve_epg_programmes(feeds, &channel_lookup);
 
     sqlx::query("DELETE FROM programs WHERE user_id = $1 AND profile_id = $2")
         .bind(user_id)
         .bind(profile_id)
         .execute(&mut *transaction)
         .await?;
-
-    prepare_channel_lookup(&mut transaction, user_id, profile_id).await?;
-    bulk_insert_programmes(&mut transaction, user_id, profile_id, programmes).await?;
+    bulk_insert_programmes(&mut transaction, user_id, profile_id, &programmes).await?;
 
     sqlx::query("DELETE FROM search_documents WHERE user_id = $1")
         .bind(user_id)
         .execute(&mut *transaction)
         .await?;
-
     rebuild_search_documents(&mut transaction, user_id).await?;
 
     transaction.commit().await?;
+    Ok(source_statuses)
+}
+
+async fn persist_epg_sync_data(
+    pool: &PgPool,
+    user_id: Uuid,
+    profile_id: Uuid,
+    feeds: &[FetchedEpgFeed],
+) -> Result<Vec<EpgSourceSyncStatus>> {
+    let mut transaction = pool.begin().await?;
+    let persisted_channels = load_persisted_channels(&mut transaction, user_id, profile_id).await?;
+    let channel_lookup = build_channel_lookup_index(&persisted_channels);
+    let (programmes, source_statuses) = resolve_epg_programmes(feeds, &channel_lookup);
+
+    sqlx::query("DELETE FROM programs WHERE user_id = $1 AND profile_id = $2")
+        .bind(user_id)
+        .bind(profile_id)
+        .execute(&mut *transaction)
+        .await?;
+    bulk_insert_programmes(&mut transaction, user_id, profile_id, &programmes).await?;
+
+    sqlx::query("DELETE FROM search_documents WHERE user_id = $1")
+        .bind(user_id)
+        .execute(&mut *transaction)
+        .await?;
+    rebuild_search_documents(&mut transaction, user_id).await?;
+
+    transaction.commit().await?;
+    Ok(source_statuses)
+}
+
+async fn update_epg_source_statuses(pool: &PgPool, statuses: &[EpgSourceSyncStatus]) -> Result<()> {
+    for status in statuses {
+        sqlx::query(
+            r#"
+            UPDATE epg_sources
+            SET
+              last_sync_at = CASE WHEN $2 THEN NOW() ELSE last_sync_at END,
+              last_sync_error = $3,
+              last_program_count = $4,
+              last_matched_count = $5,
+              updated_at = NOW()
+            WHERE id = $1
+            "#,
+        )
+        .bind(status.source_id)
+        .bind(status.mark_synced)
+        .bind(&status.last_sync_error)
+        .bind(status.last_program_count)
+        .bind(status.last_matched_count)
+        .execute(pool)
+        .await?;
+    }
+
     Ok(())
 }
 
@@ -2203,76 +2605,181 @@ async fn bulk_upsert_channels(
     Ok(())
 }
 
-async fn prepare_channel_lookup(
+async fn load_persisted_channels(
     transaction: &mut Transaction<'_, Postgres>,
     user_id: Uuid,
     profile_id: Uuid,
-) -> Result<()> {
-    sqlx::query(
+) -> Result<Vec<PersistedChannelRecord>> {
+    let channels = sqlx::query_as::<_, PersistedChannelRecord>(
         r#"
-        CREATE TEMP TABLE sync_channel_lookup (
-          channel_key TEXT PRIMARY KEY,
-          channel_id UUID NOT NULL,
-          channel_name TEXT NOT NULL,
-          has_catchup BOOLEAN NOT NULL
-        ) ON COMMIT DROP
-        "#,
-    )
-    .execute(&mut **transaction)
-    .await?;
-
-    sqlx::query(
-        r#"
-        INSERT INTO sync_channel_lookup (channel_key, channel_id, channel_name, has_catchup)
-        SELECT c.remote_stream_id::text, c.id, c.name, c.has_catchup
-        FROM channels c
-        WHERE c.user_id = $1 AND c.profile_id = $2
-        ON CONFLICT (channel_key)
-        DO UPDATE SET
-          channel_id = EXCLUDED.channel_id,
-          channel_name = EXCLUDED.channel_name,
-          has_catchup = EXCLUDED.has_catchup
+        SELECT
+          id,
+          name,
+          remote_stream_id,
+          epg_channel_id,
+          has_catchup,
+          updated_at
+        FROM channels
+        WHERE user_id = $1 AND profile_id = $2
+        ORDER BY updated_at DESC, id DESC
         "#,
     )
     .bind(user_id)
     .bind(profile_id)
-    .execute(&mut **transaction)
+    .fetch_all(&mut **transaction)
     .await?;
 
-    sqlx::query(
-        r#"
-        INSERT INTO sync_channel_lookup (channel_key, channel_id, channel_name, has_catchup)
-        SELECT DISTINCT ON (c.epg_channel_id) c.epg_channel_id, c.id, c.name, c.has_catchup
-        FROM channels c
-        WHERE c.user_id = $1
-          AND c.profile_id = $2
-          AND c.epg_channel_id IS NOT NULL
-        ORDER BY c.epg_channel_id, c.updated_at DESC, c.id DESC
-        ON CONFLICT (channel_key)
-        DO UPDATE SET
-          channel_id = EXCLUDED.channel_id,
-          channel_name = EXCLUDED.channel_name,
-          has_catchup = EXCLUDED.has_catchup
-        "#,
-    )
-    .bind(user_id)
-    .bind(profile_id)
-    .execute(&mut **transaction)
-    .await?;
+    Ok(channels)
+}
 
-    Ok(())
+fn build_channel_lookup_index(channels: &[PersistedChannelRecord]) -> ChannelLookupIndex {
+    let mut lookup = ChannelLookupIndex::default();
+
+    for channel in channels {
+        let resolution = ChannelResolution {
+            channel_id: channel.id,
+            channel_name: channel.name.clone(),
+            has_catchup: channel.has_catchup,
+        };
+        if let Some(epg_channel_id) = channel
+            .epg_channel_id
+            .as_ref()
+            .filter(|value| !value.is_empty())
+        {
+            lookup
+                .epg_channel_ids
+                .entry(epg_channel_id.clone())
+                .or_insert_with(|| resolution.clone());
+        }
+        lookup
+            .remote_stream_ids
+            .entry(channel.remote_stream_id.to_string())
+            .or_insert_with(|| resolution.clone());
+        let normalized_name = normalize_channel_name(&channel.name);
+        if !normalized_name.is_empty() {
+            lookup
+                .normalized_names
+                .entry(normalized_name)
+                .or_insert(resolution);
+        }
+    }
+
+    lookup
+}
+
+fn normalize_channel_name(value: &str) -> String {
+    value
+        .chars()
+        .flat_map(|character| character.to_lowercase())
+        .filter(|character| character.is_alphanumeric())
+        .collect()
+}
+
+fn resolve_channel_for_programme(
+    programme: &XmltvProgramme,
+    channels: &HashMap<String, XmltvChannel>,
+    lookup: &ChannelLookupIndex,
+) -> Option<ChannelResolution> {
+    if let Some(channel) = lookup.epg_channel_ids.get(&programme.channel_key) {
+        return Some(channel.clone());
+    }
+
+    if let Some(channel) = lookup.remote_stream_ids.get(&programme.channel_key) {
+        return Some(channel.clone());
+    }
+
+    let display_names = channels
+        .get(&programme.channel_key)
+        .map(|channel| channel.display_names.as_slice())
+        .unwrap_or(&[]);
+    for display_name in display_names {
+        let normalized_name = normalize_channel_name(display_name);
+        if normalized_name.is_empty() {
+            continue;
+        }
+
+        if let Some(channel) = lookup.normalized_names.get(&normalized_name) {
+            return Some(channel.clone());
+        }
+    }
+
+    None
+}
+
+fn resolve_epg_programmes(
+    feeds: &[FetchedEpgFeed],
+    lookup: &ChannelLookupIndex,
+) -> (Vec<ResolvedProgramme>, Vec<EpgSourceSyncStatus>) {
+    let mut selected_slots = HashSet::new();
+    let mut resolved_programmes = Vec::new();
+    let mut source_statuses = Vec::new();
+
+    for feed in feeds {
+        let mut matched_count = 0i32;
+        for programme in &feed.feed.programmes {
+            let Some(channel) =
+                resolve_channel_for_programme(programme, &feed.feed.channels, lookup)
+            else {
+                continue;
+            };
+            matched_count += 1;
+
+            let slot_key = (
+                channel.channel_id,
+                programme.start_at.timestamp(),
+                programme.end_at.timestamp(),
+            );
+            if !selected_slots.insert(slot_key) {
+                continue;
+            }
+
+            resolved_programmes.push(ResolvedProgramme {
+                channel_id: channel.channel_id,
+                channel_name: channel.channel_name,
+                title: programme.title.clone(),
+                description: programme.description.clone(),
+                start_at: programme.start_at,
+                end_at: programme.end_at,
+                can_catchup: channel.has_catchup,
+            });
+        }
+
+        if let Some(source_id) = feed.source_id {
+            source_statuses.push(EpgSourceSyncStatus {
+                source_id,
+                last_sync_error: None,
+                last_program_count: Some(feed.feed.programmes.len() as i32),
+                last_matched_count: Some(matched_count),
+                mark_synced: true,
+            });
+        }
+    }
+
+    resolved_programmes.sort_by_key(|programme| {
+        (
+            programme.channel_name.clone(),
+            programme.start_at.timestamp(),
+            programme.end_at.timestamp(),
+        )
+    });
+
+    (resolved_programmes, source_statuses)
 }
 
 async fn bulk_insert_programmes(
     transaction: &mut Transaction<'_, Postgres>,
     user_id: Uuid,
     profile_id: Uuid,
-    programmes: &[XtreamProgramme],
+    programmes: &[ResolvedProgramme],
 ) -> Result<()> {
     for chunk in programmes.chunks(SYNC_BATCH_SIZE) {
-        let channel_keys = chunk
+        let channel_ids = chunk
             .iter()
-            .map(|programme| programme.channel_key.clone())
+            .map(|programme| programme.channel_id)
+            .collect::<Vec<_>>();
+        let channel_names = chunk
+            .iter()
+            .map(|programme| programme.channel_name.clone())
             .collect::<Vec<_>>();
         let titles = chunk
             .iter()
@@ -2290,18 +2797,24 @@ async fn bulk_insert_programmes(
             .iter()
             .map(|programme| programme.end_at)
             .collect::<Vec<_>>();
+        let can_catchup = chunk
+            .iter()
+            .map(|programme| programme.can_catchup)
+            .collect::<Vec<_>>();
 
         sqlx::query(
             r#"
             WITH input AS (
               SELECT *
               FROM UNNEST(
-                $3::text[],
+                $3::uuid[],
                 $4::text[],
                 $5::text[],
-                $6::timestamptz[],
-                $7::timestamptz[]
-              ) AS input(channel_key, title, description, start_at, end_at)
+                $6::text[],
+                $7::timestamptz[],
+                $8::timestamptz[],
+                $9::bool[]
+              ) AS input(channel_id, channel_name, title, description, start_at, end_at, can_catchup)
             )
             INSERT INTO programs (
               user_id,
@@ -2317,24 +2830,25 @@ async fn bulk_insert_programmes(
             SELECT
               $1,
               $2,
-              lookup.channel_id,
-              lookup.channel_name,
+              input.channel_id,
+              input.channel_name,
               input.title,
               input.description,
               input.start_at,
               input.end_at,
-              COALESCE(lookup.has_catchup, FALSE)
+              input.can_catchup
             FROM input
-            LEFT JOIN sync_channel_lookup lookup ON lookup.channel_key = input.channel_key
             "#,
         )
         .bind(user_id)
         .bind(profile_id)
-        .bind(&channel_keys)
+        .bind(&channel_ids)
+        .bind(&channel_names)
         .bind(&titles)
         .bind(&descriptions)
         .bind(&start_times)
         .bind(&end_times)
+        .bind(&can_catchup)
         .execute(&mut **transaction)
         .await?;
     }
@@ -2709,6 +3223,101 @@ mod tests {
                 "This program is not mapped to a playable channel.",
             )
         );
+    }
+
+    #[test]
+    fn resolves_external_epg_programmes_by_xmltv_display_name() {
+        let now = Utc::now();
+        let lookup = build_channel_lookup_index(&[PersistedChannelRecord {
+            id: Uuid::from_u128(11),
+            name: "TV4 HD".to_string(),
+            remote_stream_id: 4,
+            epg_channel_id: None,
+            has_catchup: true,
+            updated_at: now,
+        }]);
+        let feed = FetchedEpgFeed {
+            source_id: Some(Uuid::from_u128(12)),
+            source_kind: "external".to_string(),
+            source_label: "https://example.com/tv.xml.gz".to_string(),
+            priority: 0,
+            feed: XmltvFeed {
+                channels: HashMap::from([(
+                    "external-tv4".to_string(),
+                    XmltvChannel {
+                        id: "external-tv4".to_string(),
+                        display_names: vec!["TV4 HD".to_string()],
+                    },
+                )]),
+                programmes: vec![XmltvProgramme {
+                    channel_key: "external-tv4".to_string(),
+                    title: "Morning Show".to_string(),
+                    description: None,
+                    start_at: now,
+                    end_at: now + ChronoDuration::hours(1),
+                }],
+            },
+        };
+
+        let (programmes, statuses) = resolve_epg_programmes(&[feed], &lookup);
+
+        assert_eq!(programmes.len(), 1);
+        assert_eq!(programmes[0].channel_name, "TV4 HD");
+        assert_eq!(programmes[0].title, "Morning Show");
+        assert_eq!(statuses[0].last_matched_count, Some(1));
+    }
+
+    #[test]
+    fn keeps_higher_priority_epg_source_when_timeslots_overlap() {
+        let now = Utc::now();
+        let lookup = build_channel_lookup_index(&[PersistedChannelRecord {
+            id: Uuid::from_u128(21),
+            name: "Arena 1".to_string(),
+            remote_stream_id: 1,
+            epg_channel_id: Some("arena.1".to_string()),
+            has_catchup: true,
+            updated_at: now,
+        }]);
+        let primary_feed = FetchedEpgFeed {
+            source_id: Some(Uuid::from_u128(22)),
+            source_kind: "external".to_string(),
+            source_label: "https://example.com/primary.xml.gz".to_string(),
+            priority: 0,
+            feed: XmltvFeed {
+                channels: HashMap::new(),
+                programmes: vec![XmltvProgramme {
+                    channel_key: "arena.1".to_string(),
+                    title: "Primary Listing".to_string(),
+                    description: None,
+                    start_at: now,
+                    end_at: now + ChronoDuration::hours(2),
+                }],
+            },
+        };
+        let fallback_feed = FetchedEpgFeed {
+            source_id: None,
+            source_kind: "xtream".to_string(),
+            source_label: "https://provider.example.com/xmltv.php".to_string(),
+            priority: 1,
+            feed: XmltvFeed {
+                channels: HashMap::new(),
+                programmes: vec![XmltvProgramme {
+                    channel_key: "arena.1".to_string(),
+                    title: "Fallback Listing".to_string(),
+                    description: None,
+                    start_at: now,
+                    end_at: now + ChronoDuration::hours(2),
+                }],
+            },
+        };
+
+        let (programmes, statuses) =
+            resolve_epg_programmes(&[primary_feed, fallback_feed], &lookup);
+
+        assert_eq!(programmes.len(), 1);
+        assert_eq!(programmes[0].title, "Primary Listing");
+        assert_eq!(statuses.len(), 1);
+        assert_eq!(statuses[0].last_program_count, Some(1));
     }
 
     fn sample_program_playback_row(
