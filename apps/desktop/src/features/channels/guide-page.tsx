@@ -1,12 +1,26 @@
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { ChevronDown, ChevronRight, Heart, Play, Radio, RefreshCcw, Search as SearchIcon } from "lucide-react";
+import { useMemo, useState } from "react";
 import type { GuideCategorySummary } from "@euripus/shared";
-import { ChevronDown, ChevronRight, Heart, Play, RefreshCcw } from "lucide-react";
-import { addFavorite, getGuide, getGuideCategory, removeFavorite, startChannelPlayback } from "@/lib/api";
+import { PageHeader } from "@/components/layout/page-header";
+import { ChannelAvatar } from "@/components/ui/channel-avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty";
+import { Input } from "@/components/ui/input";
+import { Progress } from "@/components/ui/progress";
+import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
+import { addFavorite, getGuide, getGuideCategory, removeFavorite, startChannelPlayback } from "@/lib/api";
+import { formatArchiveDuration, formatTimeRange, getTimeProgress } from "@/lib/utils";
 import { usePlayerStore } from "@/store/player-store";
 
 const GUIDE_PAGE_SIZE = 40;
@@ -19,7 +33,7 @@ type FavoriteMutationPayload = {
 type GuideCategorySectionProps = {
   category: GuideCategorySummary;
   open: boolean;
-  onToggle: () => void;
+  onToggle: (nextOpen: boolean) => void;
   onFavorite: (payload: FavoriteMutationPayload) => void;
   onPlay: (channelId: string) => void;
 };
@@ -27,6 +41,7 @@ type GuideCategorySectionProps = {
 export function GuidePage() {
   const queryClient = useQueryClient();
   const [openCategories, setOpenCategories] = useState<string[]>([]);
+  const [filterQuery, setFilterQuery] = useState("");
   const setLoading = usePlayerStore((state) => state.setLoading);
   const setSource = usePlayerStore((state) => state.setSource);
   const guideQuery = useQuery({
@@ -73,9 +88,9 @@ export function GuidePage() {
     onSettled: () => setLoading(false),
   });
 
-  function toggleCategory(categoryId: string) {
+  function toggleCategory(categoryId: string, nextOpen: boolean) {
     setOpenCategories((current) =>
-      current.includes(categoryId) ? current.filter((id) => id !== categoryId) : [...current, categoryId],
+      nextOpen ? [...new Set([...current, categoryId])] : current.filter((id) => id !== categoryId),
     );
   }
 
@@ -84,52 +99,117 @@ export function GuidePage() {
   }
 
   const categories = guideQuery.data?.categories ?? [];
+  const liveCount = categories.reduce((sum, category) => sum + category.liveNowCount, 0);
+  const normalizedFilter = filterQuery.trim().toLowerCase();
+  const visibleCategories = useMemo(() => {
+    if (!normalizedFilter) {
+      return categories;
+    }
+
+    return categories.filter((category) => category.name.toLowerCase().includes(normalizedFilter));
+  }, [categories, normalizedFilter]);
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-2xl font-semibold">Live Guide</h2>
-          <p className="text-sm text-muted-foreground">Current channels with matching EPG programs in the next window.</p>
+      <PageHeader
+        title="Live Guide"
+        description="Browse live categories, see what is on right now, and jump straight into playback from a cleaner guide surface."
+        actions={
+          <Button variant="outline" onClick={refreshGuide}>
+            <RefreshCcw data-icon="inline-start" />
+            Refresh
+          </Button>
+        }
+        meta={
+          <>
+            <Badge variant="accent">{categories.length} categories</Badge>
+            <Badge variant="outline">{liveCount} live now</Badge>
+          </>
+        }
+      />
+
+      {!guideQuery.isPending ? (
+        <div className="relative max-w-md">
+          <SearchIcon className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
+          <Input
+            className="pl-10"
+            placeholder="Filter guide categories..."
+            value={filterQuery}
+            onChange={(event) => setFilterQuery(event.target.value)}
+          />
         </div>
-        <Button variant="outline" onClick={refreshGuide}>
-          <RefreshCcw />
-          Refresh
-        </Button>
-      </div>
+      ) : null}
+
       {guideQuery.isPending ? (
-        <div className="grid gap-4">
-          {Array.from({ length: 5 }).map((_, i) => (
-            <Skeleton key={i} className="h-24 w-full rounded-xl" />
-          ))}
-        </div>
-      ) : (
-        <div className="grid gap-4">
-          {categories.map((category) => (
-            <GuideCategorySection
-              key={category.id}
-              category={category}
-              open={openCategories.includes(category.id)}
-              onToggle={() => toggleCategory(category.id)}
-              onFavorite={(payload) => favoriteMutation.mutate(payload)}
-              onPlay={(channelId) => playMutation.mutate(channelId)}
-            />
-          ))}
-        </div>
-      )}
+        <Card>
+          <CardContent className="flex flex-col gap-3 pt-5">
+            {Array.from({ length: 5 }).map((_, index) => (
+              <div key={index} className="rounded-2xl border border-border/70 p-5">
+                <Skeleton className="h-5 w-40" />
+                <Skeleton className="mt-3 h-4 w-24" />
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      ) : null}
+
       {!guideQuery.isPending && !categories.length ? (
         <Card>
-          <CardHeader>
-            <CardTitle>No guide data yet</CardTitle>
-            <CardDescription>Connect a provider and run a sync to populate channels and EPG results.</CardDescription>
-          </CardHeader>
+          <CardContent className="p-0">
+            <Empty className="border-0">
+              <EmptyHeader>
+                <EmptyMedia variant="icon">
+                  <Radio aria-hidden="true" />
+                </EmptyMedia>
+                <EmptyTitle>No guide data yet</EmptyTitle>
+                <EmptyDescription>Connect a provider and run a sync to populate channels and live guide results.</EmptyDescription>
+              </EmptyHeader>
+            </Empty>
+          </CardContent>
+        </Card>
+      ) : null}
+
+      {!guideQuery.isPending && categories.length ? (
+        <Card>
+          <CardContent className="p-0">
+            {visibleCategories.length ? (
+              visibleCategories.map((category, index) => (
+                <div key={category.id}>
+                  {index > 0 ? <Separator /> : null}
+                  <GuideCategorySection
+                    category={category}
+                    open={openCategories.includes(category.id)}
+                    onToggle={(nextOpen) => toggleCategory(category.id, nextOpen)}
+                    onFavorite={(payload) => favoriteMutation.mutate(payload)}
+                    onPlay={(channelId) => playMutation.mutate(channelId)}
+                  />
+                </div>
+              ))
+            ) : (
+              <Empty className="border-0">
+                <EmptyHeader>
+                  <EmptyMedia variant="icon">
+                    <SearchIcon aria-hidden="true" />
+                  </EmptyMedia>
+                  <EmptyTitle>No guide matches</EmptyTitle>
+                  <EmptyDescription>Try a broader guide category name.</EmptyDescription>
+                </EmptyHeader>
+              </Empty>
+            )}
+          </CardContent>
         </Card>
       ) : null}
     </div>
   );
 }
 
-function GuideCategorySection({ category, open, onToggle, onFavorite, onPlay }: GuideCategorySectionProps) {
+function GuideCategorySection({
+  category,
+  open,
+  onToggle,
+  onFavorite,
+  onPlay,
+}: GuideCategorySectionProps) {
   const categoryQuery = useInfiniteQuery({
     queryKey: ["guide", "category", category.id],
     queryFn: ({ pageParam }) => getGuideCategory(category.id, pageParam, GUIDE_PAGE_SIZE),
@@ -143,85 +223,136 @@ function GuideCategorySection({ category, open, onToggle, onFavorite, onPlay }: 
   const Icon = open ? ChevronDown : ChevronRight;
 
   return (
-    <Card>
-      <CardHeader className="gap-4 md:flex-row md:items-start md:justify-between">
-        <div className="space-y-2">
-          <div className="flex flex-wrap items-center gap-2">
-            <CardTitle>{category.name}</CardTitle>
-            <Badge>{category.channelCount} channels</Badge>
-            <Badge>{category.liveNowCount} live now</Badge>
+    <Collapsible open={open} onOpenChange={onToggle}>
+      <div className="flex flex-col gap-4 p-5">
+        <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+          <div className="flex min-w-0 flex-1 flex-col gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 className="text-lg font-semibold">{category.name}</h2>
+              <Badge variant="outline">{category.channelCount} channels</Badge>
+              <Badge variant={category.liveNowCount ? "live" : "outline"}>{category.liveNowCount} live now</Badge>
+            </div>
+            <p className="text-sm text-muted-foreground">
+              {category.channelCount === 1 ? "1 channel in this guide category." : `${category.channelCount} channels in this guide category.`}
+            </p>
           </div>
-          <CardDescription>
-            {category.channelCount === 1 ? "1 channel in this guide category." : `${category.channelCount} channels in this guide category.`}
-          </CardDescription>
+          <CollapsibleTrigger asChild>
+            <Button variant="ghost" aria-expanded={open}>
+              <Icon data-icon="inline-start" />
+              {open ? "Hide channels" : "Show channels"}
+            </Button>
+          </CollapsibleTrigger>
         </div>
-        <Button variant="ghost" onClick={onToggle} aria-expanded={open}>
-          <Icon />
-          {open ? "Hide channels" : "Show channels"}
-        </Button>
-      </CardHeader>
-      {open ? (
-        <CardContent className="flex flex-col gap-3 pt-0">
+      </div>
+
+      <CollapsibleContent className="overflow-hidden data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down">
+        <Separator />
+        <div className="flex flex-col">
           {isInitialLoading ? (
-            <div className="flex flex-col gap-3">
-              {Array.from({ length: 3 }).map((_, i) => (
-                <div key={i} className="flex items-center gap-4 rounded-xl border border-border p-4">
-                  <Skeleton className="size-14 rounded-2xl" />
+            <div className="flex flex-col gap-3 p-5">
+              {Array.from({ length: 3 }).map((_, index) => (
+                <div key={index} className="flex items-center gap-4 rounded-2xl border border-border/70 p-4">
+                  <Skeleton className="size-11 rounded-2xl" />
                   <div className="flex flex-1 flex-col gap-2">
-                    <Skeleton className="h-5 w-48" />
-                    <Skeleton className="h-4 w-72" />
+                    <Skeleton className="h-5 w-40" />
+                    <Skeleton className="h-4 w-64" />
                   </div>
                 </div>
               ))}
             </div>
           ) : null}
-          {categoryQuery.isError ? <p className="text-sm text-destructive">Unable to load this category right now.</p> : null}
-          {hasEntries ? (
-            <>
-              {entries.map(({ channel, program }) => (
-                <div key={channel.id} className="flex items-center gap-4 rounded-xl border border-border bg-card/70 p-4 max-md:flex-col max-md:items-start">
-                  <div className="flex flex-1 items-center gap-4">
-                    <div className="flex size-14 items-center justify-center rounded-2xl bg-secondary text-lg font-semibold" aria-label={channel.name}>
-                      {channel.name.slice(0, 2).toUpperCase()}
-                    </div>
-                    <div className="flex flex-col gap-1">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <h3 className="text-lg font-semibold">{channel.name}</h3>
-                        {channel.hasCatchup ? <Badge>Catch-up</Badge> : null}
-                        {program && isProgramLive(program.startAt, program.endAt) ? <Badge>Live now</Badge> : null}
+
+            {categoryQuery.isError ? (
+              <div className="p-5 text-sm text-destructive">Unable to load this category right now.</div>
+            ) : null}
+
+            {hasEntries
+              ? entries.map(({ channel, program }, index) => {
+                  const programIsLive = program ? isProgramLive(program.startAt, program.endAt) : false;
+
+                  return (
+                    <div key={channel.id}>
+                      {index > 0 ? <Separator /> : null}
+                      <div className="flex flex-col gap-4 p-5 lg:flex-row lg:items-center lg:justify-between">
+                        <div className="flex min-w-0 items-start gap-4">
+                          <ChannelAvatar name={channel.name} logoUrl={channel.logoUrl} />
+                          <div className="flex min-w-0 flex-1 flex-col gap-3">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <h3 className="truncate text-base font-semibold">{channel.name}</h3>
+                              {channel.hasCatchup ? <Badge variant="live">Catch-up</Badge> : null}
+                              {channel.archiveDurationHours ? (
+                                <Badge variant="outline">{formatArchiveDuration(channel.archiveDurationHours)}</Badge>
+                              ) : null}
+                              {program && programIsLive ? <Badge variant="accent">Live now</Badge> : null}
+                            </div>
+
+                            <div className="flex min-w-0 flex-col gap-2">
+                              <p className="text-sm font-medium">
+                                {program?.title ?? "No current program metadata synced yet."}
+                              </p>
+                              {program ? (
+                                <>
+                                  <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+                                    <span>{formatTimeRange(program.startAt, program.endAt)}</span>
+                                    {program.canCatchup ? <Badge variant="outline">Catch-up window</Badge> : null}
+                                  </div>
+                                  {programIsLive ? <Progress value={getTimeProgress(program.startAt, program.endAt)} className="h-2" /> : null}
+                                </>
+                              ) : (
+                                <p className="text-sm text-muted-foreground">
+                                  Run a fresh guide sync if this channel should have live EPG data.
+                                </p>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            onClick={() => onFavorite({ channelId: channel.id, favorite: channel.isFavorite })}
+                          >
+                            <Heart data-icon="inline-start" />
+                            {channel.isFavorite ? "Unfavorite" : "Favorite"}
+                          </Button>
+                          <Button size="sm" onClick={() => onPlay(channel.id)}>
+                            <Play data-icon="inline-start" />
+                            Play
+                          </Button>
+                        </div>
                       </div>
-                      <p className="text-sm text-muted-foreground">{program?.title ?? "No current program metadata synced yet."}</p>
                     </div>
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    <Button variant="secondary" onClick={() => onFavorite({ channelId: channel.id, favorite: channel.isFavorite })}>
-                      <Heart />
-                      {channel.isFavorite ? "Unfavorite" : "Favorite"}
-                    </Button>
-                    <Button onClick={() => onPlay(channel.id)}>
-                      <Play />
-                      Play
-                    </Button>
-                  </div>
+                  );
+                })
+              : null}
+
+            {categoryQuery.hasNextPage ? (
+              <>
+                <Separator />
+                <div className="p-5">
+                  <Button
+                    variant="outline"
+                    onClick={() => categoryQuery.fetchNextPage()}
+                    disabled={categoryQuery.isFetchingNextPage}
+                  >
+                    {categoryQuery.isFetchingNextPage ? "Loading more..." : "Load more"}
+                  </Button>
                 </div>
-              ))}
-              {categoryQuery.hasNextPage ? (
-                <Button
-                  variant="outline"
-                  onClick={() => categoryQuery.fetchNextPage()}
-                  disabled={categoryQuery.isFetchingNextPage}
-                >
-                  {categoryQuery.isFetchingNextPage ? "Loading more..." : "Load more"}
-                </Button>
-              ) : null}
-            </>
-          ) : null}
-          {!isInitialLoading && !hasEntries && !categoryQuery.isError ? (
-            <p className="text-sm text-muted-foreground">No channels with matching EPG data are available in this category.</p>
-          ) : null}
-        </CardContent>
-      ) : null}
-    </Card>
+              </>
+            ) : null}
+
+            {!isInitialLoading && open && !hasEntries && !categoryQuery.isError ? (
+              <Empty className="border-0">
+                <EmptyHeader>
+                  <EmptyTitle>No channels available in this category</EmptyTitle>
+                  <EmptyDescription>No channels with matching EPG data are available in this category right now.</EmptyDescription>
+                </EmptyHeader>
+              </Empty>
+            ) : null}
+        </div>
+      </CollapsibleContent>
+    </Collapsible>
   );
 }
 
