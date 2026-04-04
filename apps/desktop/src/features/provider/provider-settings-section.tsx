@@ -46,7 +46,7 @@ import { formatDateTime, formatRelativeTime } from "@/lib/utils";
 const providerSchema = z.object({
   baseUrl: z.string().url(),
   username: z.string().min(1),
-  password: z.string().min(1),
+  password: z.string(),
   outputFormat: z.enum(["m3u8", "ts"]),
   epgSources: z.array(
     z.object({
@@ -99,6 +99,10 @@ export function ProviderSettingsSection() {
       return;
     }
 
+    if (form.formState.isDirty) {
+      return;
+    }
+
     form.reset({
       baseUrl: providerQuery.data.baseUrl ?? "",
       username: providerQuery.data.username ?? "",
@@ -116,7 +120,20 @@ export function ProviderSettingsSection() {
   const validateMutation = useMutation({ mutationFn: validateProvider });
   const saveMutation = useMutation({
     mutationFn: saveProvider,
-    onSuccess: async () => {
+    onSuccess: async (provider) => {
+      queryClient.setQueryData(["provider"], provider);
+      form.reset({
+        baseUrl: provider.baseUrl ?? "",
+        username: provider.username ?? "",
+        password: "",
+        outputFormat: provider.outputFormat ?? "m3u8",
+        epgSources: provider.epgSources.map((source) => ({
+          id: source.id,
+          url: source.url,
+          enabled: source.enabled,
+          priority: source.priority,
+        })),
+      });
       await queryClient.invalidateQueries({ queryKey: ["provider"] });
     },
   });
@@ -135,6 +152,9 @@ export function ProviderSettingsSection() {
   const latestJob = syncQuery.data;
   const watchedEpgSources = form.watch("epgSources");
   const syncProgressValue = latestJob ? getSyncProgressValue(latestJob) : 0;
+  const displayedEpgSourceCount = form.formState.isDirty
+    ? watchedEpgSources.length
+    : provider?.epgSources.length ?? watchedEpgSources.length;
 
   function reindexEpgSources(
     items: Array<{
@@ -159,8 +179,21 @@ export function ProviderSettingsSection() {
   function prepareProviderValues(values: ProviderValues): ProviderValues {
     return {
       ...values,
+      password: values.password.trim(),
       epgSources: reindexEpgSources(values.epgSources),
     };
+  }
+
+  function ensurePasswordForAction(values: ProviderValues) {
+    if (provider || values.password.trim().length > 0) {
+      return true;
+    }
+
+    form.setError("password", {
+      type: "manual",
+      message: "Enter your provider password when saving the profile for the first time.",
+    });
+    return false;
   }
 
   return (
@@ -186,9 +219,13 @@ export function ProviderSettingsSection() {
         <CardContent>
           <form
             className="flex flex-col gap-6"
-            onSubmit={form.handleSubmit((values) =>
-              saveMutation.mutate(prepareProviderValues(values)),
-            )}
+            onSubmit={form.handleSubmit((values) => {
+              if (!ensurePasswordForAction(values)) {
+                return;
+              }
+
+              saveMutation.mutate(prepareProviderValues(values));
+            })}
           >
             <FieldGroup>
               <Field
@@ -378,10 +415,12 @@ export function ProviderSettingsSection() {
                                 }
                                 {...form.register(`epgSources.${index}.url`)}
                               />
-                              <input
-                                type="hidden"
-                                {...form.register(`epgSources.${index}.id`)}
-                              />
+                              {field.id ? (
+                                <input
+                                  type="hidden"
+                                  {...form.register(`epgSources.${index}.id`)}
+                                />
+                              ) : null}
                               <input
                                 type="hidden"
                                 {...form.register(
@@ -477,9 +516,13 @@ export function ProviderSettingsSection() {
               <Button
                 type="button"
                 variant="secondary"
-                onClick={form.handleSubmit((values) =>
-                  validateMutation.mutate(prepareProviderValues(values)),
-                )}
+                onClick={form.handleSubmit((values) => {
+                  if (!ensurePasswordForAction(values)) {
+                    return;
+                  }
+
+                  validateMutation.mutate(prepareProviderValues(values));
+                })}
                 disabled={validateMutation.isPending}
               >
                 <CheckCircle2 data-icon="inline-start" />
@@ -537,7 +580,7 @@ export function ProviderSettingsSection() {
             <Separator />
             <StatusRow
               label="External EPG feeds"
-              value={`${provider?.epgSources.length ?? watchedEpgSources.length}`}
+              value={`${displayedEpgSourceCount}`}
               detail="Merged ahead of the provider XMLTV fallback."
             />
             {provider?.lastSyncError ? (

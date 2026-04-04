@@ -1,7 +1,7 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { SettingsPage } from "@/features/auth/settings-page";
-import { getProvider, getRecents, getSyncStatus } from "@/lib/api";
+import { getProvider, getRecents, getSyncStatus, saveProvider } from "@/lib/api";
 import { useThemeStore } from "@/store/theme-store";
 import { useTvModeStore } from "@/store/tv-mode-store";
 
@@ -19,6 +19,7 @@ vi.mock("@/lib/api", () => ({
 const mockedGetRecents = vi.mocked(getRecents);
 const mockedGetProvider = vi.mocked(getProvider);
 const mockedGetSyncStatus = vi.mocked(getSyncStatus);
+const mockedSaveProvider = vi.mocked(saveProvider);
 
 describe("SettingsPage", () => {
   beforeEach(() => {
@@ -26,6 +27,32 @@ describe("SettingsPage", () => {
     mockedGetRecents.mockResolvedValue([]);
     mockedGetProvider.mockResolvedValue(null);
     mockedGetSyncStatus.mockResolvedValue(null);
+    mockedSaveProvider.mockImplementation(async (payload) => ({
+      id: "provider-1",
+      providerType: "xtreme",
+      baseUrl: payload.baseUrl,
+      username: payload.username,
+      outputFormat: payload.outputFormat,
+      status: "valid",
+      lastValidatedAt: "2026-04-04T12:00:00.000Z",
+      lastSyncAt: null,
+      lastSyncError: null,
+      createdAt: "2026-04-04T10:00:00.000Z",
+      updatedAt: "2026-04-04T12:00:00.000Z",
+      epgSources: payload.epgSources.map((source, index) => ({
+        id: source.id ?? `epg-source-${index + 1}`,
+        url: source.url,
+        priority: source.priority,
+        enabled: source.enabled,
+        sourceKind: "external",
+        lastSyncAt: null,
+        lastSyncError: null,
+        lastProgramCount: null,
+        lastMatchedCount: null,
+        createdAt: "2026-04-04T10:00:00.000Z",
+        updatedAt: "2026-04-04T12:00:00.000Z",
+      })),
+    }));
     useThemeStore.getState().setPreference("system");
     useTvModeStore.getState().setPreference("auto");
   });
@@ -107,5 +134,48 @@ describe("SettingsPage", () => {
     expect(
       screen.getByTestId("recent-channels-scroll-area"),
     ).toBeInTheDocument();
+  });
+
+  it("saves a newly added external epg source", async () => {
+    mockedGetProvider.mockResolvedValue({
+      id: "provider-1",
+      providerType: "xtreme",
+      baseUrl: "https://provider.example.com",
+      username: "demo",
+      outputFormat: "m3u8",
+      status: "valid",
+      lastValidatedAt: "2026-04-04T12:00:00.000Z",
+      lastSyncAt: null,
+      lastSyncError: null,
+      createdAt: "2026-04-04T10:00:00.000Z",
+      updatedAt: "2026-04-04T12:00:00.000Z",
+      epgSources: [],
+    });
+
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <SettingsPage />
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByDisplayValue("https://provider.example.com")).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("button", { name: /add source/i }));
+    fireEvent.change(screen.getByPlaceholderText(/guide\.xml\.gz/i), {
+      target: { value: "https://www.open-epg.com/files/sweden4.xml.gz" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /save profile/i }));
+
+    await waitFor(() => expect(mockedSaveProvider).toHaveBeenCalled());
+    expect(mockedSaveProvider.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({
+        epgSources: [
+          expect.objectContaining({
+            url: "https://www.open-epg.com/files/sweden4.xml.gz",
+            enabled: true,
+            priority: 0,
+          }),
+        ],
+      }),
+    );
   });
 });

@@ -449,6 +449,7 @@ struct ChannelLookupIndex {
     epg_channel_ids: HashMap<String, ChannelResolution>,
     remote_stream_ids: HashMap<String, ChannelResolution>,
     normalized_names: HashMap<String, ChannelResolution>,
+    simplified_names: HashMap<String, ChannelResolution>,
 }
 
 #[derive(Debug, Clone)]
@@ -943,11 +944,39 @@ async fn validate_provider(
     headers: HeaderMap,
     Json(payload): Json<SaveProviderPayload>,
 ) -> ApiResult<ValidateProviderResponse> {
-    let _auth = require_auth(&state, &headers).await?;
+    let auth = require_auth(&state, &headers).await?;
+    let existing_profile = sqlx::query_as::<_, ProviderProfileRecord>(
+        r#"
+        SELECT
+          id, user_id, provider_type, base_url, username, password_encrypted, output_format,
+          status, last_validated_at, last_sync_at, last_scheduled_sync_on, last_sync_error, created_at, updated_at
+        FROM provider_profiles
+        WHERE user_id = $1
+        "#,
+    )
+    .bind(auth.user_id)
+    .fetch_optional(&state.pool)
+    .await?;
+    let effective_password = if payload.password.trim().is_empty() {
+        existing_profile
+            .as_ref()
+            .map(|profile| {
+                decrypt_secret(&state.config.encryption_key, &profile.password_encrypted)
+            })
+            .transpose()?
+            .ok_or_else(|| {
+                AppError::BadRequest(
+                    "Enter your provider password when validating the profile for the first time."
+                        .to_string(),
+                )
+            })?
+    } else {
+        payload.password.clone()
+    };
     let credentials = XtreamCredentials {
         base_url: payload.base_url,
         username: payload.username,
-        password: payload.password,
+        password: effective_password,
         output_format: payload.output_format,
     };
     let result = xtreme::validate_profile(&state.http_client, &credentials).await?;
@@ -966,10 +995,38 @@ async fn save_provider(
 ) -> ApiResult<ProviderProfileResponse> {
     let auth = require_auth(&state, &headers).await?;
     let epg_sources = normalize_epg_source_payloads(payload.epg_sources)?;
+    let existing_profile = sqlx::query_as::<_, ProviderProfileRecord>(
+        r#"
+        SELECT
+          id, user_id, provider_type, base_url, username, password_encrypted, output_format,
+          status, last_validated_at, last_sync_at, last_scheduled_sync_on, last_sync_error, created_at, updated_at
+        FROM provider_profiles
+        WHERE user_id = $1
+        "#,
+    )
+    .bind(auth.user_id)
+    .fetch_optional(&state.pool)
+    .await?;
+    let effective_password = if payload.password.trim().is_empty() {
+        existing_profile
+            .as_ref()
+            .map(|profile| {
+                decrypt_secret(&state.config.encryption_key, &profile.password_encrypted)
+            })
+            .transpose()?
+            .ok_or_else(|| {
+                AppError::BadRequest(
+                    "Enter your provider password when saving the profile for the first time."
+                        .to_string(),
+                )
+            })?
+    } else {
+        payload.password.clone()
+    };
     let credentials = XtreamCredentials {
         base_url: payload.base_url.clone(),
         username: payload.username.clone(),
-        password: payload.password.clone(),
+        password: effective_password.clone(),
         output_format: payload.output_format.clone(),
     };
 
@@ -978,7 +1035,7 @@ async fn save_provider(
         return Err(AppError::BadRequest(validation.message));
     }
 
-    let encrypted_password = encrypt_secret(&state.config.encryption_key, &payload.password)?;
+    let encrypted_password = encrypt_secret(&state.config.encryption_key, &effective_password)?;
     let profile_id = sqlx::query_scalar::<_, Uuid>(
         r#"
         INSERT INTO provider_profiles (
@@ -3016,6 +3073,7 @@ async fn load_persisted_channels(
 
 fn build_channel_lookup_index(channels: &[PersistedChannelRecord]) -> ChannelLookupIndex {
     let mut lookup = ChannelLookupIndex::default();
+    let mut ambiguous_simplified_names = HashSet::new();
 
     for channel in channels {
         let resolution = ChannelResolution {
@@ -3042,7 +3100,16 @@ fn build_channel_lookup_index(channels: &[PersistedChannelRecord]) -> ChannelLoo
             lookup
                 .normalized_names
                 .entry(normalized_name)
-                .or_insert(resolution);
+                .or_insert_with(|| resolution.clone());
+        }
+        let simplified_name = simplify_channel_name(&channel.name);
+        if !simplified_name.is_empty() {
+            insert_unique_channel_alias(
+                &mut lookup.simplified_names,
+                &mut ambiguous_simplified_names,
+                simplified_name,
+                resolution,
+            );
         }
     }
 
@@ -3050,11 +3117,99 @@ fn build_channel_lookup_index(channels: &[PersistedChannelRecord]) -> ChannelLoo
 }
 
 fn normalize_channel_name(value: &str) -> String {
-    value
+    channel_name_tokens(value).join("")
+}
+
+fn simplify_channel_name(value: &str) -> String {
+    channel_name_tokens(value)
+        .into_iter()
+        .filter(|token| !is_channel_noise_token(token))
+        .collect::<Vec<_>>()
+        .join("")
+}
+
+fn channel_name_tokens(value: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+
+    for character in normalize_channel_text(value)
         .chars()
         .flat_map(|character| character.to_lowercase())
-        .filter(|character| character.is_alphanumeric())
-        .collect()
+    {
+        if character.is_alphanumeric() {
+            current.push(character);
+        } else if !current.is_empty() {
+            tokens.push(std::mem::take(&mut current));
+        }
+    }
+
+    if !current.is_empty() {
+        tokens.push(current);
+    }
+
+    trim_channel_region_tokens(tokens)
+}
+
+fn normalize_channel_text(value: &str) -> String {
+    value
+        .replace("ᵁᴴᴰ", "UHD")
+        .replace("ᶠᴴᴰ", "FHD")
+        .replace("ᴴᴰ", "HD")
+        .replace("ˢᴰ", "SD")
+        .replace("⁴ᴷ", "4K")
+}
+
+fn trim_channel_region_tokens(mut tokens: Vec<String>) -> Vec<String> {
+    while tokens
+        .first()
+        .map(|token| is_channel_region_token(token))
+        .unwrap_or(false)
+    {
+        tokens.remove(0);
+    }
+
+    while tokens
+        .last()
+        .map(|token| is_channel_region_token(token))
+        .unwrap_or(false)
+    {
+        tokens.pop();
+    }
+
+    tokens
+}
+
+fn is_channel_region_token(token: &str) -> bool {
+    matches!(token, "se" | "swe" | "sweden")
+}
+
+fn is_channel_noise_token(token: &str) -> bool {
+    matches!(
+        token,
+        "hd" | "uhd" | "fhd" | "sd" | "4k" | "text" | "multi" | "sub" | "audio" | "dub" | "dubbed"
+    )
+}
+
+fn insert_unique_channel_alias(
+    aliases: &mut HashMap<String, ChannelResolution>,
+    ambiguous_aliases: &mut HashSet<String>,
+    alias: String,
+    resolution: ChannelResolution,
+) {
+    if ambiguous_aliases.contains(&alias) {
+        return;
+    }
+
+    match aliases.get(&alias) {
+        None => {
+            aliases.insert(alias, resolution);
+        }
+        Some(existing) if existing.channel_id == resolution.channel_id => {}
+        Some(_) => {
+            aliases.remove(&alias);
+            ambiguous_aliases.insert(alias);
+        }
+    }
 }
 
 fn resolve_channel_for_programme(
@@ -3081,6 +3236,15 @@ fn resolve_channel_for_programme(
         }
 
         if let Some(channel) = lookup.normalized_names.get(&normalized_name) {
+            return Some(channel.clone());
+        }
+
+        let simplified_name = simplify_channel_name(display_name);
+        if simplified_name.is_empty() {
+            continue;
+        }
+
+        if let Some(channel) = lookup.simplified_names.get(&simplified_name) {
             return Some(channel.clone());
         }
     }
@@ -3677,6 +3841,90 @@ mod tests {
         assert_eq!(programmes.len(), 1);
         assert_eq!(programmes[0].channel_name, "TV4 HD");
         assert_eq!(programmes[0].title, "Morning Show");
+        assert_eq!(statuses[0].last_matched_count, Some(1));
+    }
+
+    #[test]
+    fn resolves_external_epg_programmes_with_region_and_quality_decorations() {
+        let now = Utc::now();
+        let lookup = build_channel_lookup_index(&[PersistedChannelRecord {
+            id: Uuid::from_u128(13),
+            name: "|SE|TV4 ᴴᴰ SE".to_string(),
+            remote_stream_id: 41,
+            epg_channel_id: None,
+            has_catchup: true,
+            updated_at: now,
+        }]);
+        let feed = FetchedEpgFeed {
+            source_id: Some(Uuid::from_u128(14)),
+            source_kind: "external".to_string(),
+            source_label: "https://example.com/tv4.xml.gz".to_string(),
+            priority: 0,
+            feed: XmltvFeed {
+                channels: HashMap::from([(
+                    "tv4.se".to_string(),
+                    XmltvChannel {
+                        id: "tv4.se".to_string(),
+                        display_names: vec!["TV4 HD.se".to_string()],
+                    },
+                )]),
+                programmes: vec![XmltvProgramme {
+                    channel_key: "tv4.se".to_string(),
+                    title: "Evening News".to_string(),
+                    description: None,
+                    start_at: now,
+                    end_at: now + ChronoDuration::hours(1),
+                }],
+            },
+        };
+
+        let (programmes, statuses) = resolve_epg_programmes(&[feed], &lookup);
+
+        assert_eq!(programmes.len(), 1);
+        assert_eq!(programmes[0].channel_name, "|SE|TV4 ᴴᴰ SE");
+        assert_eq!(programmes[0].title, "Evening News");
+        assert_eq!(statuses[0].last_matched_count, Some(1));
+    }
+
+    #[test]
+    fn resolves_external_epg_programmes_when_feed_uses_text_variant_names() {
+        let now = Utc::now();
+        let lookup = build_channel_lookup_index(&[PersistedChannelRecord {
+            id: Uuid::from_u128(15),
+            name: "|SE|TV4 FAKTA".to_string(),
+            remote_stream_id: 42,
+            epg_channel_id: None,
+            has_catchup: false,
+            updated_at: now,
+        }]);
+        let feed = FetchedEpgFeed {
+            source_id: Some(Uuid::from_u128(16)),
+            source_kind: "external".to_string(),
+            source_label: "https://example.com/tv4fakta.xml.gz".to_string(),
+            priority: 0,
+            feed: XmltvFeed {
+                channels: HashMap::from([(
+                    "tv4-fakta.se".to_string(),
+                    XmltvChannel {
+                        id: "tv4-fakta.se".to_string(),
+                        display_names: vec!["TV4 Fakta - Text.se".to_string()],
+                    },
+                )]),
+                programmes: vec![XmltvProgramme {
+                    channel_key: "tv4-fakta.se".to_string(),
+                    title: "Documentary Hour".to_string(),
+                    description: None,
+                    start_at: now,
+                    end_at: now + ChronoDuration::hours(1),
+                }],
+            },
+        };
+
+        let (programmes, statuses) = resolve_epg_programmes(&[feed], &lookup);
+
+        assert_eq!(programmes.len(), 1);
+        assert_eq!(programmes[0].channel_name, "|SE|TV4 FAKTA");
+        assert_eq!(programmes[0].title, "Documentary Hour");
         assert_eq!(statuses[0].last_matched_count, Some(1));
     }
 
