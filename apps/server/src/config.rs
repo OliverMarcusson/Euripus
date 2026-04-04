@@ -9,9 +9,11 @@ pub struct Config {
     pub bind_address: SocketAddr,
     pub database_url: String,
     pub jwt_secret: String,
+    pub relay_signing_secret: String,
     pub encryption_key: [u8; 32],
     pub access_token_minutes: i64,
     pub refresh_token_days: i64,
+    pub relay_token_minutes: i64,
     pub daily_sync_hour_local: u32,
     pub public_origin: Option<Url>,
     pub allowed_origins: Vec<String>,
@@ -24,8 +26,10 @@ impl Config {
             .context("APP_BIND_ADDRESS must be a valid socket address")?;
         let database_url = read_env("APP_DATABASE_URL")?;
         let jwt_secret = read_env("APP_JWT_SECRET")?;
+        let relay_signing_secret = read_env("APP_RELAY_SIGNING_SECRET")?;
         let access_token_minutes = read_env("APP_ACCESS_TOKEN_MINUTES")?.parse()?;
         let refresh_token_days = read_env("APP_REFRESH_TOKEN_DAYS")?.parse()?;
+        let relay_token_minutes = read_env_or_default("APP_RELAY_TOKEN_MINUTES", "120")?.parse()?;
         let daily_sync_hour_local =
             read_env_or_default("APP_DAILY_SYNC_HOUR_LOCAL", "6")?.parse()?;
         let public_origin = read_optional_env("APP_PUBLIC_ORIGIN")?
@@ -61,9 +65,11 @@ impl Config {
             bind_address,
             database_url,
             jwt_secret,
+            relay_signing_secret,
             encryption_key,
             access_token_minutes,
             refresh_token_days,
+            relay_token_minutes,
             daily_sync_hour_local,
             public_origin,
             allowed_origins,

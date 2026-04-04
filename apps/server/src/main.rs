@@ -20,6 +20,7 @@ use argon2::{
 };
 use axum::{
     Json, Router,
+    body::Body,
     extract::{Path, Query, State},
     http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode, header},
     response::{IntoResponse, Response},
@@ -44,6 +45,7 @@ use tower_http::{
     trace::TraceLayer,
 };
 use tracing::{error, info};
+use url::Url;
 use uuid::Uuid;
 use xmltv::{XmltvChannel, XmltvFeed, XmltvProgramme};
 use xtreme::{XtreamCategory, XtreamChannel, XtreamCredentials};
@@ -170,6 +172,7 @@ struct ProviderProfileResponse {
     base_url: String,
     username: String,
     output_format: String,
+    playback_mode: String,
     status: String,
     last_validated_at: Option<DateTime<Utc>>,
     last_sync_at: Option<DateTime<Utc>>,
@@ -348,6 +351,7 @@ struct SaveProviderPayload {
     username: String,
     password: String,
     output_format: String,
+    playback_mode: String,
     #[serde(default)]
     epg_sources: Vec<SaveEpgSourcePayload>,
 }
@@ -420,6 +424,7 @@ struct ProviderProfileRecord {
     username: String,
     password_encrypted: String,
     output_format: String,
+    playback_mode: String,
     status: String,
     last_validated_at: Option<DateTime<Utc>>,
     last_sync_at: Option<DateTime<Utc>>,
@@ -507,6 +512,7 @@ struct ResolvedProgramme {
 #[derive(Debug, FromRow)]
 struct ChannelPlaybackRecord {
     id: Uuid,
+    profile_id: Uuid,
     name: String,
     remote_stream_id: i32,
     stream_extension: Option<String>,
@@ -516,6 +522,40 @@ struct ChannelPlaybackRecord {
     provider_username: String,
     password_encrypted: String,
     output_format: String,
+    playback_mode: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PlaybackMode {
+    Direct,
+    Relay,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum RelayAssetKind {
+    Hls,
+    Raw,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct RelayClaims {
+    sub: String,
+    pid: String,
+    url: String,
+    kind: RelayAssetKind,
+    exp: usize,
+}
+
+#[derive(Debug)]
+struct RelayToken {
+    token: String,
+    expires_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RelayTokenQuery {
+    token: String,
 }
 
 const SYNC_BATCH_SIZE: usize = 10_000;
@@ -527,6 +567,7 @@ const SEARCH_MAX_LIMIT: i64 = 100;
 const REFRESH_COOKIE_NAME: &str = "euripus.refresh";
 const CSRF_COOKIE_NAME: &str = "euripus.csrf";
 const CSRF_HEADER_NAME: &str = "x-csrf-token";
+const RELAY_PLAYLIST_MAX_BYTES: usize = 1024 * 1024;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -634,7 +675,14 @@ fn browser_api_router() -> Router<AppState> {
         .route("/auth/login", post(browser_login))
         .route("/auth/refresh", post(browser_refresh_session))
         .route("/auth/logout", post(browser_logout))
+        .merge(relay_router())
         .merge(shared_api_router())
+}
+
+fn relay_router() -> Router<AppState> {
+    Router::new()
+        .route("/relay/hls", get(relay_hls_playlist))
+        .route("/relay/raw", get(relay_raw_stream))
 }
 
 fn build_cors_layer(config: &Config) -> Result<CorsLayer> {
@@ -909,7 +957,7 @@ async fn load_provider_profile_response(
     let provider = sqlx::query_as::<_, ProviderProfileRecord>(
         r#"
         SELECT
-          id, user_id, provider_type, base_url, username, password_encrypted, output_format,
+          id, user_id, provider_type, base_url, username, password_encrypted, output_format, playback_mode,
           status, last_validated_at, last_sync_at, last_scheduled_sync_on, last_sync_error, created_at, updated_at
         FROM provider_profiles
         WHERE user_id = $1
@@ -929,6 +977,7 @@ async fn load_provider_profile_response(
         base_url: provider.base_url,
         username: provider.username,
         output_format: provider.output_format,
+        playback_mode: provider.playback_mode,
         status: provider.status,
         last_validated_at: provider.last_validated_at,
         last_sync_at: provider.last_sync_at,
@@ -937,6 +986,23 @@ async fn load_provider_profile_response(
         updated_at: provider.updated_at,
         epg_sources: load_epg_sources(pool, provider.id).await?,
     }))
+}
+
+fn normalize_playback_mode(raw: &str) -> Result<PlaybackMode, AppError> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "direct" => Ok(PlaybackMode::Direct),
+        "relay" => Ok(PlaybackMode::Relay),
+        _ => Err(AppError::BadRequest(
+            "Playback mode must be either 'direct' or 'relay'.".to_string(),
+        )),
+    }
+}
+
+fn playback_mode_as_str(mode: PlaybackMode) -> &'static str {
+    match mode {
+        PlaybackMode::Direct => "direct",
+        PlaybackMode::Relay => "relay",
+    }
 }
 
 fn normalize_epg_source_payloads(
@@ -1054,7 +1120,7 @@ async fn validate_provider(
     let existing_profile = sqlx::query_as::<_, ProviderProfileRecord>(
         r#"
         SELECT
-          id, user_id, provider_type, base_url, username, password_encrypted, output_format,
+          id, user_id, provider_type, base_url, username, password_encrypted, output_format, playback_mode,
           status, last_validated_at, last_sync_at, last_scheduled_sync_on, last_sync_error, created_at, updated_at
         FROM provider_profiles
         WHERE user_id = $1
@@ -1104,7 +1170,7 @@ async fn save_provider(
     let existing_profile = sqlx::query_as::<_, ProviderProfileRecord>(
         r#"
         SELECT
-          id, user_id, provider_type, base_url, username, password_encrypted, output_format,
+          id, user_id, provider_type, base_url, username, password_encrypted, output_format, playback_mode,
           status, last_validated_at, last_sync_at, last_scheduled_sync_on, last_sync_error, created_at, updated_at
         FROM provider_profiles
         WHERE user_id = $1
@@ -1145,9 +1211,9 @@ async fn save_provider(
     let profile_id = sqlx::query_scalar::<_, Uuid>(
         r#"
         INSERT INTO provider_profiles (
-          user_id, provider_type, base_url, username, password_encrypted, output_format, status, last_validated_at, last_sync_error
+          user_id, provider_type, base_url, username, password_encrypted, output_format, playback_mode, status, last_validated_at, last_sync_error
         )
-        VALUES ($1, 'xtreme', $2, $3, $4, $5, 'valid', NOW(), NULL)
+        VALUES ($1, 'xtreme', $2, $3, $4, $5, $6, 'valid', NOW(), NULL)
         ON CONFLICT (user_id)
         DO UPDATE SET
           provider_type = 'xtreme',
@@ -1155,6 +1221,7 @@ async fn save_provider(
           username = EXCLUDED.username,
           password_encrypted = EXCLUDED.password_encrypted,
           output_format = EXCLUDED.output_format,
+          playback_mode = EXCLUDED.playback_mode,
           status = 'valid',
           last_validated_at = NOW(),
           last_sync_error = NULL,
@@ -1168,6 +1235,7 @@ async fn save_provider(
     .bind(payload.username)
     .bind(encrypted_password)
     .bind(payload.output_format)
+    .bind(playback_mode_as_str(normalize_playback_mode(&payload.playback_mode)?))
     .fetch_one(&state.pool)
     .await?;
 
@@ -1189,7 +1257,7 @@ async fn trigger_sync(
     let profile = sqlx::query_as::<_, ProviderProfileRecord>(
         r#"
         SELECT
-          id, user_id, provider_type, base_url, username, password_encrypted, output_format,
+          id, user_id, provider_type, base_url, username, password_encrypted, output_format, playback_mode,
           status, last_validated_at, last_sync_at, last_scheduled_sync_on, last_sync_error, created_at, updated_at
         FROM provider_profiles
         WHERE user_id = $1
@@ -1262,7 +1330,7 @@ async fn queue_daily_syncs(state: AppState) -> Result<()> {
     let profiles = sqlx::query_as::<_, ProviderProfileRecord>(
         r#"
         SELECT
-          id, user_id, provider_type, base_url, username, password_encrypted, output_format,
+          id, user_id, provider_type, base_url, username, password_encrypted, output_format, playback_mode,
           status, last_validated_at, last_sync_at, last_scheduled_sync_on, last_sync_error, created_at, updated_at
         FROM provider_profiles
         WHERE status = 'valid'
@@ -1822,6 +1890,7 @@ async fn play_channel(
         r#"
         SELECT
           c.id,
+          c.profile_id,
           c.name,
           c.remote_stream_id,
           c.stream_extension,
@@ -1830,7 +1899,8 @@ async fn play_channel(
           p.base_url,
           p.username AS provider_username,
           p.password_encrypted,
-          p.output_format
+          p.output_format,
+          p.playback_mode
         FROM channels c
         JOIN provider_profiles p ON p.id = c.profile_id
         WHERE c.user_id = $1 AND c.id = $2
@@ -1850,14 +1920,19 @@ async fn play_channel(
     )?;
     touch_recent(&state.pool, auth.user_id, record.id).await?;
 
-    Ok(Json(playback_source_from_url(
+    Ok(Json(playback_source_for_mode(
+        &state,
+        &headers,
+        auth.user_id,
+        record.profile_id,
+        &record.playback_mode,
         &record.name,
         url,
         true,
         false,
         record.stream_extension.as_deref(),
         None,
-    )))
+    )?))
 }
 
 async fn play_program(
@@ -1874,6 +1949,7 @@ async fn play_program(
           p.start_at,
           p.end_at,
           p.can_catchup,
+          p.profile_id,
           c.id AS channel_id,
           c.remote_stream_id,
           c.stream_extension,
@@ -1882,7 +1958,8 @@ async fn play_program(
           pr.base_url,
           pr.username AS provider_username,
           pr.password_encrypted,
-          pr.output_format
+          pr.output_format,
+          pr.playback_mode
         FROM programs p
         LEFT JOIN channels c ON c.id = p.channel_id
         LEFT JOIN provider_profiles pr ON pr.id = p.profile_id
@@ -1919,14 +1996,19 @@ async fn play_program(
                 row.stream_extension.as_deref(),
             )?;
 
-            Ok(Json(playback_source_from_url(
+            Ok(Json(playback_source_for_mode(
+                &state,
+                &headers,
+                auth.user_id,
+                row.profile_id,
+                &row.playback_mode,
                 &row.channel_name,
                 url,
                 true,
                 false,
                 row.stream_extension.as_deref(),
                 None,
-            )))
+            )?))
         }
         ProgramPlaybackBehavior::Catchup => {
             let credentials = XtreamCredentials {
@@ -1943,19 +2025,110 @@ async fn play_program(
                 row.end_at,
             )?;
 
-            Ok(Json(playback_source_from_url(
+            Ok(Json(playback_source_for_mode(
+                &state,
+                &headers,
+                auth.user_id,
+                row.profile_id,
+                &row.playback_mode,
                 &row.title,
                 url,
                 false,
                 true,
                 row.stream_extension.as_deref(),
                 None,
-            )))
+            )?))
         }
         ProgramPlaybackBehavior::Unsupported(reason) => {
             Ok(Json(unsupported_playback(&row.title, reason)))
         }
     }
+}
+
+async fn relay_hls_playlist(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<RelayTokenQuery>,
+) -> Result<Response, AppError> {
+    let relay = validate_relay_token(&state, &query.token, RelayAssetKind::Hls).await?;
+    let public_base_url = request_base_url(&state.config, &headers)?;
+
+    let response = state
+        .http_client
+        .get(relay.upstream_url.clone())
+        .send()
+        .await
+        .map_err(|error| AppError::Internal(anyhow!(error)))?
+        .error_for_status()
+        .map_err(|error| AppError::Internal(anyhow!(error)))?;
+    let response_url = response.url().clone();
+    let content_type = response
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .cloned()
+        .unwrap_or_else(|| HeaderValue::from_static("application/vnd.apple.mpegurl"));
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|error| AppError::Internal(anyhow!(error)))?;
+    if bytes.len() > RELAY_PLAYLIST_MAX_BYTES {
+        return Err(AppError::BadRequest(
+            "The upstream playlist exceeded the relay size limit.".to_string(),
+        ));
+    }
+
+    let manifest = String::from_utf8(bytes.to_vec()).map_err(|_| {
+        AppError::BadRequest("The upstream playlist could not be decoded as UTF-8.".to_string())
+    })?;
+    let rewritten = rewrite_hls_manifest(
+        &state,
+        relay.user_id,
+        relay.profile_id,
+        relay.expires_at,
+        &public_base_url,
+        &response_url,
+        &manifest,
+    )?;
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, content_type)
+        .header(header::CACHE_CONTROL, "no-store")
+        .body(Body::from(rewritten))
+        .map_err(|error| AppError::Internal(anyhow!(error)))
+}
+
+async fn relay_raw_stream(
+    State(state): State<AppState>,
+    Query(query): Query<RelayTokenQuery>,
+) -> Result<Response, AppError> {
+    let relay = validate_relay_token(&state, &query.token, RelayAssetKind::Raw).await?;
+
+    let response = state
+        .http_client
+        .get(relay.upstream_url)
+        .send()
+        .await
+        .map_err(|error| AppError::Internal(anyhow!(error)))?
+        .error_for_status()
+        .map_err(|error| AppError::Internal(anyhow!(error)))?;
+    let content_type = response.headers().get(header::CONTENT_TYPE).cloned();
+    let content_length = response.headers().get(header::CONTENT_LENGTH).cloned();
+    let body = Body::from_stream(response.bytes_stream());
+
+    let mut builder = Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CACHE_CONTROL, "no-store");
+    if let Some(content_type) = content_type {
+        builder = builder.header(header::CONTENT_TYPE, content_type);
+    }
+    if let Some(content_length) = content_length {
+        builder = builder.header(header::CONTENT_LENGTH, content_length);
+    }
+
+    builder
+        .body(body)
+        .map_err(|error| AppError::Internal(anyhow!(error)))
 }
 
 const GUIDE_DEFAULT_LIMIT: i64 = 40;
@@ -2306,6 +2479,49 @@ fn unsupported_playback(title: &str, reason: &str) -> PlaybackSourceResponse {
     }
 }
 
+fn playback_source_for_mode(
+    state: &AppState,
+    headers: &HeaderMap,
+    user_id: Uuid,
+    profile_id: Uuid,
+    raw_playback_mode: &str,
+    title: &str,
+    upstream_url: String,
+    live: bool,
+    catchup: bool,
+    extension: Option<&str>,
+    expires_at: Option<DateTime<Utc>>,
+) -> Result<PlaybackSourceResponse, AppError> {
+    let direct = playback_source_from_url(
+        title,
+        upstream_url.clone(),
+        live,
+        catchup,
+        extension,
+        expires_at,
+    );
+    let playback_mode = normalize_playback_mode(raw_playback_mode)?;
+    if playback_mode == PlaybackMode::Direct || direct.kind == "unsupported" {
+        return Ok(direct);
+    }
+
+    let relay_kind = relay_asset_kind_for_extension(extension).ok_or_else(|| {
+        AppError::BadRequest(
+            "Relay mode only supports browser-playable stream formats.".to_string(),
+        )
+    })?;
+    let request_base_url = request_base_url(&state.config, headers)?;
+    let relay_token =
+        issue_relay_token(state, user_id, profile_id, &upstream_url, relay_kind, None)?;
+    let relay_url = relay_url_for_token(&request_base_url, relay_kind, &relay_token.token)?;
+
+    Ok(PlaybackSourceResponse {
+        url: relay_url,
+        expires_at: Some(relay_token.expires_at),
+        ..direct
+    })
+}
+
 fn playback_source_from_url(
     title: &str,
     url: String,
@@ -2332,6 +2548,305 @@ fn playback_source_from_url(
         ),
         title: title.to_string(),
     }
+}
+
+async fn validate_relay_token(
+    state: &AppState,
+    token: &str,
+    expected_kind: RelayAssetKind,
+) -> Result<ValidatedRelayToken, AppError> {
+    let relay = decode_relay_token(&state.config, token, expected_kind)?;
+    let valid_profile = sqlx::query_scalar::<_, i64>(
+        r#"
+        SELECT COUNT(*)
+        FROM provider_profiles
+        WHERE id = $1 AND user_id = $2
+        "#,
+    )
+    .bind(relay.profile_id)
+    .bind(relay.user_id)
+    .fetch_one(&state.pool)
+    .await?;
+    if valid_profile == 0 {
+        return Err(AppError::Unauthorized);
+    }
+
+    Ok(relay)
+}
+
+fn issue_relay_token(
+    state: &AppState,
+    user_id: Uuid,
+    profile_id: Uuid,
+    upstream_url: &str,
+    kind: RelayAssetKind,
+    expires_at: Option<DateTime<Utc>>,
+) -> Result<RelayToken, AppError> {
+    let expires_at = expires_at
+        .unwrap_or_else(|| Utc::now() + ChronoDuration::minutes(state.config.relay_token_minutes));
+    let claims = RelayClaims {
+        sub: user_id.to_string(),
+        pid: profile_id.to_string(),
+        url: upstream_url.to_string(),
+        kind,
+        exp: expires_at.timestamp() as usize,
+    };
+    let token = encode(
+        &Header::default(),
+        &claims,
+        &EncodingKey::from_secret(state.config.relay_signing_secret.as_bytes()),
+    )
+    .map_err(|error| AppError::Internal(anyhow!(error)))?;
+
+    Ok(RelayToken { token, expires_at })
+}
+
+fn decode_relay_token(
+    config: &Config,
+    token: &str,
+    expected_kind: RelayAssetKind,
+) -> Result<ValidatedRelayToken, AppError> {
+    let claims = decode::<RelayClaims>(
+        token,
+        &DecodingKey::from_secret(config.relay_signing_secret.as_bytes()),
+        &Validation::new(Algorithm::HS256),
+    )
+    .map_err(|_| AppError::Unauthorized)?
+    .claims;
+
+    if claims.kind != expected_kind {
+        return Err(AppError::Unauthorized);
+    }
+
+    let user_id = Uuid::parse_str(&claims.sub).map_err(|_| AppError::Unauthorized)?;
+    let profile_id = Uuid::parse_str(&claims.pid).map_err(|_| AppError::Unauthorized)?;
+    let upstream_url = Url::parse(&claims.url).map_err(|_| AppError::Unauthorized)?;
+    if !matches!(upstream_url.scheme(), "http" | "https") {
+        return Err(AppError::Unauthorized);
+    }
+
+    let expires_at =
+        DateTime::<Utc>::from_timestamp(claims.exp as i64, 0).ok_or(AppError::Unauthorized)?;
+
+    Ok(ValidatedRelayToken {
+        user_id,
+        profile_id,
+        upstream_url,
+        expires_at,
+    })
+}
+
+fn relay_asset_kind_for_extension(extension: Option<&str>) -> Option<RelayAssetKind> {
+    match extension.unwrap_or("m3u8") {
+        "m3u8" => Some(RelayAssetKind::Hls),
+        "ts" => Some(RelayAssetKind::Raw),
+        _ => None,
+    }
+}
+
+fn relay_asset_kind_for_url(url: &Url) -> RelayAssetKind {
+    if url
+        .path_segments()
+        .and_then(|segments| segments.last())
+        .is_some_and(|segment| segment.ends_with(".m3u8"))
+    {
+        RelayAssetKind::Hls
+    } else {
+        RelayAssetKind::Raw
+    }
+}
+
+fn request_base_url(config: &Config, headers: &HeaderMap) -> Result<Url, AppError> {
+    let forwarded_host = header_value(headers, "x-forwarded-host");
+    let host_header = header_value(headers, "host");
+    let host = forwarded_host.as_deref().or(host_header.as_deref());
+    let scheme = header_value(headers, "x-forwarded-proto").unwrap_or_else(|| "http".to_string());
+
+    if let Some(host) = host {
+        return Url::parse(&format!("{scheme}://{host}"))
+            .map_err(|error| AppError::Internal(anyhow!(error)));
+    }
+
+    if let Some(origin) = &config.public_origin {
+        return Ok(origin.clone());
+    }
+
+    Url::parse(&format!("http://{}", config.bind_address))
+        .map_err(|error| AppError::Internal(anyhow!(error)))
+}
+
+fn header_value(headers: &HeaderMap, name: &str) -> Option<String> {
+    headers
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(',').next())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
+fn relay_url_for_token(
+    base_url: &Url,
+    kind: RelayAssetKind,
+    token: &str,
+) -> Result<String, AppError> {
+    let mut url = base_url
+        .join(match kind {
+            RelayAssetKind::Hls => "/api/relay/hls",
+            RelayAssetKind::Raw => "/api/relay/raw",
+        })
+        .map_err(|error| AppError::Internal(anyhow!(error)))?;
+    url.query_pairs_mut().append_pair("token", token);
+    Ok(url.to_string())
+}
+
+fn rewrite_hls_manifest(
+    state: &AppState,
+    user_id: Uuid,
+    profile_id: Uuid,
+    expires_at: DateTime<Utc>,
+    public_base_url: &Url,
+    upstream_base_url: &Url,
+    manifest: &str,
+) -> Result<String, AppError> {
+    let mut rewritten_lines = Vec::new();
+
+    for line in manifest.lines() {
+        if line.starts_with('#') {
+            rewritten_lines.push(rewrite_hls_tag_uris(
+                state,
+                user_id,
+                profile_id,
+                expires_at,
+                public_base_url,
+                upstream_base_url,
+                line,
+            )?);
+            continue;
+        }
+
+        if line.trim().is_empty() {
+            rewritten_lines.push(line.to_string());
+            continue;
+        }
+
+        rewritten_lines.push(rewrite_hls_media_uri(
+            state,
+            user_id,
+            profile_id,
+            expires_at,
+            public_base_url,
+            upstream_base_url,
+            line,
+        )?);
+    }
+
+    Ok(rewritten_lines.join("\n"))
+}
+
+fn rewrite_hls_tag_uris(
+    state: &AppState,
+    user_id: Uuid,
+    profile_id: Uuid,
+    expires_at: DateTime<Utc>,
+    public_base_url: &Url,
+    upstream_base_url: &Url,
+    line: &str,
+) -> Result<String, AppError> {
+    let mut output = String::new();
+    let mut remaining = line;
+
+    while let Some(start) = remaining.find("URI=\"") {
+        let attribute_start = start + 5;
+        output.push_str(&remaining[..attribute_start]);
+        let rest = &remaining[attribute_start..];
+        let Some(end) = rest.find('"') else {
+            output.push_str(rest);
+            return Ok(output);
+        };
+        let uri = &rest[..end];
+        let rewritten = relayable_uri_to_public_url(
+            state,
+            user_id,
+            profile_id,
+            expires_at,
+            public_base_url,
+            upstream_base_url,
+            uri,
+        )?
+        .unwrap_or_else(|| uri.to_string());
+        output.push_str(&rewritten);
+        output.push('"');
+        remaining = &rest[end + 1..];
+    }
+
+    output.push_str(remaining);
+    Ok(output)
+}
+
+fn rewrite_hls_media_uri(
+    state: &AppState,
+    user_id: Uuid,
+    profile_id: Uuid,
+    expires_at: DateTime<Utc>,
+    public_base_url: &Url,
+    upstream_base_url: &Url,
+    uri: &str,
+) -> Result<String, AppError> {
+    Ok(relayable_uri_to_public_url(
+        state,
+        user_id,
+        profile_id,
+        expires_at,
+        public_base_url,
+        upstream_base_url,
+        uri.trim(),
+    )?
+    .unwrap_or_else(|| uri.to_string()))
+}
+
+fn relayable_uri_to_public_url(
+    state: &AppState,
+    user_id: Uuid,
+    profile_id: Uuid,
+    expires_at: DateTime<Utc>,
+    public_base_url: &Url,
+    upstream_base_url: &Url,
+    raw_uri: &str,
+) -> Result<Option<String>, AppError> {
+    let resolved = if let Ok(url) = Url::parse(raw_uri) {
+        url
+    } else if let Ok(url) = upstream_base_url.join(raw_uri) {
+        url
+    } else {
+        return Ok(None);
+    };
+
+    if !matches!(resolved.scheme(), "http" | "https") {
+        return Ok(None);
+    }
+
+    let kind = relay_asset_kind_for_url(&resolved);
+    let token = issue_relay_token(
+        state,
+        user_id,
+        profile_id,
+        resolved.as_str(),
+        kind,
+        Some(expires_at),
+    )?;
+    Ok(Some(relay_url_for_token(
+        public_base_url,
+        kind,
+        &token.token,
+    )?))
+}
+
+struct ValidatedRelayToken {
+    user_id: Uuid,
+    profile_id: Uuid,
+    upstream_url: Url,
+    expires_at: DateTime<Utc>,
 }
 
 fn playback_credentials(
@@ -2769,7 +3284,7 @@ async fn run_sync_job(
     let profile = sqlx::query_as::<_, ProviderProfileRecord>(
         r#"
         SELECT
-          id, user_id, provider_type, base_url, username, password_encrypted, output_format,
+          id, user_id, provider_type, base_url, username, password_encrypted, output_format, playback_mode,
           status, last_validated_at, last_sync_at, last_scheduled_sync_on, last_sync_error, created_at, updated_at
         FROM provider_profiles
         WHERE id = $1 AND user_id = $2
@@ -3800,6 +4315,7 @@ struct ProgramPlaybackRow {
     start_at: DateTime<Utc>,
     end_at: DateTime<Utc>,
     can_catchup: bool,
+    profile_id: Uuid,
     channel_id: Option<Uuid>,
     remote_stream_id: i32,
     stream_extension: Option<String>,
@@ -3809,6 +4325,7 @@ struct ProgramPlaybackRow {
     provider_username: String,
     password_encrypted: String,
     output_format: String,
+    playback_mode: String,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -3902,6 +4419,149 @@ mod tests {
             None,
         );
         assert_eq!(response.kind, "hls");
+    }
+
+    #[tokio::test]
+    async fn playback_source_for_mode_keeps_direct_urls_in_direct_mode() {
+        let state = sample_app_state();
+        let response = playback_source_for_mode(
+            &state,
+            &HeaderMap::new(),
+            Uuid::from_u128(1),
+            Uuid::from_u128(2),
+            "direct",
+            "Arena 1",
+            "https://provider.example.com/live/42.m3u8".to_string(),
+            true,
+            false,
+            Some("m3u8"),
+            None,
+        )
+        .expect("direct playback source");
+
+        assert_eq!(response.kind, "hls");
+        assert_eq!(response.url, "https://provider.example.com/live/42.m3u8");
+        assert!(response.expires_at.is_none());
+    }
+
+    #[tokio::test]
+    async fn playback_source_for_mode_issues_signed_relay_urls() {
+        let state = sample_app_state();
+        let response = playback_source_for_mode(
+            &state,
+            &HeaderMap::new(),
+            Uuid::from_u128(3),
+            Uuid::from_u128(4),
+            "relay",
+            "Arena 1",
+            "https://provider.example.com/live/42.m3u8".to_string(),
+            true,
+            false,
+            Some("m3u8"),
+            None,
+        )
+        .expect("relay playback source");
+
+        assert_eq!(response.kind, "hls");
+        assert!(
+            response
+                .url
+                .starts_with("https://app.example.com/api/relay/hls?token=")
+        );
+        assert!(response.expires_at.is_some());
+
+        let relay = decode_relay_token(
+            &state.config,
+            &extract_relay_token(&response.url),
+            RelayAssetKind::Hls,
+        )
+        .expect("decode relay token");
+        assert_eq!(relay.user_id, Uuid::from_u128(3));
+        assert_eq!(relay.profile_id, Uuid::from_u128(4));
+        assert_eq!(
+            relay.upstream_url.as_str(),
+            "https://provider.example.com/live/42.m3u8"
+        );
+    }
+
+    #[tokio::test]
+    async fn decode_relay_token_rejects_tampered_tokens() {
+        let state = sample_app_state();
+        let issued = issue_relay_token(
+            &state,
+            Uuid::from_u128(5),
+            Uuid::from_u128(6),
+            "https://provider.example.com/live/42.m3u8",
+            RelayAssetKind::Hls,
+            Some(Utc::now() + ChronoDuration::minutes(10)),
+        )
+        .expect("issue relay token");
+        let tampered = format!("{}x", issued.token);
+
+        let result = decode_relay_token(&state.config, &tampered, RelayAssetKind::Hls);
+
+        assert!(matches!(result, Err(AppError::Unauthorized)));
+    }
+
+    #[tokio::test]
+    async fn decode_relay_token_rejects_wrong_asset_kind() {
+        let state = sample_app_state();
+        let issued = issue_relay_token(
+            &state,
+            Uuid::from_u128(5),
+            Uuid::from_u128(6),
+            "https://provider.example.com/live/42.m3u8",
+            RelayAssetKind::Hls,
+            Some(Utc::now() + ChronoDuration::minutes(10)),
+        )
+        .expect("issue relay token");
+
+        let result = decode_relay_token(&state.config, &issued.token, RelayAssetKind::Raw);
+
+        assert!(matches!(result, Err(AppError::Unauthorized)));
+    }
+
+    #[tokio::test]
+    async fn rewrite_hls_manifest_rewrites_variant_and_segment_uris() {
+        let state = sample_app_state();
+        let user_id = Uuid::from_u128(7);
+        let profile_id = Uuid::from_u128(8);
+        let expires_at = Utc::now() + ChronoDuration::minutes(10);
+        let public_base_url = Url::parse("https://app.example.com").expect("public url");
+        let upstream_base_url =
+            Url::parse("https://provider.example.com/live/master.m3u8").expect("upstream url");
+        let manifest = "#EXTM3U\n#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"audio\",NAME=\"English\",URI=\"audio/en.m3u8\"\n#EXT-X-STREAM-INF:BANDWIDTH=3000000\nvideo/main.m3u8?token=abc\n#EXTINF:6.0,\nsegment001.ts\n";
+
+        let rewritten = rewrite_hls_manifest(
+            &state,
+            user_id,
+            profile_id,
+            expires_at,
+            &public_base_url,
+            &upstream_base_url,
+            manifest,
+        )
+        .expect("rewrite manifest");
+
+        assert!(rewritten.contains("https://app.example.com/api/relay/hls?token="));
+        assert!(rewritten.contains("https://app.example.com/api/relay/raw?token="));
+
+        let urls = rewritten
+            .lines()
+            .filter(|line| line.contains("/api/relay/"))
+            .flat_map(extract_relay_urls_from_line)
+            .map(|url| {
+                let kind = if url.contains("/api/relay/hls") {
+                    RelayAssetKind::Hls
+                } else {
+                    RelayAssetKind::Raw
+                };
+                decode_relay_token(&state.config, &extract_relay_token(&url), kind)
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(urls.len(), 3);
+        assert!(urls.iter().all(Result::is_ok));
     }
 
     #[test]
@@ -4283,6 +4943,7 @@ mod tests {
             start_at,
             end_at,
             can_catchup: true,
+            profile_id: Uuid::from_u128(9),
             channel_id: Some(Uuid::from_u128(8)),
             remote_stream_id: 42,
             stream_extension: Some("m3u8".to_string()),
@@ -4292,6 +4953,45 @@ mod tests {
             provider_username: "demo".to_string(),
             password_encrypted: "encrypted".to_string(),
             output_format: "m3u8".to_string(),
+            playback_mode: "direct".to_string(),
         }
+    }
+
+    fn sample_app_state() -> AppState {
+        AppState {
+            pool: PgPoolOptions::new()
+                .connect_lazy("postgres://euripus:euripus@localhost/euripus")
+                .expect("lazy pool"),
+            config: Arc::new(Config {
+                bind_address: "127.0.0.1:4000".parse().expect("bind address"),
+                database_url: "postgres://euripus:euripus@localhost/euripus".to_string(),
+                jwt_secret: "test-jwt-secret".to_string(),
+                relay_signing_secret: "test-relay-secret".to_string(),
+                encryption_key: *b"0123456789abcdef0123456789abcdef",
+                access_token_minutes: 15,
+                refresh_token_days: 7,
+                relay_token_minutes: 30,
+                daily_sync_hour_local: 6,
+                public_origin: Some(Url::parse("https://app.example.com").expect("public origin")),
+                allowed_origins: vec!["https://app.example.com".to_string()],
+                browser_cookie_secure: true,
+            }),
+            http_client: reqwest::Client::new(),
+        }
+    }
+
+    fn extract_relay_token(url: &str) -> String {
+        Url::parse(url)
+            .expect("relay url")
+            .query_pairs()
+            .find_map(|(key, value)| (key == "token").then(|| value.into_owned()))
+            .expect("token query parameter")
+    }
+
+    fn extract_relay_urls_from_line(line: &str) -> Vec<String> {
+        line.split('"')
+            .filter(|segment| segment.starts_with("https://app.example.com/api/relay/"))
+            .map(ToString::to_string)
+            .collect()
     }
 }
