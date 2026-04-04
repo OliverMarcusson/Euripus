@@ -1,14 +1,12 @@
-use std::{collections::HashMap, time::Duration};
+use std::collections::HashMap;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use quick_xml::{Reader, events::Event, name::QName};
 use reqwest::Client;
 use serde::Deserialize;
-use tracing::warn;
 use url::Url;
 
-const XMLTV_REQUEST_TIMEOUT: Duration = Duration::from_secs(600);
+use crate::xmltv::{self, XmltvFeed};
 
 #[derive(Debug, Clone)]
 pub struct XtreamCredentials {
@@ -40,24 +38,6 @@ pub struct XtreamChannel {
 pub struct XtreamCategory {
     pub remote_category_id: String,
     pub name: String,
-}
-
-#[derive(Debug, Clone)]
-pub struct XtreamProgramme {
-    pub channel_key: String,
-    pub title: String,
-    pub description: Option<String>,
-    pub start_at: DateTime<Utc>,
-    pub end_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Default)]
-struct PendingProgramme {
-    channel_key: String,
-    start_raw: String,
-    end_raw: String,
-    title: String,
-    description: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -177,10 +157,12 @@ pub async fn fetch_live_streams(
         .collect())
 }
 
-pub async fn fetch_xmltv(
-    client: &Client,
-    credentials: &XtreamCredentials,
-) -> Result<Vec<XtreamProgramme>> {
+pub async fn fetch_xmltv(client: &Client, credentials: &XtreamCredentials) -> Result<XmltvFeed> {
+    let url = build_xmltv_url(credentials)?;
+    xmltv::fetch_xmltv(client, &url).await
+}
+
+pub fn build_xmltv_url(credentials: &XtreamCredentials) -> Result<Url> {
     let mut url = normalized_base_url(&credentials.base_url)?;
     url.set_path("xmltv.php");
     {
@@ -189,18 +171,7 @@ pub async fn fetch_xmltv(
         query.append_pair("password", &credentials.password);
     }
 
-    let body = client
-        .get(url)
-        .timeout(XMLTV_REQUEST_TIMEOUT)
-        .send()
-        .await
-        .context("unable to request XMLTV feed")?
-        .error_for_status()
-        .context("provider rejected XMLTV request")?
-        .text()
-        .await
-        .context("unable to download XMLTV response body")?;
-    parse_xmltv(&body)
+    Ok(url)
 }
 
 pub fn build_live_stream_url(
@@ -279,160 +250,9 @@ fn json_value_to_string(value: &serde_json::Value) -> String {
     }
 }
 
-fn parse_xmltv(xml: &str) -> Result<Vec<XtreamProgramme>> {
-    let mut reader = Reader::from_str(xml);
-    reader.config_mut().trim_text(true);
-    let mut programmes = Vec::new();
-    let mut current_programme: Option<PendingProgramme> = None;
-    let mut skipped_programmes = 0usize;
-
-    loop {
-        match reader.read_event() {
-            Ok(Event::Start(event)) if event.name().as_ref() == b"programme" => {
-                let mut pending = PendingProgramme::default();
-                for attribute in event.attributes().with_checks(false).flatten() {
-                    let value = String::from_utf8_lossy(attribute.value.as_ref()).into_owned();
-                    match attribute.key.as_ref() {
-                        b"channel" => pending.channel_key = value,
-                        b"start" => pending.start_raw = value,
-                        b"stop" => pending.end_raw = value,
-                        _ => {}
-                    }
-                }
-                current_programme = Some(pending);
-            }
-            Ok(Event::Start(event)) if event.name().as_ref() == b"title" => {
-                if let Some(programme) = current_programme.as_mut() {
-                    programme.title = reader
-                        .read_text(QName(b"title"))
-                        .context("unable to decode XMLTV title")?
-                        .trim()
-                        .to_string();
-                }
-            }
-            Ok(Event::Start(event)) if event.name().as_ref() == b"desc" => {
-                if let Some(programme) = current_programme.as_mut() {
-                    let description = reader
-                        .read_text(QName(b"desc"))
-                        .context("unable to decode XMLTV description")?
-                        .trim()
-                        .to_string();
-                    programme.description = (!description.is_empty()).then_some(description);
-                }
-            }
-            Ok(Event::End(event)) if event.name().as_ref() == b"programme" => {
-                if let Some(programme) = current_programme.take() {
-                    match finalize_programme(programme) {
-                        Some(programme) => programmes.push(programme),
-                        None => skipped_programmes += 1,
-                    }
-                }
-            }
-            Ok(Event::Eof) => break,
-            Ok(_) => {}
-            Err(error) => return Err(anyhow!("unable to parse XMLTV: {error}")),
-        }
-    }
-
-    if skipped_programmes > 0 {
-        warn!("skipped {skipped_programmes} malformed XMLTV programme entries");
-    }
-
-    Ok(programmes)
-}
-
-fn finalize_programme(programme: PendingProgramme) -> Option<XtreamProgramme> {
-    if programme.channel_key.is_empty() || programme.title.is_empty() {
-        return None;
-    }
-
-    let start_at = match parse_xmltv_timestamp(&programme.start_raw) {
-        Ok(value) => value,
-        Err(error) => {
-            warn!(
-                channel_key = programme.channel_key,
-                start = programme.start_raw,
-                "skipping XMLTV programme due to invalid start timestamp: {error}"
-            );
-            return None;
-        }
-    };
-
-    let end_at = match parse_xmltv_timestamp(&programme.end_raw) {
-        Ok(value) => value,
-        Err(error) => {
-            warn!(
-                channel_key = programme.channel_key,
-                stop = programme.end_raw,
-                "skipping XMLTV programme due to invalid stop timestamp: {error}"
-            );
-            return None;
-        }
-    };
-
-    Some(XtreamProgramme {
-        channel_key: programme.channel_key,
-        title: programme.title,
-        description: programme.description,
-        start_at,
-        end_at,
-    })
-}
-
-fn parse_xmltv_timestamp(value: &str) -> Result<DateTime<Utc>> {
-    if value.len() < 14 {
-        return Err(anyhow!("invalid XMLTV timestamp {value}"));
-    }
-
-    let normalized = if value.contains(' ') {
-        value.to_string()
-    } else {
-        format!("{} +0000", &value[..14])
-    };
-
-    let parsed = DateTime::parse_from_str(&normalized, "%Y%m%d%H%M%S %z")
-        .or_else(|_| DateTime::parse_from_str(&normalized, "%Y%m%d%H%M %z"))?;
-    Ok(parsed.with_timezone(&Utc))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn parses_xmltv_programmes() {
-        let xml = r#"
-        <tv>
-          <programme start="20260404120000 +0000" stop="20260404130000 +0000" channel="channel-1">
-            <title>Lunch News</title>
-            <desc>Midday headlines.</desc>
-          </programme>
-        </tv>
-        "#;
-
-        let programmes = parse_xmltv(xml).expect("xml should parse");
-        assert_eq!(programmes.len(), 1);
-        assert_eq!(programmes[0].title, "Lunch News");
-    }
-
-    #[test]
-    fn skips_invalid_xmltv_programmes_without_failing_the_feed() {
-        let xml = r#"
-        <tv>
-          <programme start="invalid" stop="20260404130000 +0000" channel="channel-1">
-            <title>Broken row</title>
-          </programme>
-          <programme start="20260404140000 +0000" stop="20260404150000 +0000" channel="channel-2">
-            <title>Working row</title>
-          </programme>
-        </tv>
-        "#;
-
-        let programmes = parse_xmltv(xml).expect("xml should parse");
-        assert_eq!(programmes.len(), 1);
-        assert_eq!(programmes[0].channel_key, "channel-2");
-        assert_eq!(programmes[0].title, "Working row");
-    }
 
     #[test]
     fn builds_catchup_urls() {

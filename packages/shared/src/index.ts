@@ -28,6 +28,27 @@ export type AuthSession = {
 
 export type ProviderStatus = "missing" | "valid" | "error" | "syncing";
 
+export type EpgSource = {
+  id: string;
+  url: string;
+  priority: number;
+  enabled: boolean;
+  sourceKind: string;
+  lastSyncAt: string | null;
+  lastSyncError: string | null;
+  lastProgramCount: number | null;
+  lastMatchedCount: number | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type SaveEpgSourceInput = {
+  id?: string;
+  url: string;
+  priority: number;
+  enabled: boolean;
+};
+
 export type ProviderProfile = {
   id: string;
   providerType: "xtreme";
@@ -40,6 +61,7 @@ export type ProviderProfile = {
   lastSyncError: string | null;
   createdAt: string;
   updatedAt: string;
+  epgSources: EpgSource[];
 };
 
 export type SyncJob = {
@@ -141,6 +163,7 @@ export type SaveProviderPayload = {
   username: string;
   password: string;
   outputFormat: "m3u8" | "ts";
+  epgSources: SaveEpgSourceInput[];
 };
 
 export type ValidateProviderResponse = {

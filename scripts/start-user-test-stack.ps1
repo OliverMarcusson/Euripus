@@ -51,6 +51,71 @@ function Wait-ForHttpEndpoint {
     throw "$Name did not become ready at $Url within $TimeoutSeconds seconds."
 }
 
+function Get-ComposeServiceContainerId {
+    param([string]$ServiceName)
+
+    $containerId = (& docker compose ps -q $ServiceName 2>$null | Select-Object -First 1)
+    if (-not $containerId) {
+        return $null
+    }
+
+    return $containerId.Trim()
+}
+
+function Get-ContainerStatus {
+    param([string]$ContainerId)
+
+    if (-not $ContainerId) {
+        return $null
+    }
+
+    try {
+        return (& docker inspect -f "{{.State.Status}}" $ContainerId 2>$null | Select-Object -First 1).Trim()
+    } catch {
+        return $null
+    }
+}
+
+function Get-ServerLogs {
+    return (& docker compose logs --tail 200 server 2>&1 | Out-String)
+}
+
+function Wait-ForApiHealth {
+    param([int]$TimeoutSeconds = 180)
+
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    $resetAttempted = $false
+
+    while ((Get-Date) -lt $deadline) {
+        try {
+            Invoke-WebRequest -Uri "http://127.0.0.1:8080/health" -UseBasicParsing -TimeoutSec 5 | Out-Null
+            return
+        } catch {
+            $serverContainerId = Get-ComposeServiceContainerId -ServiceName "server"
+            $serverStatus = Get-ContainerStatus -ContainerId $serverContainerId
+
+            if ($serverStatus -eq "exited") {
+                $logs = Get-ServerLogs
+                if ((-not $resetAttempted) -and $logs -match "migration .* previously applied but has been modified") {
+                    $resetAttempted = $true
+                    Write-Host "Detected local migration checksum drift in the user-test database. Recreating the local user-test database volume..." -ForegroundColor Yellow
+                    & docker compose down -v | Out-Host
+                    & docker compose up --build -d postgres server | Out-Host
+                    Start-Sleep -Seconds 2
+                    continue
+                }
+
+                throw "API container exited before becoming healthy.`n`nServer logs:`n$logs"
+            }
+        }
+
+        Start-Sleep -Milliseconds 750
+    }
+
+    $logs = Get-ServerLogs
+    throw "API did not become ready at http://127.0.0.1:8080/health within $TimeoutSeconds seconds.`n`nServer logs:`n$logs"
+}
+
 function Test-TrackedProcessRunning {
     param([pscustomobject]$ProcessInfo)
 
@@ -121,7 +186,7 @@ try {
     & docker @composeArgs | Out-Host
 
     Write-Host "Waiting for API health..." -ForegroundColor Cyan
-    Wait-ForHttpEndpoint -Name "API" -Url "http://127.0.0.1:8080/health" -TimeoutSeconds 180
+    Wait-ForApiHealth -TimeoutSeconds 180
 
     Write-Host "Starting desktop web client..." -ForegroundColor Cyan
     $webProcess = Start-TrackedProcess `
