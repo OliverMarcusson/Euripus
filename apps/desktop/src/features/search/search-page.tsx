@@ -1,22 +1,23 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { useDeferredValue, useState } from "react";
+import { useState } from "react";
 import { Play, Search as SearchIcon } from "lucide-react";
 import { searchCatalog, startChannelPlayback, startProgramPlayback } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { useDebounce } from "@/hooks/use-debounce";
 import { usePlayerStore } from "@/store/player-store";
 
 export function SearchPage() {
   const [query, setQuery] = useState("");
-  const deferredQuery = useDeferredValue(query);
+  const debouncedQuery = useDebounce(query, 300);
   const setLoading = usePlayerStore((state) => state.setLoading);
   const setSource = usePlayerStore((state) => state.setSource);
   const searchQuery = useQuery({
-    queryKey: ["search", deferredQuery],
-    queryFn: () => searchCatalog(deferredQuery),
-    enabled: deferredQuery.trim().length > 1,
+    queryKey: ["search", debouncedQuery],
+    queryFn: () => searchCatalog(debouncedQuery),
+    enabled: debouncedQuery.trim().length > 1,
   });
   const playChannelMutation = useMutation({
     mutationFn: startChannelPlayback,

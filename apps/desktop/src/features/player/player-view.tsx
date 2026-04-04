@@ -2,7 +2,6 @@ import { useEffect, useRef } from "react";
 import Hls from "hls.js";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { usePlayerStore } from "@/store/player-store";
 
 export function PlayerView() {
@@ -15,6 +14,9 @@ export function PlayerView() {
     if (!video || !source || source.kind === "unsupported") {
       return;
     }
+
+    video.removeAttribute("src");
+    video.load();
 
     if (source.kind === "hls" && Hls.isSupported()) {
       const hls = new Hls();
@@ -31,12 +33,12 @@ export function PlayerView() {
   }, [source]);
 
   return (
-    <Card className="h-full bg-transparent shadow-none">
-      <CardHeader>
-        <CardTitle>Now Playing</CardTitle>
-        <CardDescription>Browser-compatible playback for live TV and catch-up.</CardDescription>
-      </CardHeader>
-      <CardContent className="flex h-full flex-col gap-4">
+    <div className="flex h-full flex-col">
+      <div className="flex flex-col gap-1.5 pb-6">
+        <h2 className="text-xl font-semibold tracking-tight">Now Playing</h2>
+        <p className="text-sm text-muted-foreground">Browser-compatible playback for live TV and catch-up.</p>
+      </div>
+      <div className="flex flex-1 flex-col gap-4">
         {source ? (
           <>
             <div className="flex flex-wrap items-center gap-2">
@@ -49,7 +51,7 @@ export function PlayerView() {
                 {source.unsupportedReason ?? "This provider stream is not browser-compatible in v1."}
               </div>
             ) : (
-              <video ref={videoRef} controls autoPlay className="aspect-video w-full rounded-xl bg-black" />
+              <video ref={videoRef} controls autoPlay className="aspect-video w-full rounded-xl bg-black" aria-label={`Playing ${source.title}`} />
             )}
             <Button variant="ghost" onClick={() => setSource(null)}>
               Clear player
@@ -61,8 +63,8 @@ export function PlayerView() {
             <p className="mt-2 text-sm text-muted-foreground">Playback sources appear here after a guide, favorites, or search action.</p>
           </div>
         )}
-      </CardContent>
-    </Card>
+      </div>
+    </div>
   );
 }
 

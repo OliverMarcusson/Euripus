@@ -6,6 +6,7 @@ import { addFavorite, getGuide, getGuideCategory, removeFavorite, startChannelPl
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
 import { usePlayerStore } from "@/store/player-store";
 
 const GUIDE_PAGE_SIZE = 40;
@@ -35,7 +36,29 @@ export function GuidePage() {
   const favoriteMutation = useMutation({
     mutationFn: async ({ channelId, favorite }: FavoriteMutationPayload) =>
       favorite ? removeFavorite(channelId) : addFavorite(channelId),
-    onSuccess: async () => {
+    onMutate: async ({ channelId, favorite }) => {
+      await queryClient.cancelQueries({ queryKey: ["guide"] });
+      await queryClient.cancelQueries({ queryKey: ["favorites"] });
+
+      queryClient.setQueriesData<{ pages: Array<{ entries: Array<{ channel: { id: string; isFavorite: boolean } }> }> }>(
+        { queryKey: ["guide", "category"] },
+        (old) => {
+          if (!old) return old;
+          return {
+            ...old,
+            pages: old.pages.map((page) => ({
+              ...page,
+              entries: page.entries.map((entry) =>
+                entry.channel.id === channelId
+                  ? { ...entry, channel: { ...entry.channel, isFavorite: !favorite } }
+                  : entry,
+              ),
+            })),
+          };
+        },
+      );
+    },
+    onSettled: async () => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["favorites"] }),
         queryClient.invalidateQueries({ queryKey: ["guide", "overview"] }),
@@ -74,19 +97,27 @@ export function GuidePage() {
           Refresh
         </Button>
       </div>
-      <div className="grid gap-4">
-        {categories.map((category) => (
-          <GuideCategorySection
-            key={category.id}
-            category={category}
-            open={openCategories.includes(category.id)}
-            onToggle={() => toggleCategory(category.id)}
-            onFavorite={(payload) => favoriteMutation.mutate(payload)}
-            onPlay={(channelId) => playMutation.mutate(channelId)}
-          />
-        ))}
-      </div>
-      {!guideQuery.isLoading && !categories.length ? (
+      {guideQuery.isPending ? (
+        <div className="grid gap-4">
+          {Array.from({ length: 5 }).map((_, i) => (
+            <Skeleton key={i} className="h-24 w-full rounded-xl" />
+          ))}
+        </div>
+      ) : (
+        <div className="grid gap-4">
+          {categories.map((category) => (
+            <GuideCategorySection
+              key={category.id}
+              category={category}
+              open={openCategories.includes(category.id)}
+              onToggle={() => toggleCategory(category.id)}
+              onFavorite={(payload) => favoriteMutation.mutate(payload)}
+              onPlay={(channelId) => playMutation.mutate(channelId)}
+            />
+          ))}
+        </div>
+      )}
+      {!guideQuery.isPending && !categories.length ? (
         <Card>
           <CardHeader>
             <CardTitle>No guide data yet</CardTitle>
@@ -131,14 +162,26 @@ function GuideCategorySection({ category, open, onToggle, onFavorite, onPlay }: 
       </CardHeader>
       {open ? (
         <CardContent className="flex flex-col gap-3 pt-0">
-          {isInitialLoading ? <p className="text-sm text-muted-foreground">Loading channels...</p> : null}
+          {isInitialLoading ? (
+            <div className="flex flex-col gap-3">
+              {Array.from({ length: 3 }).map((_, i) => (
+                <div key={i} className="flex items-center gap-4 rounded-xl border border-border p-4">
+                  <Skeleton className="size-14 rounded-2xl" />
+                  <div className="flex flex-1 flex-col gap-2">
+                    <Skeleton className="h-5 w-48" />
+                    <Skeleton className="h-4 w-72" />
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : null}
           {categoryQuery.isError ? <p className="text-sm text-destructive">Unable to load this category right now.</p> : null}
           {hasEntries ? (
             <>
               {entries.map(({ channel, program }) => (
                 <div key={channel.id} className="flex items-center gap-4 rounded-xl border border-border bg-card/70 p-4 max-md:flex-col max-md:items-start">
                   <div className="flex flex-1 items-center gap-4">
-                    <div className="flex size-14 items-center justify-center rounded-2xl bg-secondary text-lg font-semibold">
+                    <div className="flex size-14 items-center justify-center rounded-2xl bg-secondary text-lg font-semibold" aria-label={channel.name}>
                       {channel.name.slice(0, 2).toUpperCase()}
                     </div>
                     <div className="flex flex-col gap-1">

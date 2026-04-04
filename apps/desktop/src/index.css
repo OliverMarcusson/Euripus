@@ -44,6 +44,8 @@
   --border: oklch(0.86 0.009 225);
   --input: oklch(0.86 0.009 225);
   --ring: oklch(0.64 0.13 214);
+  /* Shell panels use rounded-[1.5rem]; inner cards use rounded-xl (~1.19rem).
+     Concentric border-radius: outer radius > inner radius + gap. */
   --radius: 0.95rem;
   --glass: color-mix(in oklab, white 82%, var(--background));
   --background-hero-primary: color-mix(in oklab, var(--primary) 22%, white);

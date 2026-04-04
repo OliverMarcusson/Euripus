@@ -1,8 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
 import { LaptopMinimal, Moon, Sun } from "lucide-react";
 import { getSessions, getRecents } from "@/lib/api";
-import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { formatDateTime } from "@/lib/utils";
 import type { ThemePreference } from "@/store/theme-store";
 import { useThemeStore } from "@/store/theme-store";
@@ -44,24 +44,26 @@ export function SettingsPage() {
           <CardDescription>Choose how Euripus should look on this device.</CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
-          <div className="flex flex-wrap gap-2 rounded-xl bg-secondary/60 p-1">
+          <ToggleGroup
+            type="single"
+            value={preference}
+            onValueChange={(v) => { if (v) setPreference(v as ThemePreference); }}
+            className="flex flex-wrap gap-2 rounded-xl bg-secondary/60 p-1"
+          >
             {themeOptions.map((option) => {
               const Icon = option.icon;
-              const active = preference === option.value;
               return (
-                <Button
+                <ToggleGroupItem
                   key={option.value}
+                  value={option.value}
                   className="min-w-32 flex-1 justify-start"
-                  variant={active ? "default" : "ghost"}
-                  type="button"
-                  onClick={() => setPreference(option.value)}
                 >
-                  <Icon data-icon="inline-start" />
+                  <Icon />
                   {option.label}
-                </Button>
+                </ToggleGroupItem>
               );
             })}
-          </div>
+          </ToggleGroup>
           <div className="rounded-xl border border-border bg-card/60 p-4">
             <p className="font-medium">Current behavior</p>
             <p className="mt-1 text-sm text-muted-foreground">
