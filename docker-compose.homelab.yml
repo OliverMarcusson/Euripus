@@ -1,13 +1,9 @@
 services:
   postgres:
-    image: postgres:17
+    image: docker.io/library/postgres:17
     restart: unless-stopped
     env_file:
       - apps/server/.env
-    environment:
-      POSTGRES_DB: ${POSTGRES_DB:-euripus}
-      POSTGRES_USER: ${POSTGRES_USER:-euripus}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-euripus}
     volumes:
       - homelab-postgres-data:/var/lib/postgresql/data
     healthcheck:

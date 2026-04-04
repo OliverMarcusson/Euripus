@@ -1,1 +1,4 @@
 /target
+/.env
+/.env.nordvpn
+/.env.nordvpn.server
