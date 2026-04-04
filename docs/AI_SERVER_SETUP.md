@@ -17,9 +17,11 @@ Bring up the Euripus server and PostgreSQL using Docker Compose so the desktop a
 
 ## Files To Know
 
-- Root Compose file: `docker-compose.yml`
+- Local/dev Compose file: `docker-compose.yml`
+- Homelab Compose file: `docker-compose.homelab.yml`
 - Server env template: `apps/server/.env.example`
 - Server image build: `apps/server/Dockerfile`
+- Web image build: `apps/web/Dockerfile`
 - Database migration: `apps/server/migrations/0001_init.sql`
 
 ## Required Environment Values
@@ -38,6 +40,12 @@ Create `apps/server/.env` from `apps/server/.env.example` and replace the placeh
   Default `15`.
 - `APP_REFRESH_TOKEN_DAYS`
   Default `30`.
+- `APP_ALLOWED_ORIGINS`
+  Comma-separated origin allow-list for CORS. Include your browser origin and any local development origins you still need.
+- `APP_PUBLIC_ORIGIN`
+  Public HTTPS origin exposed by your reverse proxy. Used to decide secure browser cookie behavior.
+- `APP_BROWSER_COOKIE_SECURE`
+  Keep `true` for HTTPS deployments behind a reverse proxy.
 - `RUST_LOG`
   Default `info`.
 
@@ -69,11 +77,12 @@ Create `apps/server/.env` from `apps/server/.env.example` and replace the placeh
 
 ## Reverse Proxy Guidance
 
-If exposing Euripus beyond a private network, put a reverse proxy in front of the API.
+If exposing Euripus as a browser service, put a reverse proxy in front of the `web` service from `docker-compose.homelab.yml`.
 
 - Terminate TLS at the proxy.
-- Restrict the API to HTTPS only.
+- Route a dedicated host to the `web` service upstream.
 - Forward `Authorization` headers unchanged.
+- Forward `X-Forwarded-For`, `X-Forwarded-Proto`, and `X-Forwarded-Host`.
 - Keep request body size moderate because auth and provider endpoints are small.
 - Consider IP allow-lists or VPN access for private self-hosting.
 
@@ -104,4 +113,3 @@ Keep the API and database separate conceptually even if they share one host now.
 - Add log shipping or structured log collection.
 - Add per-user rate limiting at the reverse proxy.
 - Add monitoring for `5xx` responses and sync job failures.
-

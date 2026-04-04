@@ -1,34 +1,25 @@
 import { invoke } from "@tauri-apps/api/core";
 
-const FALLBACK_KEY = "euripus.refresh-token";
-
-function canUseTauri() {
+export function isTauriRuntime() {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }
 
 export async function loadRefreshToken() {
-  if (canUseTauri()) {
+  if (isTauriRuntime()) {
     return invoke<string | null>("load_refresh_token");
   }
 
-  return window.localStorage.getItem(FALLBACK_KEY);
+  return null;
 }
 
 export async function saveRefreshToken(token: string) {
-  if (canUseTauri()) {
+  if (isTauriRuntime()) {
     await invoke("save_refresh_token", { token });
-    return;
   }
-
-  window.localStorage.setItem(FALLBACK_KEY, token);
 }
 
 export async function clearRefreshToken() {
-  if (canUseTauri()) {
+  if (isTauriRuntime()) {
     await invoke("clear_refresh_token");
-    return;
   }
-
-  window.localStorage.removeItem(FALLBACK_KEY);
 }
-

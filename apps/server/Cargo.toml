@@ -8,8 +8,10 @@ aes-gcm = "0.10.3"
 anyhow = "1.0.100"
 argon2 = "0.5.3"
 axum = { version = "0.8.6", features = ["macros"] }
+axum-extra = { version = "0.10.3", features = ["cookie"] }
 base64 = "0.22.1"
 chrono = { version = "0.4.42", features = ["serde"] }
+cookie = "0.18.1"
 dotenvy = "0.15.7"
 flate2 = "1.1.4"
 jsonwebtoken = { version = "10.1.0", features = ["rust_crypto"] }

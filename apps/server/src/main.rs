@@ -21,23 +21,28 @@ use argon2::{
 use axum::{
     Json, Router,
     extract::{Path, Query, State},
-    http::{HeaderMap, StatusCode, header},
+    http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode, header},
     response::{IntoResponse, Response},
     routing::{delete, get, post, put},
 };
+use axum_extra::extract::cookie::{Cookie, CookieJar, SameSite};
 use base64::{
     Engine as _,
     engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
 };
 use chrono::{DateTime, Duration as ChronoDuration, Local, NaiveDate, Timelike, Utc};
 use config::Config;
+use cookie::time::Duration as CookieDuration;
 use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation, decode, encode};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::{FromRow, PgPool, Postgres, Transaction, postgres::PgPoolOptions};
 use tokio::task::{JoinHandle, JoinSet};
-use tower_http::{cors::CorsLayer, trace::TraceLayer};
+use tower_http::{
+    cors::{AllowOrigin, CorsLayer},
+    trace::TraceLayer,
+};
 use tracing::{error, info};
 use uuid::Uuid;
 use xmltv::{XmltvChannel, XmltvFeed, XmltvProgramme};
@@ -129,8 +134,21 @@ struct UserResponse {
 struct AuthSessionResponse {
     user: UserResponse,
     access_token: String,
-    refresh_token: String,
     expires_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DesktopAuthSessionResponse {
+    #[serde(flatten)]
+    session: AuthSessionResponse,
+    refresh_token: String,
+}
+
+#[derive(Debug)]
+struct IssuedSession {
+    session: AuthSessionResponse,
+    refresh_token: String,
 }
 
 #[derive(Debug, Serialize, FromRow)]
@@ -506,6 +524,9 @@ const FULL_SYNC_TOTAL_PHASES: i32 = 7;
 const EPG_SYNC_TOTAL_PHASES: i32 = 5;
 const SEARCH_DEFAULT_LIMIT: i64 = 30;
 const SEARCH_MAX_LIMIT: i64 = 100;
+const REFRESH_COOKIE_NAME: &str = "euripus.refresh";
+const CSRF_COOKIE_NAME: &str = "euripus.csrf";
+const CSRF_HEADER_NAME: &str = "x-csrf-token";
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -544,12 +565,31 @@ async fn main() -> Result<()> {
     spawn_periodic_sync_worker(periodic_state);
 
     let bind_address: SocketAddr = state.config.bind_address;
+    let cors = build_cors_layer(&state.config)?;
+    if let Some(public_origin) = state.config.public_origin.as_ref() {
+        info!("Browser public origin configured as {public_origin}");
+    }
     let app = Router::new()
         .route("/health", get(health))
-        .route("/auth/register", post(register))
-        .route("/auth/login", post(login))
-        .route("/auth/refresh", post(refresh_session))
-        .route("/auth/logout", post(logout))
+        .merge(legacy_auth_router())
+        .merge(shared_api_router())
+        .nest("/api", browser_api_router())
+        .with_state(state)
+        .layer(cors)
+        .layer(TraceLayer::new_for_http());
+
+    info!("Euripus server listening on {bind_address}");
+    let listener = tokio::net::TcpListener::bind(bind_address).await?;
+    axum::serve(listener, app).await?;
+    Ok(())
+}
+
+async fn health() -> StatusCode {
+    StatusCode::NO_CONTENT
+}
+
+fn shared_api_router() -> Router<AppState> {
+    Router::new()
         .route("/me", get(me))
         .route("/sessions", get(list_sessions))
         .route("/sessions/{id}", delete(revoke_session))
@@ -577,25 +617,59 @@ async fn main() -> Result<()> {
         .route("/recents", get(list_recents))
         .route("/playback/channel/{id}", post(play_channel))
         .route("/playback/program/{id}", post(play_program))
-        .with_state(state)
-        .layer(CorsLayer::permissive())
-        .layer(TraceLayer::new_for_http());
-
-    info!("Euripus server listening on {bind_address}");
-    let listener = tokio::net::TcpListener::bind(bind_address).await?;
-    axum::serve(listener, app).await?;
-    Ok(())
 }
 
-async fn health() -> StatusCode {
-    StatusCode::NO_CONTENT
+fn legacy_auth_router() -> Router<AppState> {
+    Router::new()
+        .route("/auth/register", post(register))
+        .route("/auth/login", post(login))
+        .route("/auth/refresh", post(refresh_session))
+        .route("/auth/logout", post(logout))
+}
+
+fn browser_api_router() -> Router<AppState> {
+    Router::new()
+        .route("/health", get(health))
+        .route("/auth/register", post(browser_register))
+        .route("/auth/login", post(browser_login))
+        .route("/auth/refresh", post(browser_refresh_session))
+        .route("/auth/logout", post(browser_logout))
+        .merge(shared_api_router())
+}
+
+fn build_cors_layer(config: &Config) -> Result<CorsLayer> {
+    let allowed_origins = config
+        .allowed_origins
+        .iter()
+        .map(|origin| {
+            HeaderValue::from_str(origin).with_context(|| {
+                format!("APP_ALLOWED_ORIGINS contains an invalid origin: {origin}")
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    Ok(CorsLayer::new()
+        .allow_credentials(true)
+        .allow_methods([
+            Method::GET,
+            Method::POST,
+            Method::PUT,
+            Method::DELETE,
+            Method::OPTIONS,
+        ])
+        .allow_headers([
+            header::AUTHORIZATION,
+            header::CONTENT_TYPE,
+            HeaderName::from_static(CSRF_HEADER_NAME),
+        ])
+        .allow_origin(AllowOrigin::list(allowed_origins)))
 }
 
 async fn register(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(payload): Json<CredentialsPayload>,
-) -> ApiResult<AuthSessionResponse> {
+) -> ApiResult<DesktopAuthSessionResponse> {
     let username = payload.username.trim().to_lowercase();
     if username.len() < 3 {
         return Err(AppError::BadRequest(
@@ -623,14 +697,14 @@ async fn register(
     })?;
 
     let session = create_session(&state, &headers, &user).await?;
-    Ok(Json(session))
+    Ok(Json(desktop_auth_session_response(session)))
 }
 
 async fn login(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(payload): Json<CredentialsPayload>,
-) -> ApiResult<AuthSessionResponse> {
+) -> ApiResult<DesktopAuthSessionResponse> {
     let username = payload.username.trim().to_lowercase();
     let user = sqlx::query_as::<_, UserRecord>(
         r#"SELECT id, username, password_hash, created_at FROM users WHERE username = $1"#,
@@ -642,75 +716,107 @@ async fn login(
 
     verify_password(&user.password_hash, &payload.password)?;
     let session = create_session(&state, &headers, &user).await?;
-    Ok(Json(session))
+    Ok(Json(desktop_auth_session_response(session)))
 }
 
 async fn refresh_session(
     State(state): State<AppState>,
     Json(payload): Json<RefreshPayload>,
-) -> ApiResult<AuthSessionResponse> {
-    let refresh_hash = hash_refresh_token(&payload.refresh_token);
-    let session = sqlx::query_as::<_, SessionRecord>(
-        r#"
-        SELECT id, user_id, refresh_token_hash, user_agent, created_at, expires_at, revoked_at, last_used_at
-        FROM sessions
-        WHERE refresh_token_hash = $1
-        "#,
-    )
-    .bind(&refresh_hash)
-    .fetch_optional(&state.pool)
-    .await?
-    .ok_or(AppError::Unauthorized)?;
-
-    if session.revoked_at.is_some() || session.expires_at < Utc::now() {
-        return Err(AppError::Unauthorized);
-    }
-
-    let user = sqlx::query_as::<_, UserRecord>(
-        r#"SELECT id, username, password_hash, created_at FROM users WHERE id = $1"#,
-    )
-    .bind(session.user_id)
-    .fetch_one(&state.pool)
-    .await?;
-
-    let next_refresh_token = generate_refresh_token();
-    let next_refresh_hash = hash_refresh_token(&next_refresh_token);
-    sqlx::query(
-        r#"
-        UPDATE sessions
-        SET refresh_token_hash = $1, last_used_at = NOW()
-        WHERE id = $2
-        "#,
-    )
-    .bind(next_refresh_hash)
-    .bind(session.id)
-    .execute(&state.pool)
-    .await?;
-
-    let (access_token, expires_at) = create_access_token(&state, &user, session.id)?;
-    Ok(Json(AuthSessionResponse {
-        user: UserResponse {
-            id: user.id,
-            username: user.username,
-            created_at: user.created_at,
-        },
-        access_token,
-        refresh_token: next_refresh_token,
-        expires_at,
-    }))
+) -> ApiResult<DesktopAuthSessionResponse> {
+    let session = refresh_session_from_token(&state, &payload.refresh_token).await?;
+    Ok(Json(desktop_auth_session_response(session)))
 }
 
 async fn logout(
     State(state): State<AppState>,
     Json(payload): Json<RefreshPayload>,
 ) -> Result<StatusCode, AppError> {
-    let refresh_hash = hash_refresh_token(&payload.refresh_token);
-    sqlx::query("UPDATE sessions SET revoked_at = NOW() WHERE refresh_token_hash = $1")
-        .bind(refresh_hash)
-        .execute(&state.pool)
-        .await?;
+    revoke_session_by_refresh_token(&state, &payload.refresh_token).await?;
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+async fn browser_register(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    jar: CookieJar,
+    Json(payload): Json<CredentialsPayload>,
+) -> Result<(CookieJar, Json<AuthSessionResponse>), AppError> {
+    let username = payload.username.trim().to_lowercase();
+    if username.len() < 3 {
+        return Err(AppError::BadRequest(
+            "Username must be at least 3 characters".to_string(),
+        ));
+    }
+
+    let password_hash = hash_password(&payload.password)?;
+    let user = sqlx::query_as::<_, UserRecord>(
+        r#"
+        INSERT INTO users (username, password_hash)
+        VALUES ($1, $2)
+        RETURNING id, username, password_hash, created_at
+        "#,
+    )
+    .bind(&username)
+    .bind(password_hash)
+    .fetch_one(&state.pool)
+    .await
+    .map_err(|error| match error {
+        sqlx::Error::Database(database_error) if database_error.is_unique_violation() => {
+            AppError::BadRequest("That username is already taken".to_string())
+        }
+        other => AppError::Internal(anyhow!(other)),
+    })?;
+
+    let session = create_session(&state, &headers, &user).await?;
+    Ok(browser_auth_response(&state, jar, session))
+}
+
+async fn browser_login(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    jar: CookieJar,
+    Json(payload): Json<CredentialsPayload>,
+) -> Result<(CookieJar, Json<AuthSessionResponse>), AppError> {
+    let username = payload.username.trim().to_lowercase();
+    let user = sqlx::query_as::<_, UserRecord>(
+        r#"SELECT id, username, password_hash, created_at FROM users WHERE username = $1"#,
+    )
+    .bind(&username)
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or_else(|| AppError::BadRequest("Invalid username or password".to_string()))?;
+
+    verify_password(&user.password_hash, &payload.password)?;
+    let session = create_session(&state, &headers, &user).await?;
+    Ok(browser_auth_response(&state, jar, session))
+}
+
+async fn browser_refresh_session(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    headers: HeaderMap,
+) -> Result<(CookieJar, Json<AuthSessionResponse>), AppError> {
+    validate_browser_csrf(&jar, &headers)?;
+    let refresh_token = read_browser_refresh_token(&jar)?;
+    let session = refresh_session_from_token(&state, &refresh_token).await?;
+    Ok(browser_auth_response(&state, jar, session))
+}
+
+async fn browser_logout(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    headers: HeaderMap,
+) -> Result<(CookieJar, StatusCode), AppError> {
+    validate_browser_csrf(&jar, &headers)?;
+    if let Some(refresh_cookie) = jar.get(REFRESH_COOKIE_NAME) {
+        revoke_session_by_refresh_token(&state, refresh_cookie.value()).await?;
+    }
+
+    Ok((
+        clear_browser_auth_cookies(&state, jar),
+        StatusCode::NO_CONTENT,
+    ))
 }
 
 async fn me(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<UserResponse> {
@@ -2284,7 +2390,7 @@ async fn create_session(
     state: &AppState,
     headers: &HeaderMap,
     user: &UserRecord,
-) -> Result<AuthSessionResponse, AppError> {
+) -> Result<IssuedSession, AppError> {
     let refresh_token = generate_refresh_token();
     let refresh_hash = hash_refresh_token(&refresh_token);
     let expires_at = Utc::now() + ChronoDuration::days(state.config.refresh_token_days);
@@ -2307,17 +2413,203 @@ async fn create_session(
     .fetch_one(&state.pool)
     .await?;
 
-    let (access_token, access_expires_at) = create_access_token(state, user, session.id)?;
-    Ok(AuthSessionResponse {
-        user: UserResponse {
-            id: user.id,
-            username: user.username.clone(),
-            created_at: user.created_at,
+    issue_session(state, user, session.id, refresh_token)
+}
+
+async fn refresh_session_from_token(
+    state: &AppState,
+    refresh_token: &str,
+) -> Result<IssuedSession, AppError> {
+    let session = get_valid_session_by_refresh_token(state, refresh_token).await?;
+    let user = sqlx::query_as::<_, UserRecord>(
+        r#"SELECT id, username, password_hash, created_at FROM users WHERE id = $1"#,
+    )
+    .bind(session.user_id)
+    .fetch_one(&state.pool)
+    .await?;
+
+    let next_refresh_token = generate_refresh_token();
+    let next_refresh_hash = hash_refresh_token(&next_refresh_token);
+    sqlx::query(
+        r#"
+        UPDATE sessions
+        SET refresh_token_hash = $1, last_used_at = NOW()
+        WHERE id = $2
+        "#,
+    )
+    .bind(next_refresh_hash)
+    .bind(session.id)
+    .execute(&state.pool)
+    .await?;
+
+    issue_session(state, &user, session.id, next_refresh_token)
+}
+
+async fn get_valid_session_by_refresh_token(
+    state: &AppState,
+    refresh_token: &str,
+) -> Result<SessionRecord, AppError> {
+    let refresh_hash = hash_refresh_token(refresh_token);
+    let session = sqlx::query_as::<_, SessionRecord>(
+        r#"
+        SELECT id, user_id, refresh_token_hash, user_agent, created_at, expires_at, revoked_at, last_used_at
+        FROM sessions
+        WHERE refresh_token_hash = $1
+        "#,
+    )
+    .bind(&refresh_hash)
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or(AppError::Unauthorized)?;
+
+    if session.revoked_at.is_some() || session.expires_at < Utc::now() {
+        return Err(AppError::Unauthorized);
+    }
+
+    Ok(session)
+}
+
+async fn revoke_session_by_refresh_token(
+    state: &AppState,
+    refresh_token: &str,
+) -> Result<(), AppError> {
+    let refresh_hash = hash_refresh_token(refresh_token);
+    sqlx::query("UPDATE sessions SET revoked_at = NOW() WHERE refresh_token_hash = $1")
+        .bind(refresh_hash)
+        .execute(&state.pool)
+        .await?;
+
+    Ok(())
+}
+
+fn issue_session(
+    state: &AppState,
+    user: &UserRecord,
+    session_id: Uuid,
+    refresh_token: String,
+) -> Result<IssuedSession, AppError> {
+    let (access_token, access_expires_at) = create_access_token(state, user, session_id)?;
+    Ok(IssuedSession {
+        session: AuthSessionResponse {
+            user: UserResponse {
+                id: user.id,
+                username: user.username.clone(),
+                created_at: user.created_at,
+            },
+            access_token,
+            expires_at: access_expires_at,
         },
-        access_token,
         refresh_token,
-        expires_at: access_expires_at,
     })
+}
+
+fn desktop_auth_session_response(session: IssuedSession) -> DesktopAuthSessionResponse {
+    DesktopAuthSessionResponse {
+        session: session.session,
+        refresh_token: session.refresh_token,
+    }
+}
+
+fn browser_auth_response(
+    state: &AppState,
+    jar: CookieJar,
+    issued_session: IssuedSession,
+) -> (CookieJar, Json<AuthSessionResponse>) {
+    let csrf_token = generate_refresh_token();
+    let jar = set_browser_auth_cookies(state, jar, &issued_session.refresh_token, &csrf_token);
+    (jar, Json(issued_session.session))
+}
+
+fn set_browser_auth_cookies(
+    state: &AppState,
+    jar: CookieJar,
+    refresh_token: &str,
+    csrf_token: &str,
+) -> CookieJar {
+    let refresh_cookie = build_refresh_cookie(state, refresh_token.to_string());
+    let csrf_cookie = build_csrf_cookie(state, csrf_token.to_string());
+    jar.add(refresh_cookie).add(csrf_cookie)
+}
+
+fn clear_browser_auth_cookies(state: &AppState, jar: CookieJar) -> CookieJar {
+    jar.add(expired_refresh_cookie(state))
+        .add(expired_csrf_cookie(state))
+}
+
+fn read_browser_refresh_token(jar: &CookieJar) -> Result<String, AppError> {
+    jar.get(REFRESH_COOKIE_NAME)
+        .map(|cookie| cookie.value().to_string())
+        .ok_or(AppError::Unauthorized)
+}
+
+fn validate_browser_csrf(jar: &CookieJar, headers: &HeaderMap) -> Result<(), AppError> {
+    let csrf_cookie = jar.get(CSRF_COOKIE_NAME).ok_or(AppError::Unauthorized)?;
+    let csrf_header = headers
+        .get(HeaderName::from_static(CSRF_HEADER_NAME))
+        .and_then(|value| value.to_str().ok())
+        .ok_or(AppError::Unauthorized)?;
+
+    if csrf_cookie.value() != csrf_header {
+        return Err(AppError::Unauthorized);
+    }
+
+    Ok(())
+}
+
+fn build_refresh_cookie(state: &AppState, value: String) -> Cookie<'static> {
+    let mut builder = Cookie::build((REFRESH_COOKIE_NAME, value))
+        .http_only(true)
+        .path("/api/auth")
+        .same_site(SameSite::Lax)
+        .max_age(CookieDuration::days(state.config.refresh_token_days));
+
+    if state.config.browser_cookie_secure {
+        builder = builder.secure(true);
+    }
+
+    builder.build()
+}
+
+fn build_csrf_cookie(state: &AppState, value: String) -> Cookie<'static> {
+    let mut builder = Cookie::build((CSRF_COOKIE_NAME, value))
+        .http_only(false)
+        .path("/")
+        .same_site(SameSite::Lax)
+        .max_age(CookieDuration::days(state.config.refresh_token_days));
+
+    if state.config.browser_cookie_secure {
+        builder = builder.secure(true);
+    }
+
+    builder.build()
+}
+
+fn expired_refresh_cookie(state: &AppState) -> Cookie<'static> {
+    let mut builder = Cookie::build((REFRESH_COOKIE_NAME, ""))
+        .http_only(true)
+        .path("/api/auth")
+        .same_site(SameSite::Lax)
+        .max_age(CookieDuration::seconds(0));
+
+    if state.config.browser_cookie_secure {
+        builder = builder.secure(true);
+    }
+
+    builder.build()
+}
+
+fn expired_csrf_cookie(state: &AppState) -> Cookie<'static> {
+    let mut builder = Cookie::build((CSRF_COOKIE_NAME, ""))
+        .http_only(false)
+        .path("/")
+        .same_site(SameSite::Lax)
+        .max_age(CookieDuration::seconds(0));
+
+    if state.config.browser_cookie_secure {
+        builder = builder.secure(true);
+    }
+
+    builder.build()
 }
 
 fn create_access_token(
