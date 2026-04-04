@@ -51,6 +51,15 @@ Use `docker-compose.homelab.yml` for the browser-first self-hosted deployment:
 
 The `web` service is the only public upstream. It serves the SPA, forwards `/api/*` to the Rust backend, and keeps PostgreSQL private inside the Compose network.
 
+To route Euripus server-side traffic through NordVPN, add the override file:
+
+```bash
+cp apps/server/.env.nordvpn.example apps/server/.env.nordvpn
+docker compose -f docker-compose.homelab.yml -f docker-compose.homelab.nordvpn.yml up --build -d
+```
+
+That only affects server-originated traffic such as provider validation, sync jobs, and EPG fetches. Playback still goes directly from the client device to the IPTV provider.
+
 ## Operational Docs
 
 - Server setup handoff: `docs/AI_SERVER_SETUP.md`

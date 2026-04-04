@@ -19,7 +19,9 @@ Bring up the Euripus server and PostgreSQL using Docker Compose so the desktop a
 
 - Local/dev Compose file: `docker-compose.yml`
 - Homelab Compose file: `docker-compose.homelab.yml`
+- NordVPN homelab override: `docker-compose.homelab.nordvpn.yml`
 - Server env template: `apps/server/.env.example`
+- NordVPN env template: `apps/server/.env.nordvpn.example`
 - Server image build: `apps/server/Dockerfile`
 - Web image build: `apps/web/Dockerfile`
 - Database migration: `apps/server/migrations/0001_init.sql`
@@ -46,6 +48,16 @@ Create `apps/server/.env` from `apps/server/.env.example` and replace the placeh
   Public HTTPS origin exposed by your reverse proxy. Used to decide secure browser cookie behavior.
 - `APP_BROWSER_COOKIE_SECURE`
   Keep `true` for HTTPS deployments behind a reverse proxy.
+- `VPN_TYPE`
+  Optional. Set to `openvpn` or `wireguard` in `apps/server/.env.nordvpn` when using the NordVPN Compose override.
+- `OPENVPN_USER`
+  Optional. NordVPN OpenVPN service credential username.
+- `OPENVPN_PASSWORD`
+  Optional. NordVPN OpenVPN service credential password.
+- `WIREGUARD_PRIVATE_KEY`
+  Optional. NordVPN WireGuard private key.
+- `SERVER_COUNTRIES`
+  Optional. Comma-separated preferred NordVPN countries.
 - `RUST_LOG`
   Default `info`.
 
@@ -85,6 +97,16 @@ If exposing Euripus as a browser service, put a reverse proxy in front of the `w
 - Forward `X-Forwarded-For`, `X-Forwarded-Proto`, and `X-Forwarded-Host`.
 - Keep request body size moderate because auth and provider endpoints are small.
 - Consider IP allow-lists or VPN access for private self-hosting.
+
+## Optional NordVPN Container Routing
+
+If you want the Euripus server to perform provider validation, sync jobs, and EPG fetches through NordVPN, use:
+
+`docker compose -f docker-compose.homelab.yml -f docker-compose.homelab.nordvpn.yml up --build -d`
+
+That override runs a Gluetun container with NordVPN settings from `apps/server/.env.nordvpn` and shares its network namespace with the Rust server. The browser-facing `web` service then proxies `/api` traffic to the Gluetun container.
+
+This does not proxy the actual IPTV playback stream through NordVPN. Playback remains client-to-provider in v1.
 
 ## Operational Notes
 
