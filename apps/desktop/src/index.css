@@ -45,18 +45,53 @@
   --input: oklch(0.86 0.009 225);
   --ring: oklch(0.64 0.13 214);
   --radius: 0.95rem;
+  --glass: color-mix(in oklab, white 82%, var(--background));
+  --background-hero-primary: color-mix(in oklab, var(--primary) 22%, white);
+  --background-hero-accent: color-mix(in oklab, var(--accent) 20%, white);
+}
+
+.dark {
+  --background: oklch(0.2 0.018 247);
+  --foreground: oklch(0.95 0.01 110);
+  --card: oklch(0.26 0.018 247);
+  --card-foreground: oklch(0.95 0.01 110);
+  --popover: oklch(0.23 0.02 247);
+  --popover-foreground: oklch(0.95 0.01 110);
+  --primary: oklch(0.72 0.13 214);
+  --primary-foreground: oklch(0.19 0.02 247);
+  --secondary: oklch(0.31 0.018 224);
+  --secondary-foreground: oklch(0.95 0.01 110);
+  --muted: oklch(0.28 0.016 247);
+  --muted-foreground: oklch(0.74 0.014 235);
+  --accent: oklch(0.72 0.075 178);
+  --accent-foreground: oklch(0.19 0.018 205);
+  --destructive: oklch(0.69 0.19 23);
+  --border: oklch(0.36 0.015 235);
+  --input: oklch(0.34 0.015 235);
+  --ring: oklch(0.76 0.11 214);
+  --glass: color-mix(in oklab, black 46%, var(--card));
+  --background-hero-primary: color-mix(in oklab, var(--primary) 26%, black);
+  --background-hero-accent: color-mix(in oklab, var(--accent) 18%, black);
 }
 
 * {
   @apply border-border;
 }
 
+html {
+  @apply bg-background;
+}
+
 body {
   @apply min-h-screen bg-background text-foreground antialiased;
   font-family: "Segoe UI Variable", "Aptos", sans-serif;
   background-image:
-    radial-gradient(circle at top left, color-mix(in oklab, var(--primary) 22%, white) 0, transparent 30%),
-    radial-gradient(circle at bottom right, color-mix(in oklab, var(--accent) 20%, white) 0, transparent 26%);
+    radial-gradient(circle at top left, var(--background-hero-primary) 0, transparent 30%),
+    radial-gradient(circle at bottom right, var(--background-hero-accent) 0, transparent 26%);
+  transition:
+    background-color 180ms ease,
+    color 180ms ease,
+    background-image 180ms ease;
 }
 
 #root {
@@ -64,6 +99,6 @@ body {
 }
 
 .glass-panel {
-  background: color-mix(in oklab, white 82%, var(--background));
+  background: var(--glass);
   backdrop-filter: blur(16px);
 }

@@ -5,21 +5,29 @@ import { RouterProvider } from "@tanstack/react-router";
 import { Toaster } from "sonner";
 import { router } from "@/router";
 import { useBootstrapSession } from "@/hooks/use-bootstrap-session";
+import { useThemeSync } from "@/hooks/use-theme-sync";
+import { useThemeStore } from "@/store/theme-store";
 import "./index.css";
 
 const queryClient = new QueryClient();
 
 function Bootstrapper() {
   useBootstrapSession();
-  return <RouterProvider router={router} />;
+  useThemeSync();
+  const resolvedTheme = useThemeStore((state) => state.resolvedTheme);
+
+  return (
+    <>
+      <RouterProvider router={router} />
+      <Toaster richColors position="top-right" theme={resolvedTheme} />
+    </>
+  );
 }
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <QueryClientProvider client={queryClient}>
       <Bootstrapper />
-      <Toaster richColors position="top-right" />
     </QueryClientProvider>
   </React.StrictMode>,
 );
-

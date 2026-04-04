@@ -1,14 +1,77 @@
 import { useQuery } from "@tanstack/react-query";
+import { LaptopMinimal, Moon, Sun } from "lucide-react";
 import { getSessions, getRecents } from "@/lib/api";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatDateTime } from "@/lib/utils";
+import type { ThemePreference } from "@/store/theme-store";
+import { useThemeStore } from "@/store/theme-store";
+
+const themeOptions: Array<{
+  value: ThemePreference;
+  label: string;
+  icon: typeof LaptopMinimal;
+}> = [
+  {
+    value: "system",
+    label: "System",
+    icon: LaptopMinimal,
+  },
+  {
+    value: "light",
+    label: "Light",
+    icon: Sun,
+  },
+  {
+    value: "dark",
+    label: "Dark",
+    icon: Moon,
+  },
+];
 
 export function SettingsPage() {
   const sessionsQuery = useQuery({ queryKey: ["sessions"], queryFn: getSessions });
   const recentsQuery = useQuery({ queryKey: ["recents"], queryFn: getRecents });
+  const preference = useThemeStore((state) => state.preference);
+  const resolvedTheme = useThemeStore((state) => state.resolvedTheme);
+  const setPreference = useThemeStore((state) => state.setPreference);
 
   return (
     <div className="grid gap-6 xl:grid-cols-2">
+      <Card className="xl:col-span-2">
+        <CardHeader>
+          <CardTitle>Appearance</CardTitle>
+          <CardDescription>Choose how Euripus should look on this device.</CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-4">
+          <div className="flex flex-wrap gap-2 rounded-xl bg-secondary/60 p-1">
+            {themeOptions.map((option) => {
+              const Icon = option.icon;
+              const active = preference === option.value;
+              return (
+                <Button
+                  key={option.value}
+                  className="min-w-32 flex-1 justify-start"
+                  variant={active ? "default" : "ghost"}
+                  type="button"
+                  onClick={() => setPreference(option.value)}
+                >
+                  <Icon data-icon="inline-start" />
+                  {option.label}
+                </Button>
+              );
+            })}
+          </div>
+          <div className="rounded-xl border border-border bg-card/60 p-4">
+            <p className="font-medium">Current behavior</p>
+            <p className="mt-1 text-sm text-muted-foreground">
+              {preference === "system"
+                ? `Euripus is following your ${resolvedTheme} system theme.`
+                : `Euripus is locked to ${resolvedTheme} mode until you change it.`}
+            </p>
+          </div>
+        </CardContent>
+      </Card>
       <Card>
         <CardHeader>
           <CardTitle>Sessions</CardTitle>
@@ -41,4 +104,3 @@ export function SettingsPage() {
     </div>
   );
 }
-
