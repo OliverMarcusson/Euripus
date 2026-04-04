@@ -26,7 +26,8 @@ impl Config {
             .context("APP_BIND_ADDRESS must be a valid socket address")?;
         let database_url = read_env("APP_DATABASE_URL")?;
         let jwt_secret = read_env("APP_JWT_SECRET")?;
-        let relay_signing_secret = read_env("APP_RELAY_SIGNING_SECRET")?;
+        let relay_signing_secret =
+            read_optional_env("APP_RELAY_SIGNING_SECRET")?.unwrap_or_else(|| jwt_secret.clone());
         let access_token_minutes = read_env("APP_ACCESS_TOKEN_MINUTES")?.parse()?;
         let refresh_token_days = read_env("APP_REFRESH_TOKEN_DAYS")?.parse()?;
         let relay_token_minutes = read_env_or_default("APP_RELAY_TOKEN_MINUTES", "120")?.parse()?;
