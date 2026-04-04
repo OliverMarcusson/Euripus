@@ -2561,7 +2561,14 @@ fn playback_source_for_mode(
         expires_at,
     );
     let playback_mode = normalize_playback_mode(raw_playback_mode)?;
-    if playback_mode == PlaybackMode::Direct || direct.kind == "unsupported" {
+    if direct.kind == "unsupported" {
+        return Ok(direct);
+    }
+
+    let request_base_url = request_base_url(&state.config, headers)?;
+    let relay_required_for_https =
+        should_force_relay_for_secure_request(&request_base_url, &upstream_url);
+    if playback_mode == PlaybackMode::Direct && !relay_required_for_https {
         return Ok(direct);
     }
 
@@ -2570,7 +2577,6 @@ fn playback_source_for_mode(
             "Relay mode only supports browser-playable stream formats.".to_string(),
         )
     })?;
-    let request_base_url = request_base_url(&state.config, headers)?;
     let relay_token =
         issue_relay_token(state, user_id, profile_id, &upstream_url, relay_kind, None)?;
     let relay_url = relay_url_for_token(&request_base_url, relay_kind, &relay_token.token)?;
@@ -2580,6 +2586,16 @@ fn playback_source_for_mode(
         expires_at: Some(relay_token.expires_at),
         ..direct
     })
+}
+
+fn should_force_relay_for_secure_request(request_base_url: &Url, upstream_url: &str) -> bool {
+    if request_base_url.scheme() != "https" {
+        return false;
+    }
+
+    Url::parse(upstream_url)
+        .map(|url| url.scheme() == "http")
+        .unwrap_or(false)
 }
 
 fn playback_source_from_url(
@@ -4542,6 +4558,74 @@ mod tests {
             relay.upstream_url.as_str(),
             "https://provider.example.com/live/42.m3u8"
         );
+    }
+
+    #[tokio::test]
+    async fn playback_source_for_mode_forces_relay_for_http_streams_on_https_pages() {
+        let state = sample_app_state();
+        let response = playback_source_for_mode(
+            &state,
+            &HeaderMap::new(),
+            Uuid::from_u128(31),
+            Uuid::from_u128(32),
+            "direct",
+            "Arena 1",
+            "http://provider.example.com/live/42.m3u8".to_string(),
+            true,
+            false,
+            Some("m3u8"),
+            None,
+        )
+        .expect("forced relay playback source");
+
+        assert_eq!(response.kind, "hls");
+        assert!(
+            response
+                .url
+                .starts_with("https://app.example.com/api/relay/hls?token=")
+        );
+        assert!(response.expires_at.is_some());
+
+        let relay = decode_relay_token(
+            &state.config,
+            &extract_relay_token(&response.url),
+            RelayAssetKind::Hls,
+        )
+        .expect("decode relay token");
+        assert_eq!(
+            relay.upstream_url.as_str(),
+            "http://provider.example.com/live/42.m3u8"
+        );
+    }
+
+    #[tokio::test]
+    async fn playback_source_for_mode_keeps_http_streams_direct_on_http_pages() {
+        let state = sample_app_state();
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, HeaderValue::from_static("127.0.0.1:8080"));
+        headers.insert(
+            HeaderName::from_static("x-forwarded-proto"),
+            HeaderValue::from_static("http"),
+        );
+
+        let response = playback_source_for_mode(
+            &state,
+            &headers,
+            Uuid::from_u128(33),
+            Uuid::from_u128(34),
+            "direct",
+            "Arena 1",
+            "http://provider.example.com/live/42.m3u8".to_string(),
+            true,
+            false,
+            Some("m3u8"),
+            None,
+        )
+        .expect("direct playback source");
+
+        assert_eq!(response.kind, "hls");
+        assert_eq!(response.url, "http://provider.example.com/live/42.m3u8");
+        assert!(response.expires_at.is_none());
     }
 
     #[tokio::test]
