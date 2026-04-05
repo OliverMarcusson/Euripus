@@ -52,6 +52,7 @@ Use `docker-compose.homelab.yml` for the browser-first self-hosted deployment. T
 3. Set `APP_PUBLIC_ORIGIN` to the HTTPS URL exposed by your reverse proxy.
 4. Set `APP_ALLOWED_ORIGINS` to include your public browser origin and any local development origins you still need.
 5. On your Windows workstation, publish fresh images with `bun run homelab:publish`.
+   On Linux or macOS, use `bun run homelab:publish:sh` or `./scripts/publish-homelab-images.sh`.
 6. On the Fedora homelab host, deploy them with `./scripts/deploy-homelab-images.sh`.
 7. Point your reverse proxy at the host port `8088` by default, or override `EURIPUS_WEB_PORT`.
 
