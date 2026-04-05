@@ -12,12 +12,22 @@ services:
       timeout: 5s
       retries: 20
 
+  meilisearch:
+    image: docker.io/getmeili/meilisearch:v1.15
+    restart: unless-stopped
+    env_file:
+      - apps/server/.env
+    volumes:
+      - homelab-meilisearch-data:/meili_data
+
   server:
     image: ${EURIPUS_SERVER_IMAGE:-ghcr.io/olivermarcusson/euripus-server}:${EURIPUS_IMAGE_TAG:-homelab-latest}
     restart: unless-stopped
     env_file:
       - apps/server/.env
     depends_on:
+      meilisearch:
+        condition: service_started
       postgres:
         condition: service_healthy
     healthcheck:
@@ -41,3 +51,4 @@ services:
 
 volumes:
   homelab-postgres-data:
+  homelab-meilisearch-data:

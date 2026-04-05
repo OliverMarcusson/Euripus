@@ -36,6 +36,10 @@ Useful variants:
 
 - `bun run user-test:start:web`
   Starts the API + web client only and opens the browser at `http://127.0.0.1:5173`.
+- `bun run user-test:start:dev`
+  Starts the same user-test stack through the dynamic foreground launcher.
+- `bun run user-test:start:dev:web`
+  Starts the dynamic foreground launcher in web-only mode and opens the browser.
 - `bun run user-test:stop`
   Stops the launched desktop/web process and shuts down the Docker services.
 
