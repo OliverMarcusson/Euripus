@@ -37,6 +37,7 @@ It pushes two tags for each image:
 - `homelab-latest`
 
 If `GHCR_USERNAME` and `GHCR_TOKEN` are set in the Windows environment, the script logs in to GHCR before pushing. Otherwise it assumes you have already run `docker login ghcr.io`.
+By default it also loads `.env.homelab-images`, so you usually do not need to export anything manually. Override that path with `EURIPUS_PUBLISH_ENV_FILE` if needed.
 
 ## Deploy On Fedora
 
@@ -45,7 +46,8 @@ Store your private GHCR read credentials in `.env.homelab-images` on the Fedora 
 - `GHCR_USERNAME`
 - `GHCR_TOKEN`
 
-The token should have package read access only. Keep it non-interactive and host-local.
+The Fedora token should have package read access only. Keep it non-interactive and host-local.
+The deploy script prefers `docker` and automatically falls back to `podman` if `docker` is not installed.
 
 Deploy the latest published images with:
 

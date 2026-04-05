@@ -8,6 +8,7 @@ param(
 $ErrorActionPreference = "Stop"
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
+$envFilePath = if ($env:EURIPUS_PUBLISH_ENV_FILE) { $env:EURIPUS_PUBLISH_ENV_FILE } else { Join-Path $repoRoot ".env.homelab-images" }
 
 function Assert-CommandAvailable {
     param([string]$CommandName)
@@ -26,9 +27,39 @@ function Get-GitSha {
     return $sha.Trim()
 }
 
+function Import-EnvFile {
+    param([string]$Path)
+
+    if (-not (Test-Path $Path)) {
+        return
+    }
+
+    foreach ($line in Get-Content $Path) {
+        $trimmedLine = $line.Trim()
+
+        if (-not $trimmedLine -or $trimmedLine.StartsWith("#")) {
+            continue
+        }
+
+        $separatorIndex = $trimmedLine.IndexOf("=")
+        if ($separatorIndex -lt 1) {
+            continue
+        }
+
+        $name = $trimmedLine.Substring(0, $separatorIndex).Trim()
+        $value = $trimmedLine.Substring($separatorIndex + 1).Trim()
+
+        if (($value.StartsWith('"') -and $value.EndsWith('"')) -or ($value.StartsWith("'") -and $value.EndsWith("'"))) {
+            $value = $value.Substring(1, $value.Length - 2)
+        }
+
+        [System.Environment]::SetEnvironmentVariable($name, $value, "Process")
+    }
+}
+
 function Invoke-GhcrLoginIfConfigured {
     if (-not $env:GHCR_USERNAME -or -not $env:GHCR_TOKEN) {
-        Write-Host "GHCR_USERNAME and GHCR_TOKEN are not both set. Assuming you already ran 'docker login ghcr.io'." -ForegroundColor Yellow
+        Write-Host "GHCR_USERNAME and GHCR_TOKEN are not both set in the environment or $envFilePath. Assuming you already ran 'docker login ghcr.io'." -ForegroundColor Yellow
         return
     }
 
@@ -66,6 +97,8 @@ function Publish-Image {
 
 Assert-CommandAvailable "docker"
 Assert-CommandAvailable "git"
+
+Import-EnvFile -Path $envFilePath
 
 $shaTag = Get-GitSha
 
