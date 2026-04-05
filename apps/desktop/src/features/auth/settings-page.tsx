@@ -1,4 +1,4 @@
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { LaptopMinimal, Moon, Play, Radio, Sun } from "lucide-react";
 import { PageHeader } from "@/components/layout/page-header";
 import { ChannelAvatar } from "@/components/ui/channel-avatar";
@@ -6,16 +6,18 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Empty, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
+import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { ProviderSettingsSection } from "@/features/provider/provider-settings-section";
 import { useChannelFavoriteMutation } from "@/hooks/use-channel-favorite";
-import { getProvider, getRecents, startChannelPlayback } from "@/lib/api";
+import { useChannelPlaybackMutation } from "@/hooks/use-playback-actions";
+import { getProvider, getRecents, getRemoteDevices } from "@/lib/api";
 import { formatDateTime, formatRelativeTime } from "@/lib/utils";
+import { usePlaybackDeviceStore } from "@/store/playback-device-store";
 import type { ThemePreference } from "@/store/theme-store";
 import { useThemeStore } from "@/store/theme-store";
-import { usePlayerStore } from "@/store/player-store";
 import type { TvModePreference } from "@/store/tv-mode-store";
 import { useTvModeStore } from "@/store/tv-mode-store";
 
@@ -41,23 +43,30 @@ const tvModeOptions: Array<{
 export function SettingsPage() {
   const recentsQuery = useQuery({ queryKey: ["recents"], queryFn: getRecents });
   const providerQuery = useQuery({ queryKey: ["provider"], queryFn: getProvider });
+  const remoteDevicesQuery = useQuery({ queryKey: ["remote", "devices"], queryFn: getRemoteDevices });
   const favoriteMutation = useChannelFavoriteMutation();
-  const setLoading = usePlayerStore((state) => state.setLoading);
-  const setSource = usePlayerStore((state) => state.setSource);
   const preference = useThemeStore((state) => state.preference);
   const resolvedTheme = useThemeStore((state) => state.resolvedTheme);
   const setPreference = useThemeStore((state) => state.setPreference);
   const tvModePreference = useTvModeStore((state) => state.preference);
   const isTvMode = useTvModeStore((state) => state.isTvMode);
   const setTvModePreference = useTvModeStore((state) => state.setPreference);
+  const activeDeviceId = usePlaybackDeviceStore((state) => state.activeDeviceId);
+  const deviceName = usePlaybackDeviceStore((state) => state.name);
+  const remoteTargetEnabled = usePlaybackDeviceStore((state) => state.remoteTargetEnabled);
+  const setDeviceName = usePlaybackDeviceStore((state) => state.setName);
+  const setRemoteTargetEnabled = usePlaybackDeviceStore((state) => state.setRemoteTargetEnabled);
   const recents = recentsQuery.data ?? [];
   const provider = providerQuery.data;
-  const playMutation = useMutation({
-    mutationFn: startChannelPlayback,
-    onMutate: () => setLoading(true),
-    onSuccess: (source) => setSource(source),
-    onSettled: () => setLoading(false),
-  });
+  const playMutation = useChannelPlaybackMutation();
+  const activeRemoteDevice = (remoteDevicesQuery.data ?? []).find((device) => device.id === activeDeviceId);
+  const remoteTargetStatus = !remoteTargetEnabled
+    ? "Target off"
+    : activeRemoteDevice?.currentController
+      ? "Controlled now"
+      : activeRemoteDevice?.online
+        ? "Target online"
+        : "Target offline";
 
   return (
     <div className="flex flex-col gap-5 sm:gap-6">
@@ -67,6 +76,7 @@ export function SettingsPage() {
           <>
             <Badge variant="accent">{resolvedTheme} theme</Badge>
             <Badge variant="outline">{isTvMode ? "TV mode on" : "TV mode off"}</Badge>
+            <Badge variant="outline">{remoteTargetStatus}</Badge>
             <Badge variant="outline">{recents.length} recent channels</Badge>
             <Badge variant="outline">{provider?.status ?? "provider missing"}</Badge>
           </>
@@ -121,6 +131,32 @@ export function SettingsPage() {
                   </ToggleGroupItem>
                 ))}
               </ToggleGroup>
+            </div>
+
+            <Separator />
+
+            <div className="flex flex-col gap-3">
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-sm font-medium">Remote playback target</span>
+                <Badge variant={remoteTargetEnabled ? "accent" : "outline"}>{remoteTargetStatus}</Badge>
+              </div>
+              <p className="text-sm text-muted-foreground">
+                Enable this on the screen you want to control from your phone. Once enabled, the device advertises
+                itself automatically while you are signed in.
+              </p>
+              <Input
+                aria-label="Device name"
+                value={deviceName}
+                onChange={(event) => setDeviceName(event.target.value)}
+                placeholder="Living room TV"
+              />
+              <Button
+                type="button"
+                variant={remoteTargetEnabled ? "secondary" : "default"}
+                onClick={() => setRemoteTargetEnabled(!remoteTargetEnabled)}
+              >
+                {remoteTargetEnabled ? "Disable target mode" : "Use this device as a playback target"}
+              </Button>
             </div>
           </CardContent>
         </Card>

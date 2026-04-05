@@ -1,5 +1,7 @@
+import { useEffect } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, Outlet, useRouterState } from "@tanstack/react-router";
-import { ChevronDown, Heart, LogOut, Search, Settings, Tv, TvMinimal } from "lucide-react";
+import { ChevronDown, Heart, LogOut, MonitorUp, Search, Settings, Tv, TvMinimal } from "lucide-react";
 import { PlayerView } from "@/features/player/player-view";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -15,10 +17,17 @@ import {
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { logout } from "@/lib/api";
+import {
+  clearRemoteControllerTarget,
+  getRemoteControllerTarget,
+  getRemoteDevices,
+  logout,
+  selectRemoteControllerTarget,
+} from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useAuthStore } from "@/store/auth-store";
 import { usePlayerStore } from "@/store/player-store";
+import { useRemoteControllerStore } from "@/store/remote-controller-store";
 import { useTvModeStore } from "@/store/tv-mode-store";
 
 const navigation = [
@@ -29,11 +38,16 @@ const navigation = [
 ] as const;
 
 export function AppShell() {
+  const queryClient = useQueryClient();
   const pathname = useRouterState({ select: (state) => state.location.pathname });
   const user = useAuthStore((state) => state.user);
   const clearSession = useAuthStore((state) => state.clearSession);
   const isTvMode = useTvModeStore((state) => state.isTvMode);
   const hasPlayerSource = usePlayerStore((state) => !!state.source);
+  const setPlayerSource = usePlayerStore((state) => state.setSource);
+  const remoteTarget = useRemoteControllerStore((state) => state.target);
+  const setTargetSelection = useRemoteControllerStore((state) => state.setTargetSelection);
+  const clearTarget = useRemoteControllerStore((state) => state.clearTarget);
   const initials = (user?.username ?? "Guest")
     .split(/\s+/)
     .filter(Boolean)
@@ -41,11 +55,95 @@ export function AppShell() {
     .map((part) => part[0]?.toUpperCase() ?? "")
     .join("")
     .slice(0, 2);
+  const devicesQuery = useQuery({
+    queryKey: ["remote", "devices"],
+    queryFn: getRemoteDevices,
+    enabled: !!user,
+    refetchInterval: user ? 5_000 : false,
+  });
+  const targetQuery = useQuery({
+    queryKey: ["remote", "controller", "target"],
+    queryFn: getRemoteControllerTarget,
+    enabled: !!user,
+    refetchInterval: user ? 5_000 : false,
+  });
+  const selectTargetMutation = useMutation({
+    mutationFn: selectRemoteControllerTarget,
+    onSuccess: async (selection) => {
+      setTargetSelection(selection);
+      setPlayerSource(null);
+      await queryClient.invalidateQueries({ queryKey: ["remote"] });
+    },
+  });
+  const clearTargetMutation = useMutation({
+    mutationFn: clearRemoteControllerTarget,
+    onSuccess: async () => {
+      clearTarget();
+      setPlayerSource(null);
+      await queryClient.invalidateQueries({ queryKey: ["remote"] });
+    },
+  });
+  const remoteDevices = devicesQuery.data ?? [];
+
+  useEffect(() => {
+    if (!user) {
+      clearTarget();
+      return;
+    }
+
+    setTargetSelection(targetQuery.data ?? null);
+  }, [clearTarget, setTargetSelection, targetQuery.data, user]);
 
   async function handleLogout() {
     await logout();
     clearSession();
   }
+
+  const RemoteTargetMenu = ({ compact = false }: { compact?: boolean }) => (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          variant={remoteTarget ? "default" : "outline"}
+          size={compact ? "sm" : "default"}
+          className={cn("shrink-0", compact ? "h-9 px-3" : "justify-start")}
+        >
+          <MonitorUp className="size-4" />
+          <span className={cn(compact ? "ml-2" : "ml-3")}>
+            {remoteTarget ? remoteTarget.name : "This device"}
+          </span>
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-72">
+        <DropdownMenuLabel>Playback target</DropdownMenuLabel>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem
+          onClick={() => clearTargetMutation.mutate()}
+          disabled={!remoteTarget || clearTargetMutation.isPending}
+        >
+          Play on this device
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        {remoteDevices.length ? (
+          remoteDevices.map((device) => (
+            <DropdownMenuItem
+              key={device.id}
+              onClick={() => selectTargetMutation.mutate(device.id)}
+              disabled={selectTargetMutation.isPending}
+            >
+              <div className="flex min-w-0 flex-col">
+                <span className="truncate font-medium">{device.name}</span>
+                <span className="truncate text-xs text-muted-foreground">
+                  {device.currentPlayback ? `Now playing ${device.currentPlayback.title}` : device.platform}
+                </span>
+              </div>
+            </DropdownMenuItem>
+          ))
+        ) : (
+          <DropdownMenuItem disabled>No remote targets online</DropdownMenuItem>
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
 
   const MobileTopHeader = () => (
     <div className="md:hidden flex h-14 shrink-0 items-center justify-between border-b border-border/40 bg-sidebar px-4 z-20">
@@ -53,28 +151,31 @@ export function AppShell() {
         <Tv className="size-5 text-primary" aria-hidden="true" />
         <span className="text-sm font-semibold tracking-tight">Euripus</span>
       </div>
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button variant="ghost" size="icon" className="size-8 rounded-full">
-            <Avatar className="size-8">
-              <AvatarFallback className="bg-muted text-xs font-medium">{initials || "GU"}</AvatarFallback>
-            </Avatar>
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="w-56">
-          <DropdownMenuLabel>{user?.username ?? "Guest"}</DropdownMenuLabel>
-          <DropdownMenuSeparator />
-          <DropdownMenuGroup>
-            <DropdownMenuItem asChild>
-              <Link to="/settings">Open settings</Link>
-            </DropdownMenuItem>
-            <DropdownMenuItem onClick={handleLogout}>
-              <LogOut data-icon="inline-start" />
-              Sign out
-            </DropdownMenuItem>
-          </DropdownMenuGroup>
-        </DropdownMenuContent>
-      </DropdownMenu>
+      <div className="flex items-center gap-2">
+        <RemoteTargetMenu compact />
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="ghost" size="icon" className="size-8 rounded-full">
+              <Avatar className="size-8">
+                <AvatarFallback className="bg-muted text-xs font-medium">{initials || "GU"}</AvatarFallback>
+              </Avatar>
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-56">
+            <DropdownMenuLabel>{user?.username ?? "Guest"}</DropdownMenuLabel>
+            <DropdownMenuSeparator />
+            <DropdownMenuGroup>
+              <DropdownMenuItem asChild>
+                <Link to="/settings">Open settings</Link>
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={handleLogout}>
+                <LogOut data-icon="inline-start" />
+                Sign out
+              </DropdownMenuItem>
+            </DropdownMenuGroup>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
     </div>
   );
 
@@ -85,6 +186,12 @@ export function AppShell() {
         className={cn("flex h-screen w-full flex-col overflow-hidden bg-background md:flex-row")}
       >
         <MobileTopHeader />
+        {remoteTarget ? (
+          <div className="shrink-0 border-b border-border/40 bg-primary/5 px-4 py-2 text-sm text-foreground/80 md:px-6">
+            Controlling <span className="font-semibold">{remoteTarget.name}</span>
+            {remoteTarget.currentPlayback ? ` • ${remoteTarget.currentPlayback.title}` : ""}
+          </div>
+        ) : null}
 
         <aside
           className={cn(
@@ -147,6 +254,9 @@ export function AppShell() {
           <Separator className="w-[85%] mx-auto opacity-50" />
 
           <div className="px-3 py-3 overflow-hidden w-[240px]">
+            <div className="mb-3">
+              <RemoteTargetMenu />
+            </div>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="ghost" className="h-[52px] w-[216px] justify-start rounded-xl px-2.5 text-left overflow-hidden hover:bg-muted/40">

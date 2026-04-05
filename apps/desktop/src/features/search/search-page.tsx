@@ -1,4 +1,4 @@
-import { useInfiniteQuery, useMutation } from "@tanstack/react-query";
+import { useInfiniteQuery } from "@tanstack/react-query";
 import { Clapperboard, Heart, Play, Search as SearchIcon, TvMinimal } from "lucide-react";
 import { useDeferredValue, useEffect, useRef, useState } from "react";
 import { PageHeader } from "@/components/layout/page-header";
@@ -13,10 +13,10 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useChannelFavoriteMutation } from "@/hooks/use-channel-favorite";
 import { useDebounce } from "@/hooks/use-debounce";
+import { useChannelPlaybackMutation, useProgramPlaybackMutation } from "@/hooks/use-playback-actions";
 import { useTvAutoFocus } from "@/hooks/use-tv-auto-focus";
-import { searchChannels, searchPrograms, startChannelPlayback, startProgramPlayback } from "@/lib/api";
+import { searchChannels, searchPrograms } from "@/lib/api";
 import { canPlayProgram, formatTimeRange, getProgramPlaybackState, type ProgramPlaybackState } from "@/lib/utils";
-import { usePlayerStore } from "@/store/player-store";
 
 const SEARCH_PAGE_SIZE = 30;
 
@@ -26,8 +26,6 @@ export function SearchPage() {
   const deferredQuery = useDeferredValue(query);
   const debouncedQuery = useDebounce(deferredQuery, 250);
   const hasQuery = debouncedQuery.trim().length > 1;
-  const setLoading = usePlayerStore((state) => state.setLoading);
-  const setSource = usePlayerStore((state) => state.setSource);
   const channelQuery = useInfiniteQuery({
     queryKey: ["search", "channels", debouncedQuery],
     queryFn: ({ pageParam }) => searchChannels(debouncedQuery, pageParam, SEARCH_PAGE_SIZE),
@@ -43,18 +41,8 @@ export function SearchPage() {
     enabled: hasQuery,
   });
   const favoriteMutation = useChannelFavoriteMutation();
-  const playChannelMutation = useMutation({
-    mutationFn: startChannelPlayback,
-    onMutate: () => setLoading(true),
-    onSuccess: (source) => setSource(source),
-    onSettled: () => setLoading(false),
-  });
-  const playProgramMutation = useMutation({
-    mutationFn: startProgramPlayback,
-    onMutate: () => setLoading(true),
-    onSuccess: (source) => setSource(source),
-    onSettled: () => setLoading(false),
-  });
+  const playChannelMutation = useChannelPlaybackMutation();
+  const playProgramMutation = useProgramPlaybackMutation();
 
   const channels = channelQuery.data?.pages.flatMap((page) => page.items) ?? [];
   const programs = programQuery.data?.pages.flatMap((page) => page.items) ?? [];

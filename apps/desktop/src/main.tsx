@@ -4,6 +4,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { RouterProvider } from "@tanstack/react-router";
 import { Toaster } from "sonner";
 import { useEffect } from "react";
+import { usePlaybackDeviceRegistration } from "@/hooks/use-playback-device-registration";
+import { useRemotePlaybackStateSync } from "@/hooks/use-remote-playback-state-sync";
 import { router } from "@/router";
 import { useBootstrapSession } from "@/hooks/use-bootstrap-session";
 import { useTvModeSync } from "@/hooks/use-tv-mode-sync";
@@ -17,6 +19,8 @@ const queryClient = new QueryClient();
 
 function Bootstrapper() {
   useBootstrapSession();
+  usePlaybackDeviceRegistration();
+  useRemotePlaybackStateSync();
   useThemeSync();
   useTvModeSync();
   useTvRemoteNavigation();

@@ -15,7 +15,12 @@ import type {
   RegisterPayload,
   SaveProviderPayload,
   ProgramSearchResults,
+  PlaybackDevice,
+  PlaybackDeviceRegistration,
   Session,
+  RemoteCommandAck,
+  RemoteControllerTarget,
+  RemotePlaybackCommand,
   ServerNetworkStatus,
   SyncJob,
   User,
@@ -25,7 +30,8 @@ import { clearRefreshToken, isTauriRuntime, loadRefreshToken, saveRefreshToken }
 import { useAuthStore } from "@/store/auth-store";
 
 const DESKTOP_RUNTIME = isTauriRuntime();
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? (DESKTOP_RUNTIME ? "http://127.0.0.1:8080" : "/api");
+export const API_BASE_URL =
+  import.meta.env.VITE_API_BASE_URL ?? (DESKTOP_RUNTIME ? "http://127.0.0.1:8080" : "/api");
 const CSRF_COOKIE_NAME = "euripus.csrf";
 
 type RequestOptions = {
@@ -329,4 +335,66 @@ export function startChannelPlayback(channelId: string) {
 
 export function startProgramPlayback(programId: string) {
   return request<PlaybackSource>(`/playback/program/${programId}`, { method: "POST" });
+}
+
+export function getRemoteDevices() {
+  return request<PlaybackDevice[]>("/remote/devices");
+}
+
+export function registerPlaybackDevice(payload: PlaybackDeviceRegistration) {
+  return request<PlaybackDevice>("/remote/devices", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function heartbeatPlaybackDevice(deviceId: string) {
+  return request<void>(`/remote/devices/${deviceId}/heartbeat`, { method: "POST" });
+}
+
+export function updateRemotePlaybackDeviceState(
+  deviceId: string,
+  payload: {
+    title: string | null;
+    sourceKind?: string | null;
+    live?: boolean | null;
+    catchup?: boolean | null;
+  },
+) {
+  return request<void>(`/remote/devices/${deviceId}/playback-state`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function acknowledgeRemoteCommand(deviceId: string, commandId: string, payload: RemoteCommandAck) {
+  return request<void>(`/remote/devices/${deviceId}/commands/${commandId}/ack`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function getRemoteControllerTarget() {
+  return request<RemoteControllerTarget>("/remote/controller/target");
+}
+
+export function selectRemoteControllerTarget(deviceId: string) {
+  return request<RemoteControllerTarget>("/remote/controller/target", {
+    method: "POST",
+    body: JSON.stringify({ deviceId }),
+  });
+}
+
+export function clearRemoteControllerTarget() {
+  return request<void>("/remote/controller/target", {
+    method: "DELETE",
+  });
+}
+
+export function startRemoteChannelPlayback(channelId: string) {
+  return request<RemotePlaybackCommand>(`/remote/play/channel/${channelId}`, { method: "POST" });
+}
+
+export function startRemoteProgramPlayback(programId: string) {
+  return request<RemotePlaybackCommand>(`/remote/play/program/${programId}`, { method: "POST" });
 }

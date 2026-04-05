@@ -11,6 +11,7 @@ vi.mock("@/lib/api", () => ({
   removeFavorite: vi.fn(),
   saveGuidePreferences: vi.fn(),
   startChannelPlayback: vi.fn(),
+  startRemoteChannelPlayback: vi.fn(),
 }));
 
 const mockedGetGuide = vi.mocked(getGuide);

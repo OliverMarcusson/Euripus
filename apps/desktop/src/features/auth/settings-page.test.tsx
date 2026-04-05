@@ -4,12 +4,15 @@ import { SettingsPage } from "@/features/auth/settings-page";
 import {
   getProvider,
   getRecents,
+  getRemoteDevices,
   getServerNetworkStatus,
   getSyncStatus,
   saveProvider,
   startChannelPlayback,
+  startRemoteChannelPlayback,
   triggerProviderSync,
 } from "@/lib/api";
+import { usePlaybackDeviceStore } from "@/store/playback-device-store";
 import { useThemeStore } from "@/store/theme-store";
 import { useTvModeStore } from "@/store/tv-mode-store";
 
@@ -17,21 +20,25 @@ vi.mock("@/lib/api", () => ({
   addFavorite: vi.fn(),
   getProvider: vi.fn(),
   getRecents: vi.fn(),
+  getRemoteDevices: vi.fn(),
   getServerNetworkStatus: vi.fn(),
   getSyncStatus: vi.fn(),
   removeFavorite: vi.fn(),
   saveProvider: vi.fn(),
   startChannelPlayback: vi.fn(),
+  startRemoteChannelPlayback: vi.fn(),
   triggerProviderSync: vi.fn(),
   validateProvider: vi.fn(),
 }));
 
 const mockedGetRecents = vi.mocked(getRecents);
 const mockedGetProvider = vi.mocked(getProvider);
+const mockedGetRemoteDevices = vi.mocked(getRemoteDevices);
 const mockedGetServerNetworkStatus = vi.mocked(getServerNetworkStatus);
 const mockedGetSyncStatus = vi.mocked(getSyncStatus);
 const mockedSaveProvider = vi.mocked(saveProvider);
 const mockedStartChannelPlayback = vi.mocked(startChannelPlayback);
+const mockedStartRemoteChannelPlayback = vi.mocked(startRemoteChannelPlayback);
 const mockedTriggerProviderSync = vi.mocked(triggerProviderSync);
 
 describe("SettingsPage", () => {
@@ -39,6 +46,7 @@ describe("SettingsPage", () => {
     vi.clearAllMocks();
     mockedGetRecents.mockResolvedValue([]);
     mockedGetProvider.mockResolvedValue(null);
+    mockedGetRemoteDevices.mockResolvedValue([]);
     mockedGetServerNetworkStatus.mockResolvedValue({
       serverStatus: "online",
       vpnActive: false,
@@ -99,8 +107,24 @@ describe("SettingsPage", () => {
       unsupportedReason: null,
       title: "Arena 1",
     });
+    mockedStartRemoteChannelPlayback.mockResolvedValue({
+      id: "remote-command-1",
+      targetDeviceId: "tv-1",
+      targetDeviceName: "Living room TV",
+      status: "delivered",
+      sourceTitle: "Arena 1",
+      createdAt: "2026-04-05T10:00:00.000Z",
+    });
     useThemeStore.getState().setPreference("system");
     useTvModeStore.getState().setPreference("auto");
+    usePlaybackDeviceStore.setState({
+      activeDeviceId: null,
+      deviceKey: "device-1",
+      name: "Browser device",
+      remoteTargetEnabled: false,
+      platform: "web",
+      formFactorHint: "desktop",
+    });
   });
 
   it("updates the theme when a toggle is selected", async () => {
@@ -114,6 +138,24 @@ describe("SettingsPage", () => {
 
     expect(useThemeStore.getState().preference).toBe("light");
     expect(document.documentElement.dataset.theme).toBe("light");
+  });
+
+  it("lets the user enable remote playback target mode locally", async () => {
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <SettingsPage />
+      </QueryClientProvider>,
+    );
+
+    fireEvent.change(screen.getByLabelText(/device name/i), {
+      target: { value: "Living room TV" },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: /use this device as a playback target/i }),
+    );
+
+    expect(usePlaybackDeviceStore.getState().name).toBe("Living room TV");
+    expect(usePlaybackDeviceStore.getState().remoteTargetEnabled).toBe(true);
   });
 
   it("shows provider controls inside settings and removes the sessions card", async () => {
