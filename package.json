@@ -16,6 +16,7 @@
     "user-test:start:dev:web": "bun ./scripts/run-dev-script.mjs user-test:start:dev:web",
     "user-test:stop": "bun ./scripts/run-dev-script.mjs user-test:stop",
     "homelab:publish": "powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ./scripts/publish-homelab-images.ps1",
+    "homelab:publish:sh": "bash ./scripts/publish-homelab-images.sh",
     "build:shared": "bun --cwd packages/shared build",
     "build:desktop": "bun --cwd apps/desktop build",
     "build:android-tv": "powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ./scripts/build-android-tv.ps1",

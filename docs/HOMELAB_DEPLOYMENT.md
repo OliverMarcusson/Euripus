@@ -18,12 +18,18 @@ This guide describes the browser-first self-hosted deployment for Euripus behind
 5. Set `APP_ALLOWED_ORIGINS` to include that public origin, plus any local development origins you still use.
 6. Keep `APP_BROWSER_COOKIE_SECURE=true` for a reverse-proxied HTTPS deployment.
 
-## Publish From Windows
+## Publish Images
 
 Run image builds on the Windows workstation with Docker Desktop and push them to private GHCR packages:
 
 ```powershell
 bun run homelab:publish
+```
+
+On Linux or macOS with bash available, run the equivalent publisher with:
+
+```bash
+bun run homelab:publish:sh
 ```
 
 The publish script builds `linux/amd64` images for:
