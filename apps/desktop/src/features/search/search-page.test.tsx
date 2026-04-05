@@ -1,7 +1,8 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { SearchPage } from "@/features/search/search-page";
-import { searchChannels, searchPrograms } from "@/lib/api";
+import { searchChannels, searchPrograms, startRemoteChannelPlayback } from "@/lib/api";
+import { useRemoteControllerStore } from "@/store/remote-controller-store";
 
 vi.mock("@/hooks/use-debounce", () => ({
   useDebounce: (value: string) => value,
@@ -14,15 +15,27 @@ vi.mock("@/lib/api", () => ({
   searchPrograms: vi.fn(),
   startChannelPlayback: vi.fn(),
   startProgramPlayback: vi.fn(),
+  startRemoteChannelPlayback: vi.fn(),
+  startRemoteProgramPlayback: vi.fn(),
 }));
 
 const mockedSearchChannels = vi.mocked(searchChannels);
 const mockedSearchPrograms = vi.mocked(searchPrograms);
+const mockedStartRemoteChannelPlayback = vi.mocked(startRemoteChannelPlayback);
 
 describe("SearchPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.spyOn(Date, "now").mockReturnValue(new Date("2026-04-04T12:00:00.000Z").getTime());
+    useRemoteControllerStore.getState().clearTarget();
+    mockedStartRemoteChannelPlayback.mockResolvedValue({
+      id: "remote-command-1",
+      targetDeviceId: "tv-1",
+      targetDeviceName: "Living room TV",
+      status: "delivered",
+      sourceTitle: "Arena 1",
+      createdAt: "2026-04-05T10:00:00.000Z",
+    });
   });
 
   afterEach(() => {
@@ -149,5 +162,62 @@ describe("SearchPage", () => {
     await waitFor(() => expect(mockedSearchChannels).toHaveBeenCalledWith("arena", 0, 30));
     expect(await screen.findByRole("button", { name: /favorite/i })).toBeInTheDocument();
     expect(screen.getByText("Channel matches")).toBeInTheDocument();
+  });
+
+  it("redirects play actions to the selected remote target", async () => {
+    useRemoteControllerStore.getState().setTargetSelection({
+      device: {
+        id: "tv-1",
+        deviceKey: "device-tv-1",
+        name: "Living room TV",
+        platform: "web",
+        formFactorHint: "large-screen",
+        remoteTargetEnabled: true,
+        online: true,
+        controllable: true,
+        currentController: true,
+        current: false,
+        lastSeenAt: "2026-04-05T10:00:00.000Z",
+        updatedAt: "2026-04-05T10:00:00.000Z",
+        currentPlayback: null,
+      },
+      selectedAt: "2026-04-05T10:00:00.000Z",
+    });
+    mockedSearchChannels.mockResolvedValue({
+      query: "arena",
+      items: [
+        {
+          id: "channel-1",
+          name: "Arena 1",
+          logoUrl: null,
+          categoryName: "Sports",
+          remoteStreamId: 1,
+          epgChannelId: null,
+          hasCatchup: true,
+          archiveDurationHours: 24,
+          streamExtension: "m3u8",
+          isFavorite: false,
+        },
+      ],
+      totalCount: 1,
+      nextOffset: null,
+    });
+    mockedSearchPrograms.mockResolvedValue({
+      query: "arena",
+      items: [],
+      totalCount: 0,
+      nextOffset: null,
+    });
+
+    renderSearchPage();
+    fireEvent.change(screen.getByPlaceholderText(/^search$/i), {
+      target: { value: "arena" },
+    });
+
+    fireEvent.click(await screen.findByRole("button", { name: /^play$/i }));
+
+    await waitFor(() =>
+      expect(mockedStartRemoteChannelPlayback).toHaveBeenCalledWith("channel-1"),
+    );
   });
 });

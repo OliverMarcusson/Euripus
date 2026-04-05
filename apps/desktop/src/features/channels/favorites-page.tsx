@@ -1,4 +1,4 @@
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { Heart, Play } from "lucide-react";
 import { PageHeader } from "@/components/layout/page-header";
 import { ChannelAvatar } from "@/components/ui/channel-avatar";
@@ -9,22 +9,15 @@ import { Empty, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empt
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useChannelFavoriteMutation } from "@/hooks/use-channel-favorite";
+import { useChannelPlaybackMutation } from "@/hooks/use-playback-actions";
 import { useTvAutoFocus } from "@/hooks/use-tv-auto-focus";
-import { getFavorites, startChannelPlayback } from "@/lib/api";
+import { getFavorites } from "@/lib/api";
 import { formatArchiveDuration } from "@/lib/utils";
-import { usePlayerStore } from "@/store/player-store";
 
 export function FavoritesPage() {
   const favoritesQuery = useQuery({ queryKey: ["favorites"], queryFn: getFavorites });
   const favoriteMutation = useChannelFavoriteMutation();
-  const setLoading = usePlayerStore((state) => state.setLoading);
-  const setSource = usePlayerStore((state) => state.setSource);
-  const playMutation = useMutation({
-    mutationFn: startChannelPlayback,
-    onMutate: () => setLoading(true),
-    onSuccess: (source) => setSource(source),
-    onSettled: () => setLoading(false),
-  });
+  const playMutation = useChannelPlaybackMutation();
 
   const favorites = favoritesQuery.data ?? [];
   useTvAutoFocus(favorites.length ? "[data-favorite-play='true']" : null, [favorites.length]);

@@ -161,6 +161,59 @@ export type PlaybackSource = {
   title: string;
 };
 
+export type PlaybackDeviceRegistration = {
+  deviceKey: string;
+  name: string;
+  platform: string;
+  formFactorHint: string | null;
+  remoteTargetEnabled: boolean;
+};
+
+export type PlaybackDeviceCurrentPlayback = {
+  title: string;
+  sourceKind: PlaybackSource["kind"];
+  live: boolean;
+  catchup: boolean;
+  updatedAt: string;
+};
+
+export type PlaybackDevice = {
+  id: string;
+  deviceKey: string;
+  name: string;
+  platform: string;
+  formFactorHint: string | null;
+  remoteTargetEnabled: boolean;
+  online: boolean;
+  controllable: boolean;
+  currentController: boolean;
+  current: boolean;
+  lastSeenAt: string;
+  updatedAt: string;
+  currentPlayback: PlaybackDeviceCurrentPlayback | null;
+};
+
+export type RemoteControllerTarget = {
+  device: PlaybackDevice;
+  selectedAt: string;
+} | null;
+
+export type RemotePlaybackCommand = {
+  id: string;
+  targetDeviceId: string;
+  targetDeviceName: string;
+  status: "queued" | "delivered" | "acknowledged" | "failed";
+  sourceTitle: string;
+  createdAt: string;
+};
+
+export type RemotePlaybackCommandAck = {
+  status: "delivered" | "acknowledged" | "failed";
+  errorMessage?: string | null;
+};
+
+export type RemoteCommandAck = RemotePlaybackCommandAck;
+
 export type RegisterPayload = {
   username: string;
   password: string;

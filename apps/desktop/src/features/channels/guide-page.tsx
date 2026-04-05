@@ -16,10 +16,10 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useChannelFavoriteMutation } from "@/hooks/use-channel-favorite";
+import { useChannelPlaybackMutation } from "@/hooks/use-playback-actions";
 import { useTvAutoFocus } from "@/hooks/use-tv-auto-focus";
-import { getGuide, getGuideCategory, getGuidePreferences, saveGuidePreferences, startChannelPlayback } from "@/lib/api";
+import { getGuide, getGuideCategory, getGuidePreferences, saveGuidePreferences } from "@/lib/api";
 import { cn, formatArchiveDuration, formatTimeRange, getTimeProgress } from "@/lib/utils";
-import { usePlayerStore } from "@/store/player-store";
 
 const GUIDE_PAGE_SIZE = 40;
 
@@ -62,8 +62,6 @@ export function GuidePage() {
   const [openCategories, setOpenCategories] = useState<string[]>([]);
   const [filterInput, setFilterInput] = useState("");
   const [appliedFilter, setAppliedFilter] = useState("");
-  const setLoading = usePlayerStore((state) => state.setLoading);
-  const setSource = usePlayerStore((state) => state.setSource);
   const guideQuery = useQuery({
     queryKey: ["guide", "overview"],
     queryFn: getGuide,
@@ -90,12 +88,7 @@ export function GuidePage() {
     },
   });
   const favoriteMutation = useChannelFavoriteMutation();
-  const playMutation = useMutation({
-    mutationFn: startChannelPlayback,
-    onMutate: () => setLoading(true),
-    onSuccess: (source) => setSource(source),
-    onSettled: () => setLoading(false),
-  });
+  const playMutation = useChannelPlaybackMutation();
 
   function toggleCategory(categoryId: string, nextOpen: boolean) {
     setOpenCategories((current) =>
