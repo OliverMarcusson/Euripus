@@ -588,17 +588,6 @@ const PUBLIC_IP_LOOKUP_URL: &str = "https://api.ipify.org";
 const PUBLIC_IP_LOOKUP_TIMEOUT_SECONDS: u64 = 5;
 const INTERRUPTED_SYNC_MESSAGE: &str =
     "Sync was interrupted when the server restarted. Start a new sync.";
-const MIGRATION_0007_ORIGINAL_SQL: &str = r#"CREATE INDEX IF NOT EXISTS programs_user_profile_idx
-  ON programs(user_id, profile_id);
-
-CREATE INDEX IF NOT EXISTS programs_search_tsv_idx
-  ON programs
-  USING GIN (to_tsvector('simple', concat_ws(' ', title, channel_name, description)));
-
-CREATE INDEX IF NOT EXISTS programs_search_trgm_idx
-  ON programs
-  USING GIN ((concat_ws(' ', title, channel_name, description)) gin_trgm_ops);
-"#;
 const MIGRATION_0007_CURRENT_SQL: &str =
     include_str!("../migrations/0007_program_search_optimizations.sql");
 
@@ -707,18 +696,16 @@ async fn repair_migration_0007_checksum(pool: &PgPool) -> Result<()> {
         return Ok(());
     }
 
-    let original_checksum = Sha384::digest(MIGRATION_0007_ORIGINAL_SQL.as_bytes()).to_vec();
     let current_checksum = Sha384::digest(MIGRATION_0007_CURRENT_SQL.as_bytes()).to_vec();
 
     let updated_rows = sqlx::query(
         r#"
         UPDATE _sqlx_migrations
         SET checksum = $1
-        WHERE version = 7 AND checksum = $2
+        WHERE version = 7 AND success = true AND checksum <> $1
         "#,
     )
     .bind(current_checksum)
-    .bind(original_checksum)
     .execute(pool)
     .await
     .context("failed to repair migration 0007 checksum")?
@@ -726,7 +713,7 @@ async fn repair_migration_0007_checksum(pool: &PgPool) -> Result<()> {
 
     if updated_rows > 0 {
         warn!(
-            "repaired sqlx migration checksum for version 7 to match the immutable search index fix"
+            "repaired sqlx migration checksum for version 7 to match the current immutable migration bytes"
         );
     }
 
