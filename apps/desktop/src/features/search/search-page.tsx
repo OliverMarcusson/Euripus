@@ -103,14 +103,14 @@ export function SearchPage() {
         }
       />
 
-      <Card className="border-border/80 bg-gradient-to-r from-card via-card to-primary/5">
-        <CardContent className="pt-5">
+      <Card className="rounded-none border-0 bg-transparent shadow-none sm:border-border/80 sm:bg-gradient-to-r sm:from-card sm:via-card sm:to-primary/5 sm:shadow-sm">
+        <CardContent className="px-0 pt-0 pb-0 sm:px-6 sm:pt-5 sm:pb-6">
           <div className="relative">
             <SearchIcon className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
             <Input
               data-search-input="true"
               className="pl-10"
-              placeholder="Search channels, titles, events, teams..."
+              placeholder="Search"
               value={query}
               onChange={(event) => setQuery(event.target.value)}
             />
@@ -119,7 +119,7 @@ export function SearchPage() {
       </Card>
 
       {!hasQuery ? (
-        <Card>
+        <Card className="rounded-none border-0 bg-transparent shadow-none sm:rounded-xl sm:border sm:bg-card sm:shadow-sm">
           <CardContent className="p-0">
             <Empty className="border-0">
               <EmptyHeader>
@@ -134,8 +134,8 @@ export function SearchPage() {
       ) : null}
 
       {isInitialLoading ? (
-        <Card>
-          <CardContent className="flex flex-col gap-3 pt-5">
+        <Card className="rounded-none border-0 bg-transparent shadow-none sm:rounded-xl sm:border sm:bg-card sm:shadow-sm">
+          <CardContent className="flex flex-col gap-3 px-0 pt-0 pb-0 sm:px-6 sm:pt-5 sm:pb-6">
             {Array.from({ length: 5 }).map((_, index) => (
               <div key={index} className="flex items-center gap-4 rounded-xl border border-border/70 p-4">
                 <Skeleton className="size-11 rounded-2xl" />
@@ -162,8 +162,8 @@ export function SearchPage() {
           </TabsList>
 
           <TabsContent value="channels" className="mt-0">
-            <Card>
-              <CardHeader>
+            <Card className="rounded-none border-0 bg-transparent shadow-none sm:rounded-xl sm:border sm:bg-card sm:shadow-sm">
+              <CardHeader className="px-0 pt-0 pb-4 sm:px-6 sm:pt-6 sm:pb-0">
                 <CardTitle>Channel matches</CardTitle>
               </CardHeader>
               <CardContent className="p-0">
@@ -182,11 +182,9 @@ export function SearchPage() {
                                 {channel.hasCatchup ? <Badge variant="live">Catch-up</Badge> : null}
                                 {channel.isFavorite ? <Badge variant="accent">Favorite</Badge> : null}
                               </div>
-                              <p className="text-sm text-muted-foreground">
-                                {channel.streamExtension
-                                  ? `${channel.streamExtension.toUpperCase()} playback available`
-                                  : "Live stream ready for playback"}
-                              </p>
+                              {channel.streamExtension ? (
+                                <p className="text-sm text-muted-foreground">{channel.streamExtension.toUpperCase()}</p>
+                              ) : null}
                             </div>
                           </div>
                           <div className="flex flex-wrap items-center gap-2">
@@ -232,8 +230,8 @@ export function SearchPage() {
           </TabsContent>
 
           <TabsContent value="programs" className="mt-0">
-            <Card>
-              <CardHeader>
+            <Card className="rounded-none border-0 bg-transparent shadow-none sm:rounded-xl sm:border sm:bg-card sm:shadow-sm">
+              <CardHeader className="px-0 pt-0 pb-4 sm:px-6 sm:pt-6 sm:pb-0">
                 <CardTitle>EPG matches</CardTitle>
               </CardHeader>
               <CardContent className="p-0">
@@ -254,9 +252,9 @@ export function SearchPage() {
                                   {program.channelName ? <Badge variant="outline">{program.channelName}</Badge> : null}
                                   <ProgramStateBadge state={playbackState} />
                                 </div>
-                                <p className="text-sm text-muted-foreground">
-                                  {program.description ?? `Scheduled for ${formatTimeRange(program.startAt, program.endAt)}.`}
-                                </p>
+                                {program.description ? (
+                                  <p className="text-sm text-muted-foreground">{program.description}</p>
+                                ) : null}
                               </div>
                             </div>
                             <div className="flex items-center gap-3 self-start lg:self-center">
