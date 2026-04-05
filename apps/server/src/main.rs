@@ -7,7 +7,7 @@ use std::{
     net::{IpAddr, SocketAddr},
     str::FromStr,
     sync::Arc,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use aes_gcm::{
@@ -35,13 +35,16 @@ use base64::{
 use chrono::{DateTime, Duration as ChronoDuration, Local, NaiveDate, Timelike, Utc};
 use config::Config;
 use cookie::time::Duration as CookieDuration;
+use dashmap::DashMap;
 use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation, decode, encode};
+use meilisearch_sdk::{client::Client as MeilisearchClient, documents::DocumentDeletionQuery};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256, Sha384};
 use sqlx::{FromRow, PgPool, Postgres, Transaction, postgres::PgPoolOptions};
 use tokio::signal;
 use tokio::task::{JoinHandle, JoinSet};
+use tokio_retry::{Retry, strategy::ExponentialBackoff};
 use tower_http::{
     cors::{AllowOrigin, CorsLayer},
     trace::TraceLayer,
@@ -57,6 +60,8 @@ struct AppState {
     pool: PgPool,
     config: Arc<Config>,
     http_client: reqwest::Client,
+    meili: Option<Arc<MeilisearchClient>>,
+    session_cache: Arc<DashMap<(Uuid, Uuid), Instant>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -513,6 +518,85 @@ enum ExternalEpgFetchResult {
     Failure(EpgSourceSyncStatus),
 }
 
+enum EpgFetchResult {
+    External(ExternalEpgFetchResult),
+    BuiltIn(Result<FetchedEpgFeed>),
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct MeiliChannelDoc {
+    id: String,
+    user_id: String,
+    entity_id: String,
+    title: String,
+    subtitle: Option<String>,
+    search_text: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct MeiliProgramDoc {
+    id: String,
+    user_id: String,
+    entity_id: String,
+    title: String,
+    subtitle: Option<String>,
+    search_text: String,
+    starts_at: i64,
+    ends_at: i64,
+    can_catchup: bool,
+    channel_id: Option<String>,
+    sort_priority: i32,
+}
+
+#[derive(Debug, FromRow)]
+struct ChannelSearchRow {
+    total_count: i64,
+    id: Uuid,
+    profile_id: Uuid,
+    name: String,
+    logo_url: Option<String>,
+    category_name: Option<String>,
+    remote_stream_id: i32,
+    epg_channel_id: Option<String>,
+    has_catchup: bool,
+    archive_duration_hours: Option<i32>,
+    stream_extension: Option<String>,
+    is_favorite: bool,
+}
+
+#[derive(Debug, FromRow)]
+struct ProgramSearchRow {
+    total_count: i64,
+    id: Uuid,
+    channel_id: Option<Uuid>,
+    channel_name: Option<String>,
+    title: String,
+    description: Option<String>,
+    start_at: DateTime<Utc>,
+    end_at: DateTime<Utc>,
+    can_catchup: bool,
+}
+
+#[derive(Debug, FromRow)]
+struct MeiliChannelRow {
+    id: Uuid,
+    name: String,
+    category_name: Option<String>,
+    has_catchup: bool,
+}
+
+#[derive(Debug, FromRow)]
+struct MeiliProgramRow {
+    id: Uuid,
+    channel_id: Option<Uuid>,
+    channel_name: Option<String>,
+    title: String,
+    description: Option<String>,
+    start_at: DateTime<Utc>,
+    end_at: DateTime<Utc>,
+    can_catchup: bool,
+}
+
 #[derive(Debug, Clone)]
 struct ResolvedProgramme {
     channel_id: Uuid,
@@ -594,6 +678,8 @@ const DATABASE_STARTUP_TIMEOUT: Duration = Duration::from_secs(180);
 const DATABASE_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const DATABASE_RETRY_DELAY_INITIAL: Duration = Duration::from_secs(2);
 const DATABASE_RETRY_DELAY_MAX: Duration = Duration::from_secs(10);
+const SESSION_CACHE_TTL: Duration = Duration::from_secs(30);
+const MEILI_INDEX_BATCH_SIZE: i64 = 10_000;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -625,12 +711,16 @@ async fn main() -> Result<()> {
         ));
     }
 
+    let meili = setup_meilisearch(&config).await;
+
     let state = AppState {
         pool,
         config,
         http_client: reqwest::Client::builder()
             .timeout(Duration::from_secs(30))
             .build()?,
+        meili,
+        session_cache: Arc::new(DashMap::new()),
     };
 
     let periodic_state = state.clone();
@@ -704,6 +794,90 @@ async fn wait_for_postgres(database_url: &str) -> Result<PgPool> {
         retry_delay = std::cmp::min(retry_delay * 2, DATABASE_RETRY_DELAY_MAX);
         attempt += 1;
     }
+}
+
+async fn setup_meilisearch(config: &Config) -> Option<Arc<MeilisearchClient>> {
+    let url = config.meilisearch_url.as_deref()?;
+    let client = match MeilisearchClient::new(url, config.meilisearch_api_key.as_deref()) {
+        Ok(client) => client,
+        Err(error) => {
+            warn!(
+                "failed to initialize Meilisearch client, falling back to PostgreSQL search: {error:?}"
+            );
+            return None;
+        }
+    };
+
+    let strategy = ExponentialBackoff::from_millis(500).factor(2).take(4);
+    let setup_result = Retry::spawn(strategy, || {
+        let client = client.clone();
+        async move { configure_meili_indexes(&client).await }
+    })
+    .await;
+
+    match setup_result {
+        Ok(()) => {
+            info!("Meilisearch configured successfully");
+            Some(Arc::new(client))
+        }
+        Err(error) => {
+            warn!("failed to configure Meilisearch, falling back to PostgreSQL search: {error:?}");
+            None
+        }
+    }
+}
+
+async fn configure_meili_indexes(client: &MeilisearchClient) -> Result<()> {
+    configure_meili_index(
+        client,
+        "channels",
+        &["user_id"],
+        &["title", "subtitle", "search_text"],
+        &[],
+    )
+    .await?;
+    configure_meili_index(
+        client,
+        "programs",
+        &["user_id"],
+        &["title", "subtitle", "search_text"],
+        &["sort_priority", "starts_at"],
+    )
+    .await?;
+    Ok(())
+}
+
+async fn configure_meili_index(
+    client: &MeilisearchClient,
+    name: &str,
+    filterable_attributes: &[&str],
+    searchable_attributes: &[&str],
+    sortable_attributes: &[&str],
+) -> Result<()> {
+    if let Ok(task) = client.create_index(name, Some("id")).await {
+        task.wait_for_completion(client, None, None).await?;
+    }
+
+    let index = client.index(name);
+    index
+        .set_filterable_attributes(filterable_attributes)
+        .await?
+        .wait_for_completion(client, None, None)
+        .await?;
+    index
+        .set_searchable_attributes(searchable_attributes)
+        .await?
+        .wait_for_completion(client, None, None)
+        .await?;
+    if !sortable_attributes.is_empty() {
+        index
+            .set_sortable_attributes(sortable_attributes)
+            .await?
+            .wait_for_completion(client, None, None)
+            .await?;
+    }
+
+    Ok(())
 }
 
 async fn health() -> StatusCode {
@@ -1145,6 +1319,7 @@ async fn revoke_session(
         .bind(auth.user_id)
         .execute(&state.pool)
         .await?;
+    state.session_cache.remove(&(id, auth.user_id));
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1817,10 +1992,8 @@ async fn get_guide_category(
 ) -> ApiResult<GuideCategoryResponse> {
     let auth = require_auth(&state, &headers).await?;
     let (offset, limit) = parse_guide_category_pagination(query)?;
-    let categories = fetch_guide_categories(&state.pool, auth.user_id).await?;
-    let category = categories
-        .into_iter()
-        .find(|item| item.id == category_id)
+    let category = fetch_guide_category_summary(&state.pool, auth.user_id, &category_id)
+        .await?
         .ok_or_else(|| AppError::NotFound("Guide category not found".to_string()))?;
     let total_count =
         fetch_guide_category_total_count(&state.pool, auth.user_id, &category_id).await?;
@@ -1878,26 +2051,43 @@ async fn search_channels(
 ) -> ApiResult<ChannelSearchResponse> {
     let auth = require_auth(&state, &headers).await?;
     let (term, offset, limit) = parse_search_pagination(query)?;
-    let total_count = count_channel_search_results(&state.pool, auth.user_id, &term).await?;
-    let mut items = sqlx::query_as::<_, ChannelResponse>(
+    if let Some(meili) = &state.meili {
+        match search_channels_meili(&state, &headers, meili, auth.user_id, &term, offset, limit)
+            .await
+        {
+            Ok(response) => return Ok(Json(response)),
+            Err(error) => {
+                warn!("Meilisearch channel search failed, falling back to PostgreSQL: {error:?}")
+            }
+        }
+    }
+
+    let rows = sqlx::query_as::<_, ChannelSearchRow>(
         r#"
-        WITH page AS (
-          SELECT ranked.entity_id, ROW_NUMBER() OVER () AS ordinal
-          FROM (
-            SELECT sd.entity_id
-            FROM search_documents sd
-            WHERE sd.user_id = $1
-              AND sd.entity_type = 'channel'
-              AND (sd.tsv @@ plainto_tsquery('simple', $2) OR sd.search_text % $2)
-            ORDER BY
-              CASE WHEN lower(sd.title) = lower($2) THEN 0 ELSE 1 END,
-              similarity(sd.search_text, $2) DESC,
-              sd.title ASC
-            OFFSET $3
-            LIMIT $4
-          ) ranked
+        WITH matches AS (
+          SELECT
+            sd.entity_id,
+            COUNT(*) OVER () AS total_count,
+            ROW_NUMBER() OVER (
+              ORDER BY
+                CASE WHEN lower(sd.title) = lower($2) THEN 0 ELSE 1 END,
+                similarity(sd.search_text, $2) DESC,
+                sd.title ASC
+            ) AS ordinal
+          FROM search_documents sd
+          WHERE sd.user_id = $1
+            AND sd.entity_type = 'channel'
+            AND (sd.tsv @@ plainto_tsquery('simple', $2) OR sd.search_text % $2)
+        ),
+        page AS (
+          SELECT entity_id, total_count, ordinal
+          FROM matches
+          WHERE ordinal > $3
+          ORDER BY ordinal
+          LIMIT $4
         )
         SELECT
+          page.total_count,
           c.id,
           c.profile_id,
           c.name,
@@ -1924,6 +2114,23 @@ async fn search_channels(
     .bind(limit)
     .fetch_all(&state.pool)
     .await?;
+    let total_count = rows.first().map(|row| row.total_count).unwrap_or(0);
+    let mut items = rows
+        .into_iter()
+        .map(|row| ChannelResponse {
+            id: row.id,
+            profile_id: row.profile_id,
+            name: row.name,
+            logo_url: row.logo_url,
+            category_name: row.category_name,
+            remote_stream_id: row.remote_stream_id,
+            epg_channel_id: row.epg_channel_id,
+            has_catchup: row.has_catchup,
+            archive_duration_hours: row.archive_duration_hours,
+            stream_extension: row.stream_extension,
+            is_favorite: row.is_favorite,
+        })
+        .collect::<Vec<_>>();
     rewrite_channel_logo_urls(&state, &headers, auth.user_id, &mut items)?;
 
     Ok(Json(ChannelSearchResponse {
@@ -1941,34 +2148,49 @@ async fn search_programs(
 ) -> ApiResult<ProgramSearchResponse> {
     let auth = require_auth(&state, &headers).await?;
     let (term, offset, limit) = parse_search_pagination(query)?;
-    let total_count = count_program_search_results(&state.pool, auth.user_id, &term).await?;
-    let items = sqlx::query_as::<_, ProgramResponse>(
+    if let Some(meili) = &state.meili {
+        match search_programs_meili(meili, &state.pool, auth.user_id, &term, offset, limit).await {
+            Ok(response) => return Ok(Json(response)),
+            Err(error) => {
+                warn!("Meilisearch program search failed, falling back to PostgreSQL: {error:?}")
+            }
+        }
+    }
+
+    let rows = sqlx::query_as::<_, ProgramSearchRow>(
         r#"
-        WITH page AS (
-          SELECT ranked.id, ROW_NUMBER() OVER () AS ordinal
-          FROM (
-            SELECT p.id
-            FROM search_documents sd
-            JOIN programs p ON p.id = sd.entity_id
-            WHERE sd.user_id = $1
-              AND sd.entity_type = 'program'
-              AND (sd.tsv @@ plainto_tsquery('simple', $2) OR sd.search_text % $2)
-            ORDER BY
-              CASE
-                WHEN p.channel_id IS NOT NULL AND sd.starts_at <= NOW() AND sd.ends_at >= NOW() THEN 0
-                WHEN p.channel_id IS NOT NULL AND sd.ends_at <= NOW() AND p.can_catchup THEN 1
-                WHEN lower(sd.title) = lower($2) THEN 2
-                WHEN lower(sd.title) LIKE lower($2 || '%') THEN 3
-                WHEN sd.starts_at > NOW() THEN 4
-                ELSE 5
-              END,
-              similarity(sd.search_text, $2) DESC,
-              sd.starts_at ASC
-            OFFSET $3
-            LIMIT $4
-          ) ranked
+        WITH matches AS (
+          SELECT
+            p.id,
+            COUNT(*) OVER () AS total_count,
+            ROW_NUMBER() OVER (
+              ORDER BY
+                CASE
+                  WHEN p.channel_id IS NOT NULL AND sd.starts_at <= NOW() AND sd.ends_at >= NOW() THEN 0
+                  WHEN p.channel_id IS NOT NULL AND sd.ends_at <= NOW() AND p.can_catchup THEN 1
+                  WHEN lower(sd.title) = lower($2) THEN 2
+                  WHEN lower(sd.title) LIKE lower($2 || '%') THEN 3
+                  WHEN sd.starts_at > NOW() THEN 4
+                  ELSE 5
+                END,
+                similarity(sd.search_text, $2) DESC,
+                sd.starts_at ASC
+            ) AS ordinal
+          FROM search_documents sd
+          JOIN programs p ON p.id = sd.entity_id
+          WHERE sd.user_id = $1
+            AND sd.entity_type = 'program'
+            AND (sd.tsv @@ plainto_tsquery('simple', $2) OR sd.search_text % $2)
+        ),
+        page AS (
+          SELECT id, total_count, ordinal
+          FROM matches
+          WHERE ordinal > $3
+          ORDER BY ordinal
+          LIMIT $4
         )
         SELECT
+          page.total_count,
           p.id,
           p.channel_id,
           p.channel_name,
@@ -1988,6 +2210,20 @@ async fn search_programs(
     .bind(limit)
     .fetch_all(&state.pool)
     .await?;
+    let total_count = rows.first().map(|row| row.total_count).unwrap_or(0);
+    let items = rows
+        .into_iter()
+        .map(|row| ProgramResponse {
+            id: row.id,
+            channel_id: row.channel_id,
+            channel_name: row.channel_name,
+            title: row.title,
+            description: row.description,
+            start_at: row.start_at,
+            end_at: row.end_at,
+            can_catchup: row.can_catchup,
+        })
+        .collect();
 
     Ok(Json(ProgramSearchResponse {
         query: term,
@@ -2439,6 +2675,48 @@ async fn fetch_guide_categories(
         .collect())
 }
 
+async fn fetch_guide_category_summary(
+    pool: &PgPool,
+    user_id: Uuid,
+    category_id: &str,
+) -> Result<Option<GuideCategorySummaryResponse>> {
+    let row = sqlx::query_as::<_, GuideCategorySummaryRow>(
+        r#"
+        SELECT
+          COALESCE(c.category_id::text, 'uncategorized') AS id,
+          COALESCE(cc.name, 'Uncategorized') AS name,
+          COUNT(DISTINCT c.id) AS channel_count,
+          COUNT(DISTINCT c.id) FILTER (
+            WHERE p.start_at <= NOW() AND p.end_at > NOW()
+          ) AS live_now_count
+        FROM channels c
+        LEFT JOIN channel_categories cc ON cc.id = c.category_id
+        LEFT JOIN programs p
+          ON p.user_id = c.user_id
+         AND p.channel_id = c.id
+         AND p.end_at > NOW() - INTERVAL '2 hours'
+         AND p.start_at < NOW() + INTERVAL '6 hours'
+        WHERE c.user_id = $1
+          AND (
+            ($2 = 'uncategorized' AND c.category_id IS NULL)
+            OR c.category_id::text = $2
+          )
+        GROUP BY COALESCE(c.category_id::text, 'uncategorized'), COALESCE(cc.name, 'Uncategorized')
+        "#,
+    )
+    .bind(user_id)
+    .bind(category_id)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(row.map(|row| GuideCategorySummaryResponse {
+        id: row.id,
+        name: row.name,
+        channel_count: row.channel_count,
+        live_now_count: row.live_now_count,
+    }))
+}
+
 async fn fetch_guide_category_total_count(
     pool: &PgPool,
     user_id: Uuid,
@@ -2634,40 +2912,94 @@ fn parse_search_pagination(query: SearchQuery) -> Result<(String, i64, i64), App
     Ok((term, offset, limit.min(SEARCH_MAX_LIMIT)))
 }
 
-async fn count_channel_search_results(pool: &PgPool, user_id: Uuid, query: &str) -> Result<i64> {
-    let total_count = sqlx::query_scalar::<_, i64>(
-        r#"
-        SELECT COUNT(*)
-        FROM search_documents sd
-        WHERE sd.user_id = $1
-          AND sd.entity_type = 'channel'
-          AND (sd.tsv @@ plainto_tsquery('simple', $2) OR sd.search_text % $2)
-        "#,
-    )
-    .bind(user_id)
-    .bind(query)
-    .fetch_one(pool)
-    .await?;
+async fn search_channels_meili(
+    state: &AppState,
+    headers: &HeaderMap,
+    meili: &MeilisearchClient,
+    user_id: Uuid,
+    query: &str,
+    offset: i64,
+    limit: i64,
+) -> std::result::Result<ChannelSearchResponse, AppError> {
+    let results = meili
+        .index("channels")
+        .search()
+        .with_query(query)
+        .with_filter(&format!("user_id = \"{user_id}\""))
+        .with_offset(offset as usize)
+        .with_limit(limit as usize)
+        .execute::<MeiliChannelDoc>()
+        .await
+        .map_err(|error| AppError::Internal(anyhow!(error)))?;
 
-    Ok(total_count)
+    let entity_ids = results
+        .hits
+        .iter()
+        .map(|hit| {
+            Uuid::parse_str(&hit.result.entity_id)
+                .map_err(|error| AppError::Internal(anyhow!(error)))
+        })
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let total_count = results
+        .estimated_total_hits
+        .map(|value| value as i64)
+        .unwrap_or(entity_ids.len() as i64);
+
+    let mut items = load_channels_by_ids(&state.pool, &entity_ids, user_id)
+        .await
+        .map_err(AppError::from)?;
+    rewrite_channel_logo_urls(state, headers, user_id, &mut items)?;
+
+    Ok(ChannelSearchResponse {
+        query: query.to_string(),
+        next_offset: next_page_offset(offset, limit, total_count),
+        total_count,
+        items,
+    })
 }
 
-async fn count_program_search_results(pool: &PgPool, user_id: Uuid, query: &str) -> Result<i64> {
-    let total_count = sqlx::query_scalar::<_, i64>(
-        r#"
-        SELECT COUNT(*)
-        FROM search_documents sd
-        WHERE sd.user_id = $1
-          AND sd.entity_type = 'program'
-          AND (sd.tsv @@ plainto_tsquery('simple', $2) OR sd.search_text % $2)
-        "#,
-    )
-    .bind(user_id)
-    .bind(query)
-    .fetch_one(pool)
-    .await?;
+async fn search_programs_meili(
+    meili: &MeilisearchClient,
+    pool: &PgPool,
+    user_id: Uuid,
+    query: &str,
+    offset: i64,
+    limit: i64,
+) -> std::result::Result<ProgramSearchResponse, AppError> {
+    let results = meili
+        .index("programs")
+        .search()
+        .with_query(query)
+        .with_filter(&format!("user_id = \"{user_id}\""))
+        .with_sort(&["sort_priority:asc", "starts_at:asc"])
+        .with_offset(offset as usize)
+        .with_limit(limit as usize)
+        .execute::<MeiliProgramDoc>()
+        .await
+        .map_err(|error| AppError::Internal(anyhow!(error)))?;
 
-    Ok(total_count)
+    let ids = results
+        .hits
+        .iter()
+        .map(|hit| {
+            Uuid::parse_str(&hit.result.entity_id)
+                .map_err(|error| AppError::Internal(anyhow!(error)))
+        })
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let total_count = results
+        .estimated_total_hits
+        .map(|value| value as i64)
+        .unwrap_or(ids.len() as i64);
+    let items = load_programs_by_ids(pool, user_id, &ids)
+        .await
+        .map_err(AppError::from)?;
+
+    Ok(ProgramSearchResponse {
+        query: query.to_string(),
+        next_offset: next_page_offset(offset, limit, total_count),
+        total_count,
+        items,
+    })
 }
 
 fn next_page_offset(offset: i64, limit: i64, total_count: i64) -> Option<i64> {
@@ -3248,6 +3580,18 @@ async fn require_auth(state: &AppState, headers: &HeaderMap) -> Result<AuthConte
 
     let user_id = Uuid::parse_str(&claims.sub).map_err(|_| AppError::Unauthorized)?;
     let session_id = Uuid::parse_str(&claims.sid).map_err(|_| AppError::Unauthorized)?;
+    let cache_key = (session_id, user_id);
+    let now = Instant::now();
+    let cached_expiry = state.session_cache.get(&cache_key).map(|expiry| *expiry);
+    if let Some(expiry) = cached_expiry {
+        if expiry > now {
+            return Ok(AuthContext {
+                user_id,
+                session_id,
+            });
+        }
+        state.session_cache.remove(&cache_key);
+    }
     let valid_session = sqlx::query_scalar::<_, i64>(
         r#"
         SELECT COUNT(*)
@@ -3263,6 +3607,10 @@ async fn require_auth(state: &AppState, headers: &HeaderMap) -> Result<AuthConte
     if valid_session == 0 {
         return Err(AppError::Unauthorized);
     }
+
+    state
+        .session_cache
+        .insert(cache_key, now + SESSION_CACHE_TTL);
 
     Ok(AuthContext {
         user_id,
@@ -3325,6 +3673,7 @@ async fn refresh_session_from_token(
     .bind(session.id)
     .execute(&state.pool)
     .await?;
+    state.session_cache.remove(&(session.id, session.user_id));
 
     issue_session(state, &user, session.id, next_refresh_token)
 }
@@ -3357,11 +3706,13 @@ async fn revoke_session_by_refresh_token(
     state: &AppState,
     refresh_token: &str,
 ) -> Result<(), AppError> {
+    let session = get_valid_session_by_refresh_token(state, refresh_token).await?;
     let refresh_hash = hash_refresh_token(refresh_token);
     sqlx::query("UPDATE sessions SET revoked_at = NOW() WHERE refresh_token_hash = $1")
         .bind(refresh_hash)
         .execute(&state.pool)
         .await?;
+    state.session_cache.remove(&(session.id, session.user_id));
 
     Ok(())
 }
@@ -3680,8 +4031,14 @@ async fn run_sync_job(
         "Validating provider",
     )
     .await?;
+    let validation_started_at = Instant::now();
     info!("sync job {job_id}: validating provider");
     let validation = xtreme::validate_profile(&state.http_client, &credentials).await?;
+    info!(
+        job_id = %job_id,
+        elapsed_ms = validation_started_at.elapsed().as_millis() as u64,
+        "validated provider for sync job"
+    );
     if !validation.valid {
         return Err(anyhow!("provider validation failed during sync"));
     }
@@ -3696,6 +4053,7 @@ async fn run_sync_job(
     let refresh_channels = job_type == "full" || existing_channel_count == 0;
 
     let (categories, channels) = if refresh_channels {
+        let provider_fetch_started_at = Instant::now();
         update_sync_job_phase(
             &state.pool,
             job_id,
@@ -3705,9 +4063,18 @@ async fn run_sync_job(
             "Fetching live categories",
         )
         .await?;
-        info!("sync job {job_id}: fetching categories");
-        let categories = xtreme::fetch_categories(&state.http_client, &credentials).await?;
-        info!("sync job {job_id}: fetched {} categories", categories.len());
+        let categories_future = async {
+            let started_at = Instant::now();
+            info!("sync job {job_id}: fetching categories");
+            let categories = xtreme::fetch_categories(&state.http_client, &credentials).await?;
+            info!(
+                job_id = %job_id,
+                category_count = categories.len(),
+                elapsed_ms = started_at.elapsed().as_millis() as u64,
+                "fetched live categories"
+            );
+            Ok::<Vec<XtreamCategory>, anyhow::Error>(categories)
+        };
         update_sync_job_phase(
             &state.pool,
             job_id,
@@ -3717,9 +4084,26 @@ async fn run_sync_job(
             "Fetching live channels",
         )
         .await?;
-        info!("sync job {job_id}: fetching live streams");
-        let channels = xtreme::fetch_live_streams(&state.http_client, &credentials).await?;
-        info!("sync job {job_id}: fetched {} live streams", channels.len());
+        let channels_future = async {
+            let started_at = Instant::now();
+            info!("sync job {job_id}: fetching live streams");
+            let channels = xtreme::fetch_live_streams(&state.http_client, &credentials).await?;
+            info!(
+                job_id = %job_id,
+                channel_count = channels.len(),
+                elapsed_ms = started_at.elapsed().as_millis() as u64,
+                "fetched live streams"
+            );
+            Ok::<Vec<XtreamChannel>, anyhow::Error>(channels)
+        };
+        let (categories, channels) = tokio::try_join!(categories_future, channels_future)?;
+        info!(
+            job_id = %job_id,
+            category_count = categories.len(),
+            channel_count = channels.len(),
+            elapsed_ms = provider_fetch_started_at.elapsed().as_millis() as u64,
+            "fetched provider channel catalog"
+        );
         (Some(categories), Some(channels))
     } else {
         (None, None)
@@ -3748,8 +4132,15 @@ async fn run_sync_job(
         "Fetching EPG feeds",
     )
     .await?;
+    let epg_fetch_started_at = Instant::now();
     let (fetched_feeds, mut source_statuses) =
         fetch_epg_feeds(&state.http_client, &credentials, &epg_sources).await?;
+    info!(
+        job_id = %job_id,
+        feed_count = fetched_feeds.len(),
+        elapsed_ms = epg_fetch_started_at.elapsed().as_millis() as u64,
+        "fetched EPG feeds"
+    );
 
     let epg_match_completed_phases = if refresh_channels { 4 } else { 2 };
     update_sync_job_phase(
@@ -3762,6 +4153,7 @@ async fn run_sync_job(
     )
     .await?;
     info!("sync job {job_id}: persisting sync data");
+    let persist_started_at = Instant::now();
     let persisted_statuses = if refresh_channels {
         persist_full_sync_data(
             &state.pool,
@@ -3787,7 +4179,11 @@ async fn run_sync_job(
     };
     source_statuses.extend(persisted_statuses);
     update_epg_source_statuses(&state.pool, &source_statuses).await?;
-    info!("sync job {job_id}: finished persisting sync data");
+    info!(
+        job_id = %job_id,
+        elapsed_ms = persist_started_at.elapsed().as_millis() as u64,
+        "finished persisting sync data"
+    );
 
     sqlx::query(
         r#"
@@ -3815,8 +4211,33 @@ async fn run_sync_job(
     .bind(profile_id)
     .execute(&state.pool)
     .await?;
+    spawn_search_refresh(state.clone(), user_id, job_id);
 
     Ok(())
+}
+
+fn spawn_search_refresh(state: AppState, user_id: Uuid, job_id: Uuid) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        let refresh_started_at = Instant::now();
+        info!("sync job {job_id}: refreshing search indexes in background");
+
+        if let Err(error) = rebuild_search_documents(&state.pool, user_id).await {
+            warn!("sync job {job_id}: failed to rebuild PostgreSQL search documents: {error:?}");
+            return;
+        }
+
+        if let Some(meili) = &state.meili {
+            if let Err(error) = rebuild_meili_indexes(meili, user_id, &state.pool).await {
+                warn!("sync job {job_id}: failed to rebuild Meilisearch indexes: {error:?}");
+            }
+        }
+
+        info!(
+            job_id = %job_id,
+            elapsed_ms = refresh_started_at.elapsed().as_millis() as u64,
+            "finished background search refresh"
+        );
+    })
 }
 
 async fn fetch_epg_feeds(
@@ -3830,43 +4251,79 @@ async fn fetch_epg_feeds(
     let mut join_set = JoinSet::new();
     let mut next_source_index = 0usize;
 
+    {
+        let client = client.clone();
+        let credentials = credentials.clone();
+        let next_priority = external_sources
+            .iter()
+            .map(|source| source.priority)
+            .max()
+            .unwrap_or(-1)
+            + 1;
+        join_set.spawn(async move {
+            EpgFetchResult::BuiltIn(
+                async move {
+                    let feed = xtreme::fetch_xmltv(&client, &credentials).await?;
+                    Ok(FetchedEpgFeed {
+                        source_id: None,
+                        source_kind: "xtream".to_string(),
+                        source_label: xtreme::build_xmltv_url(&credentials)?.to_string(),
+                        priority: next_priority,
+                        feed,
+                    })
+                }
+                .await,
+            )
+        });
+    }
+
     while next_source_index < external_sources.len() && join_set.len() < EPG_FETCH_CONCURRENCY {
         let source = external_sources[next_source_index].clone();
         let client = client.clone();
-        join_set.spawn(async move { fetch_external_epg_source(client, source).await });
+        join_set.spawn(async move {
+            EpgFetchResult::External(fetch_external_epg_source(client, source).await)
+        });
         next_source_index += 1;
     }
 
     while let Some(result) = join_set.join_next().await {
         match result? {
-            ExternalEpgFetchResult::Success(feed) => fetched_feeds.push(feed),
-            ExternalEpgFetchResult::Failure(status) => source_statuses.push(status),
+            EpgFetchResult::External(ExternalEpgFetchResult::Success(feed)) => {
+                info!(
+                    source_kind = %feed.source_kind,
+                    source = %feed.source_label,
+                    programme_count = feed.feed.programmes.len(),
+                    channel_count = feed.feed.channels.len(),
+                    "fetched external EPG source"
+                );
+                fetched_feeds.push(feed)
+            }
+            EpgFetchResult::External(ExternalEpgFetchResult::Failure(status)) => {
+                source_statuses.push(status)
+            }
+            EpgFetchResult::BuiltIn(Ok(feed)) => {
+                info!(
+                    source_kind = %feed.source_kind,
+                    source = %feed.source_label,
+                    programme_count = feed.feed.programmes.len(),
+                    channel_count = feed.feed.channels.len(),
+                    "fetched built-in Xtream EPG source"
+                );
+                fetched_feeds.push(feed)
+            }
+            EpgFetchResult::BuiltIn(Err(error)) => {
+                built_in_error = Some(error.to_string());
+                error!("failed to fetch built-in Xtream XMLTV feed: {error:?}");
+            }
         }
 
         if next_source_index < external_sources.len() {
             let source = external_sources[next_source_index].clone();
             let client = client.clone();
-            join_set.spawn(async move { fetch_external_epg_source(client, source).await });
+            join_set.spawn(async move {
+                EpgFetchResult::External(fetch_external_epg_source(client, source).await)
+            });
             next_source_index += 1;
-        }
-    }
-
-    match xtreme::fetch_xmltv(client, credentials).await {
-        Ok(feed) => fetched_feeds.push(FetchedEpgFeed {
-            source_id: None,
-            source_kind: "xtream".to_string(),
-            source_label: xtreme::build_xmltv_url(credentials)?.to_string(),
-            priority: external_sources
-                .iter()
-                .map(|source| source.priority)
-                .max()
-                .unwrap_or(-1)
-                + 1,
-            feed,
-        }),
-        Err(error) => {
-            built_in_error = Some(error.to_string());
-            error!("failed to fetch built-in Xtream XMLTV feed: {error:?}");
         }
     }
 
@@ -3886,19 +4343,31 @@ async fn fetch_external_epg_source(
     client: reqwest::Client,
     source: EpgSourceRecord,
 ) -> ExternalEpgFetchResult {
+    let started_at = Instant::now();
     match url::Url::parse(&source.url) {
         Ok(url) => match xmltv::fetch_xmltv(&client, &url).await {
-            Ok(feed) => ExternalEpgFetchResult::Success(FetchedEpgFeed {
-                source_id: Some(source.id),
-                source_kind: source.source_kind,
-                source_label: source.url,
-                priority: source.priority,
-                feed,
-            }),
+            Ok(feed) => {
+                info!(
+                    source_kind = %source.source_kind,
+                    source = %source.url,
+                    elapsed_ms = started_at.elapsed().as_millis() as u64,
+                    programme_count = feed.programmes.len(),
+                    channel_count = feed.channels.len(),
+                    "fetched external XMLTV feed"
+                );
+                ExternalEpgFetchResult::Success(FetchedEpgFeed {
+                    source_id: Some(source.id),
+                    source_kind: source.source_kind,
+                    source_label: source.url,
+                    priority: source.priority,
+                    feed,
+                })
+            }
             Err(error) => {
                 error!(
-                    "failed to fetch external EPG source {}: {error:?}",
-                    source.url
+                    source = %source.url,
+                    elapsed_ms = started_at.elapsed().as_millis() as u64,
+                    "failed to fetch external EPG source: {error:?}"
                 );
                 ExternalEpgFetchResult::Failure(EpgSourceSyncStatus {
                     source_id: source.id,
@@ -3929,12 +4398,27 @@ async fn persist_full_sync_data(
     channels: &[XtreamChannel],
     feeds: &[FetchedEpgFeed],
 ) -> Result<Vec<EpgSourceSyncStatus>> {
+    let persist_started_at = Instant::now();
     let mut transaction = pool.begin().await?;
     bulk_upsert_categories(&mut transaction, user_id, profile_id, categories).await?;
     bulk_upsert_channels(&mut transaction, user_id, profile_id, channels).await?;
+    info!(
+        job_id = %job_id,
+        category_count = categories.len(),
+        channel_count = channels.len(),
+        elapsed_ms = persist_started_at.elapsed().as_millis() as u64,
+        "persisted provider categories and channels"
+    );
     let persisted_channels = load_persisted_channels(&mut transaction, user_id, profile_id).await?;
     let channel_lookup = build_channel_lookup_index(&persisted_channels);
+    let programme_resolution_started_at = Instant::now();
     let (programmes, source_statuses) = resolve_epg_programmes(feeds, &channel_lookup);
+    info!(
+        job_id = %job_id,
+        programme_count = programmes.len(),
+        elapsed_ms = programme_resolution_started_at.elapsed().as_millis() as u64,
+        "resolved EPG programmes against persisted channels"
+    );
 
     update_sync_job_phase(
         pool,
@@ -3945,25 +4429,20 @@ async fn persist_full_sync_data(
         "Saving guide entries",
     )
     .await?;
+    let programme_write_started_at = Instant::now();
     sqlx::query("DELETE FROM programs WHERE user_id = $1 AND profile_id = $2")
         .bind(user_id)
         .bind(profile_id)
         .execute(&mut *transaction)
         .await?;
     bulk_insert_programmes(&mut transaction, user_id, profile_id, &programmes).await?;
-
-    update_sync_job_phase(
-        pool,
-        job_id,
-        "rebuilding-search",
-        6,
-        job_type,
-        "Refreshing search",
-    )
-    .await?;
-    rebuild_search_documents(&mut transaction, user_id).await?;
-
     transaction.commit().await?;
+    info!(
+        job_id = %job_id,
+        programme_count = programmes.len(),
+        elapsed_ms = programme_write_started_at.elapsed().as_millis() as u64,
+        "persisted guide programmes"
+    );
     Ok(source_statuses)
 }
 
@@ -3975,10 +4454,18 @@ async fn persist_epg_sync_data(
     job_type: &str,
     feeds: &[FetchedEpgFeed],
 ) -> Result<Vec<EpgSourceSyncStatus>> {
+    let persist_started_at = Instant::now();
     let mut transaction = pool.begin().await?;
     let persisted_channels = load_persisted_channels(&mut transaction, user_id, profile_id).await?;
     let channel_lookup = build_channel_lookup_index(&persisted_channels);
+    let programme_resolution_started_at = Instant::now();
     let (programmes, source_statuses) = resolve_epg_programmes(feeds, &channel_lookup);
+    info!(
+        job_id = %job_id,
+        programme_count = programmes.len(),
+        elapsed_ms = programme_resolution_started_at.elapsed().as_millis() as u64,
+        "resolved EPG programmes against persisted channels"
+    );
 
     update_sync_job_phase(
         pool,
@@ -3989,25 +4476,22 @@ async fn persist_epg_sync_data(
         "Saving guide entries",
     )
     .await?;
+    let programme_write_started_at = Instant::now();
     sqlx::query("DELETE FROM programs WHERE user_id = $1 AND profile_id = $2")
         .bind(user_id)
         .bind(profile_id)
         .execute(&mut *transaction)
         .await?;
     bulk_insert_programmes(&mut transaction, user_id, profile_id, &programmes).await?;
-
-    update_sync_job_phase(
-        pool,
-        job_id,
-        "rebuilding-search",
-        4,
-        job_type,
-        "Refreshing search",
-    )
-    .await?;
-    rebuild_search_documents(&mut transaction, user_id).await?;
-
     transaction.commit().await?;
+    info!(
+        job_id = %job_id,
+        programme_count = programmes.len(),
+        persisted_channel_count = persisted_channels.len(),
+        total_elapsed_ms = persist_started_at.elapsed().as_millis() as u64,
+        write_elapsed_ms = programme_write_started_at.elapsed().as_millis() as u64,
+        "persisted guide programmes"
+    );
     Ok(source_statuses)
 }
 
@@ -4466,6 +4950,14 @@ fn resolve_epg_programmes(
             });
         }
 
+        info!(
+            source_kind = %feed.source_kind,
+            source = %feed.source_label,
+            programme_count = feed.feed.programmes.len(),
+            matched_count,
+            "resolved EPG feed against channel catalog"
+        );
+
         if let Some(source_id) = feed.source_id {
             source_statuses.push(EpgSourceSyncStatus {
                 source_id,
@@ -4578,10 +5070,7 @@ async fn bulk_insert_programmes(
     Ok(())
 }
 
-async fn rebuild_search_documents(
-    transaction: &mut Transaction<'_, Postgres>,
-    user_id: Uuid,
-) -> Result<()> {
+async fn rebuild_search_documents(pool: &PgPool, user_id: Uuid) -> Result<()> {
     sqlx::query(
         r#"
         DELETE FROM search_documents
@@ -4590,7 +5079,7 @@ async fn rebuild_search_documents(
         "#,
     )
     .bind(user_id)
-    .execute(&mut **transaction)
+    .execute(pool)
     .await?;
 
     sqlx::query(
@@ -4616,7 +5105,7 @@ async fn rebuild_search_documents(
         "#,
     )
     .bind(user_id)
-    .execute(&mut **transaction)
+    .execute(pool)
     .await?;
 
     sqlx::query(
@@ -4636,10 +5125,244 @@ async fn rebuild_search_documents(
         "#,
     )
     .bind(user_id)
-    .execute(&mut **transaction)
+    .execute(pool)
     .await?;
 
     Ok(())
+}
+
+async fn rebuild_meili_indexes(
+    meili: &MeilisearchClient,
+    user_id: Uuid,
+    pool: &PgPool,
+) -> Result<()> {
+    let user_id_str = user_id.to_string();
+    delete_meili_user_documents(meili, "channels", &user_id_str).await?;
+    delete_meili_user_documents(meili, "programs", &user_id_str).await?;
+
+    let channels_index = meili.index("channels");
+    let mut last_channel_id = None;
+    loop {
+        let rows = sqlx::query_as::<_, MeiliChannelRow>(
+            r#"
+            SELECT c.id, c.name, cc.name AS category_name, c.has_catchup
+            FROM channels c
+            LEFT JOIN channel_categories cc ON cc.id = c.category_id
+            WHERE c.user_id = $1
+              AND ($2::uuid IS NULL OR c.id > $2)
+            ORDER BY c.id ASC
+            LIMIT $3
+            "#,
+        )
+        .bind(user_id)
+        .bind(last_channel_id)
+        .bind(MEILI_INDEX_BATCH_SIZE)
+        .fetch_all(pool)
+        .await?;
+        if rows.is_empty() {
+            break;
+        }
+
+        let docs = rows
+            .iter()
+            .map(|row| MeiliChannelDoc {
+                id: format!("{user_id}_{}", row.id),
+                user_id: user_id_str.clone(),
+                entity_id: row.id.to_string(),
+                title: row.name.clone(),
+                subtitle: row.category_name.clone(),
+                search_text: format!(
+                    "{} {} {}",
+                    row.name,
+                    row.category_name.as_deref().unwrap_or_default(),
+                    if row.has_catchup {
+                        "catchup archive"
+                    } else {
+                        "live"
+                    }
+                )
+                .trim()
+                .to_string(),
+            })
+            .collect::<Vec<_>>();
+        channels_index
+            .add_or_replace(&docs, Some("id"))
+            .await?
+            .wait_for_completion(meili, None, None)
+            .await?;
+        last_channel_id = rows.last().map(|row| row.id);
+    }
+
+    let programs_index = meili.index("programs");
+    let mut last_program_id = None;
+    loop {
+        let rows = sqlx::query_as::<_, MeiliProgramRow>(
+            r#"
+            SELECT id, channel_id, channel_name, title, description, start_at, end_at, can_catchup
+            FROM programs
+            WHERE user_id = $1
+              AND ($2::uuid IS NULL OR id > $2)
+            ORDER BY id ASC
+            LIMIT $3
+            "#,
+        )
+        .bind(user_id)
+        .bind(last_program_id)
+        .bind(MEILI_INDEX_BATCH_SIZE)
+        .fetch_all(pool)
+        .await?;
+        if rows.is_empty() {
+            break;
+        }
+
+        let now = Utc::now();
+        let docs = rows
+            .iter()
+            .map(|row| MeiliProgramDoc {
+                id: format!("{user_id}_{}", row.id),
+                user_id: user_id_str.clone(),
+                entity_id: row.id.to_string(),
+                title: row.title.clone(),
+                subtitle: row.channel_name.clone(),
+                search_text: format!(
+                    "{} {} {}",
+                    row.title,
+                    row.channel_name.as_deref().unwrap_or_default(),
+                    row.description.as_deref().unwrap_or_default()
+                )
+                .trim()
+                .to_string(),
+                starts_at: row.start_at.timestamp(),
+                ends_at: row.end_at.timestamp(),
+                can_catchup: row.can_catchup,
+                channel_id: row.channel_id.map(|value| value.to_string()),
+                sort_priority: if row.channel_id.is_some()
+                    && row.start_at <= now
+                    && row.end_at >= now
+                {
+                    0
+                } else if row.channel_id.is_some() && row.end_at <= now && row.can_catchup {
+                    1
+                } else if row.start_at > now {
+                    2
+                } else {
+                    3
+                },
+            })
+            .collect::<Vec<_>>();
+        programs_index
+            .add_or_replace(&docs, Some("id"))
+            .await?
+            .wait_for_completion(meili, None, None)
+            .await?;
+        last_program_id = rows.last().map(|row| row.id);
+    }
+
+    Ok(())
+}
+
+async fn delete_meili_user_documents(
+    meili: &MeilisearchClient,
+    index_name: &str,
+    user_id: &str,
+) -> Result<()> {
+    let index = meili.index(index_name);
+    let mut query = DocumentDeletionQuery::new(&index);
+    let filter = format!("user_id = \"{user_id}\"");
+    query.with_filter(&filter);
+    index
+        .delete_documents_with(&query)
+        .await?
+        .wait_for_completion(meili, None, None)
+        .await?;
+    Ok(())
+}
+
+async fn load_channels_by_ids(
+    pool: &PgPool,
+    ids: &[Uuid],
+    user_id: Uuid,
+) -> Result<Vec<ChannelResponse>> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let rows = sqlx::query_as::<_, ChannelResponse>(
+        r#"
+        SELECT
+          c.id,
+          c.profile_id,
+          c.name,
+          c.logo_url,
+          cc.name AS category_name,
+          c.remote_stream_id,
+          c.epg_channel_id,
+          c.has_catchup,
+          c.archive_duration_hours,
+          c.stream_extension,
+          EXISTS(
+            SELECT 1 FROM favorites f
+            WHERE f.user_id = c.user_id AND f.channel_id = c.id
+          ) AS is_favorite
+        FROM channels c
+        LEFT JOIN channel_categories cc ON cc.id = c.category_id
+        WHERE c.user_id = $1
+          AND c.id = ANY($2)
+        "#,
+    )
+    .bind(user_id)
+    .bind(ids)
+    .fetch_all(pool)
+    .await?;
+
+    let mut by_id = rows
+        .into_iter()
+        .map(|row| (row.id, row))
+        .collect::<HashMap<_, _>>();
+    let mut ordered = Vec::with_capacity(ids.len());
+    for id in ids {
+        if let Some(row) = by_id.remove(id) {
+            ordered.push(row);
+        }
+    }
+
+    Ok(ordered)
+}
+
+async fn load_programs_by_ids(
+    pool: &PgPool,
+    user_id: Uuid,
+    ids: &[Uuid],
+) -> Result<Vec<ProgramResponse>> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let rows = sqlx::query_as::<_, ProgramResponse>(
+        r#"
+        SELECT id, channel_id, channel_name, title, description, start_at, end_at, can_catchup
+        FROM programs
+        WHERE user_id = $1
+          AND id = ANY($2)
+        "#,
+    )
+    .bind(user_id)
+    .bind(ids)
+    .fetch_all(pool)
+    .await?;
+
+    let mut by_id = rows
+        .into_iter()
+        .map(|row| (row.id, row))
+        .collect::<HashMap<_, _>>();
+    let mut ordered = Vec::with_capacity(ids.len());
+    for id in ids {
+        if let Some(row) = by_id.remove(id) {
+            ordered.push(row);
+        }
+    }
+
+    Ok(ordered)
 }
 
 #[derive(Debug, FromRow)]
@@ -5528,8 +6251,12 @@ mod tests {
                 browser_cookie_secure: public_origin.is_some(),
                 vpn_enabled: false,
                 vpn_provider_name: None,
+                meilisearch_url: None,
+                meilisearch_api_key: None,
             }),
             http_client: reqwest::Client::new(),
+            meili: None,
+            session_cache: Arc::new(DashMap::new()),
         }
     }
 

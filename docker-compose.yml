@@ -1,10 +1,8 @@
 services:
   postgres:
     image: postgres:17
-    environment:
-      POSTGRES_DB: euripus
-      POSTGRES_USER: euripus
-      POSTGRES_PASSWORD: euripus
+    env_file:
+      - apps/server/.env
     ports:
       - "5432:5432"
     volumes:
@@ -15,15 +13,24 @@ services:
       timeout: 5s
       retries: 20
 
+  meilisearch:
+    image: getmeili/meilisearch:v1.15
+    env_file:
+      - apps/server/.env
+    environment:
+      MEILI_ENV: development
+    volumes:
+      - meilisearch-data:/meili_data
+
   server:
     build:
       context: .
       dockerfile: apps/server/Dockerfile
     env_file:
       - apps/server/.env
-    environment:
-      APP_DATABASE_URL: postgres://euripus:euripus@postgres:5432/euripus
     depends_on:
+      meilisearch:
+        condition: service_started
       postgres:
         condition: service_healthy
     healthcheck:
@@ -36,3 +43,4 @@ services:
 
 volumes:
   postgres-data:
+  meilisearch-data:
