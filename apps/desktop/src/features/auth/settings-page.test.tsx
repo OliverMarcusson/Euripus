@@ -1,7 +1,15 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { SettingsPage } from "@/features/auth/settings-page";
-import { getProvider, getRecents, getServerNetworkStatus, getSyncStatus, saveProvider, startChannelPlayback } from "@/lib/api";
+import {
+  getProvider,
+  getRecents,
+  getServerNetworkStatus,
+  getSyncStatus,
+  saveProvider,
+  startChannelPlayback,
+  triggerProviderSync,
+} from "@/lib/api";
 import { useThemeStore } from "@/store/theme-store";
 import { useTvModeStore } from "@/store/tv-mode-store";
 
@@ -24,6 +32,7 @@ const mockedGetServerNetworkStatus = vi.mocked(getServerNetworkStatus);
 const mockedGetSyncStatus = vi.mocked(getSyncStatus);
 const mockedSaveProvider = vi.mocked(saveProvider);
 const mockedStartChannelPlayback = vi.mocked(startChannelPlayback);
+const mockedTriggerProviderSync = vi.mocked(triggerProviderSync);
 
 describe("SettingsPage", () => {
   beforeEach(() => {
@@ -39,6 +48,20 @@ describe("SettingsPage", () => {
       publicIpError: null,
     });
     mockedGetSyncStatus.mockResolvedValue(null);
+    mockedTriggerProviderSync.mockResolvedValue({
+      id: "sync-job-1",
+      status: "queued",
+      jobType: "full",
+      trigger: "manual",
+      createdAt: "2026-04-05T10:00:00.000Z",
+      startedAt: null,
+      finishedAt: null,
+      currentPhase: "queued",
+      completedPhases: 0,
+      totalPhases: 7,
+      phaseMessage: "Waiting to start",
+      errorMessage: null,
+    });
     mockedSaveProvider.mockImplementation(async (payload) => ({
       id: "provider-1",
       providerType: "xtreme",
@@ -203,5 +226,83 @@ describe("SettingsPage", () => {
         ],
       }),
     );
+  });
+
+  it("shows sync errors from failed manual sync attempts", async () => {
+    mockedGetProvider.mockResolvedValue({
+      id: "provider-1",
+      providerType: "xtreme",
+      baseUrl: "https://provider.example.com",
+      username: "demo",
+      outputFormat: "m3u8",
+      playbackMode: "direct",
+      status: "error",
+      lastValidatedAt: "2026-04-04T12:00:00.000Z",
+      lastSyncAt: null,
+      lastSyncError: "Previous sync failed.",
+      createdAt: "2026-04-04T10:00:00.000Z",
+      updatedAt: "2026-04-04T12:00:00.000Z",
+      epgSources: [],
+    });
+    mockedTriggerProviderSync.mockRejectedValue(
+      new Error("A sync is already queued or running for this provider."),
+    );
+
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <SettingsPage />
+      </QueryClientProvider>,
+    );
+
+    const syncButton = await screen.findByRole("button", { name: /trigger full sync/i });
+    await waitFor(() => expect(syncButton).toBeEnabled());
+    fireEvent.click(syncButton);
+    await waitFor(() => expect(mockedTriggerProviderSync).toHaveBeenCalled());
+
+    expect(
+      await screen.findByText(/queued or running for this provider/i),
+    ).toBeInTheDocument();
+  });
+
+  it("disables the sync trigger while a sync job is already active", async () => {
+    mockedGetProvider.mockResolvedValue({
+      id: "provider-1",
+      providerType: "xtreme",
+      baseUrl: "https://provider.example.com",
+      username: "demo",
+      outputFormat: "m3u8",
+      playbackMode: "direct",
+      status: "syncing",
+      lastValidatedAt: "2026-04-04T12:00:00.000Z",
+      lastSyncAt: null,
+      lastSyncError: null,
+      createdAt: "2026-04-04T10:00:00.000Z",
+      updatedAt: "2026-04-05T10:00:00.000Z",
+      epgSources: [],
+    });
+    mockedGetSyncStatus.mockResolvedValue({
+      id: "sync-job-2",
+      status: "running",
+      jobType: "full",
+      trigger: "manual",
+      createdAt: "2026-04-05T10:00:00.000Z",
+      startedAt: "2026-04-05T10:00:05.000Z",
+      finishedAt: null,
+      currentPhase: "fetching-epg",
+      completedPhases: 3,
+      totalPhases: 7,
+      phaseMessage: "Fetching EPG feeds",
+      errorMessage: null,
+    });
+
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <SettingsPage />
+      </QueryClientProvider>,
+    );
+
+    expect(
+      await screen.findByRole("button", { name: /trigger full sync/i }),
+    ).toBeDisabled();
   });
 });

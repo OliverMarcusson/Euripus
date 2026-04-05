@@ -203,6 +203,8 @@ struct EpgSourceResponse {
 #[serde(rename_all = "camelCase")]
 struct ChannelResponse {
     id: Uuid,
+    #[serde(skip_serializing)]
+    profile_id: Uuid,
     name: String,
     logo_url: Option<String>,
     category_name: Option<String>,
@@ -548,6 +550,7 @@ enum PlaybackMode {
 enum RelayAssetKind {
     Hls,
     Raw,
+    Asset,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -582,6 +585,8 @@ const CSRF_HEADER_NAME: &str = "x-csrf-token";
 const RELAY_PLAYLIST_MAX_BYTES: usize = 1024 * 1024;
 const PUBLIC_IP_LOOKUP_URL: &str = "https://api.ipify.org";
 const PUBLIC_IP_LOOKUP_TIMEOUT_SECONDS: u64 = 5;
+const INTERRUPTED_SYNC_MESSAGE: &str =
+    "Sync was interrupted when the server restarted. Start a new sync.";
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -601,6 +606,13 @@ async fn main() -> Result<()> {
         .run(&pool)
         .await
         .context("failed to run migrations")?;
+    let recovery = recover_interrupted_syncs(&pool).await?;
+    if recovery.recovered_jobs > 0 || recovery.recovered_profiles > 0 {
+        warn!(
+            "recovered {} interrupted sync job(s) and {} syncing provider profile(s)",
+            recovery.recovered_jobs, recovery.recovered_profiles
+        );
+    }
 
     if config.daily_sync_hour_local > 23 {
         return Err(anyhow!(
@@ -641,6 +653,51 @@ async fn main() -> Result<()> {
 
 async fn health() -> StatusCode {
     StatusCode::NO_CONTENT
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct InterruptedSyncRecovery {
+    recovered_jobs: u64,
+    recovered_profiles: u64,
+}
+
+async fn recover_interrupted_syncs(pool: &PgPool) -> Result<InterruptedSyncRecovery> {
+    let recovered_jobs = sqlx::query(
+        r#"
+        UPDATE sync_jobs
+        SET
+          status = 'failed',
+          finished_at = NOW(),
+          current_phase = 'failed',
+          phase_message = $1,
+          error_message = $1
+        WHERE status IN ('queued', 'running')
+        "#,
+    )
+    .bind(INTERRUPTED_SYNC_MESSAGE)
+    .execute(pool)
+    .await?
+    .rows_affected();
+
+    let recovered_profiles = sqlx::query(
+        r#"
+        UPDATE provider_profiles
+        SET
+          status = 'error',
+          last_sync_error = $1,
+          updated_at = NOW()
+        WHERE status = 'syncing'
+        "#,
+    )
+    .bind(INTERRUPTED_SYNC_MESSAGE)
+    .execute(pool)
+    .await?
+    .rows_affected();
+
+    Ok(InterruptedSyncRecovery {
+        recovered_jobs,
+        recovered_profiles,
+    })
 }
 
 fn shared_api_router() -> Router<AppState> {
@@ -698,6 +755,7 @@ fn relay_router() -> Router<AppState> {
     Router::new()
         .route("/relay/hls", get(relay_hls_playlist))
         .route("/relay/raw", get(relay_raw_stream))
+        .route("/relay/asset", get(relay_asset))
 }
 
 fn build_cors_layer(config: &Config) -> Result<CorsLayer> {
@@ -1546,7 +1604,8 @@ async fn list_channels(
     headers: HeaderMap,
 ) -> ApiResult<Vec<ChannelResponse>> {
     let auth = require_auth(&state, &headers).await?;
-    let channels = fetch_channels(&state.pool, auth.user_id).await?;
+    let mut channels = fetch_channels(&state.pool, auth.user_id).await?;
+    rewrite_channel_logo_urls(&state, &headers, auth.user_id, &mut channels)?;
     Ok(Json(channels))
 }
 
@@ -1556,10 +1615,11 @@ async fn get_channel(
     Path(id): Path<Uuid>,
 ) -> ApiResult<ChannelResponse> {
     let auth = require_auth(&state, &headers).await?;
-    let channel = sqlx::query_as::<_, ChannelResponse>(
+    let mut channel = sqlx::query_as::<_, ChannelResponse>(
         r#"
         SELECT
           c.id,
+          c.profile_id,
           c.name,
           c.logo_url,
           cc.name AS category_name,
@@ -1582,6 +1642,13 @@ async fn get_channel(
     .fetch_optional(&state.pool)
     .await?
     .ok_or_else(|| AppError::NotFound("Channel not found".to_string()))?;
+    channel.logo_url = rewrite_channel_logo_url(
+        &state,
+        &request_base_url(&state.config, &headers)?,
+        auth.user_id,
+        channel.profile_id,
+        channel.logo_url,
+    )?;
 
     Ok(Json(channel))
 }
@@ -1649,10 +1716,11 @@ async fn get_guide_category(
         fetch_guide_category_total_count(&state.pool, auth.user_id, &category_id).await?;
     let rows =
         fetch_guide_category_rows(&state.pool, auth.user_id, &category_id, offset, limit).await?;
+    let request_base_url = request_base_url(&state.config, &headers)?;
     let entries = rows
         .into_iter()
-        .map(map_guide_category_entry)
-        .collect::<Vec<_>>();
+        .map(|row| map_guide_category_entry(&state, &request_base_url, auth.user_id, row))
+        .collect::<Result<Vec<_>, _>>()?;
 
     Ok(Json(GuideCategoryResponse {
         category,
@@ -1701,7 +1769,7 @@ async fn search_channels(
     let auth = require_auth(&state, &headers).await?;
     let (term, offset, limit) = parse_search_pagination(query)?;
     let total_count = count_channel_search_results(&state.pool, auth.user_id, &term).await?;
-    let items = sqlx::query_as::<_, ChannelResponse>(
+    let mut items = sqlx::query_as::<_, ChannelResponse>(
         r#"
         WITH page AS (
           SELECT ranked.entity_id, ROW_NUMBER() OVER () AS ordinal
@@ -1721,6 +1789,7 @@ async fn search_channels(
         )
         SELECT
           c.id,
+          c.profile_id,
           c.name,
           c.logo_url,
           cc.name AS category_name,
@@ -1745,6 +1814,7 @@ async fn search_channels(
     .bind(limit)
     .fetch_all(&state.pool)
     .await?;
+    rewrite_channel_logo_urls(&state, &headers, auth.user_id, &mut items)?;
 
     Ok(Json(ChannelSearchResponse {
         query: term,
@@ -1836,10 +1906,11 @@ async fn list_favorites(
     headers: HeaderMap,
 ) -> ApiResult<Vec<ChannelResponse>> {
     let auth = require_auth(&state, &headers).await?;
-    let favorites = sqlx::query_as::<_, ChannelResponse>(
+    let mut favorites = sqlx::query_as::<_, ChannelResponse>(
         r#"
         SELECT
           c.id,
+          c.profile_id,
           c.name,
           c.logo_url,
           cc.name AS category_name,
@@ -1859,6 +1930,7 @@ async fn list_favorites(
     .bind(auth.user_id)
     .fetch_all(&state.pool)
     .await?;
+    rewrite_channel_logo_urls(&state, &headers, auth.user_id, &mut favorites)?;
 
     Ok(Json(favorites))
 }
@@ -1906,6 +1978,7 @@ async fn list_recents(
         r#"
         SELECT
           c.id,
+          c.profile_id,
           c.name,
           c.logo_url,
           cc.name AS category_name,
@@ -1930,25 +2003,35 @@ async fn list_recents(
     .bind(auth.user_id)
     .fetch_all(&state.pool)
     .await?;
+    let request_base_url = request_base_url(&state.config, &headers)?;
 
     let recents = rows
         .into_iter()
-        .map(|row| RecentChannelResponse {
-            channel: ChannelResponse {
-                id: row.id,
-                name: row.name,
-                logo_url: row.logo_url,
-                category_name: row.category_name,
-                remote_stream_id: row.remote_stream_id,
-                epg_channel_id: row.epg_channel_id,
-                has_catchup: row.has_catchup,
-                archive_duration_hours: row.archive_duration_hours,
-                stream_extension: row.stream_extension,
-                is_favorite: row.is_favorite,
-            },
-            last_played_at: row.last_played_at,
+        .map(|row| {
+            Ok(RecentChannelResponse {
+                channel: ChannelResponse {
+                    id: row.id,
+                    profile_id: row.profile_id,
+                    name: row.name,
+                    logo_url: rewrite_channel_logo_url(
+                        &state,
+                        &request_base_url,
+                        auth.user_id,
+                        row.profile_id,
+                        row.logo_url,
+                    )?,
+                    category_name: row.category_name,
+                    remote_stream_id: row.remote_stream_id,
+                    epg_channel_id: row.epg_channel_id,
+                    has_catchup: row.has_catchup,
+                    archive_duration_hours: row.archive_duration_hours,
+                    stream_extension: row.stream_extension,
+                    is_favorite: row.is_favorite,
+                },
+                last_played_at: row.last_played_at,
+            })
         })
-        .collect();
+        .collect::<Result<Vec<_>, AppError>>()?;
 
     Ok(Json(recents))
 }
@@ -2177,9 +2260,22 @@ async fn relay_raw_stream(
 ) -> Result<Response, AppError> {
     let relay = validate_relay_token(&state, &query.token, RelayAssetKind::Raw).await?;
 
+    relay_stream_response(&state, relay.upstream_url).await
+}
+
+async fn relay_asset(
+    State(state): State<AppState>,
+    Query(query): Query<RelayTokenQuery>,
+) -> Result<Response, AppError> {
+    let relay = validate_relay_token(&state, &query.token, RelayAssetKind::Asset).await?;
+
+    relay_stream_response(&state, relay.upstream_url).await
+}
+
+async fn relay_stream_response(state: &AppState, upstream_url: Url) -> Result<Response, AppError> {
     let response = state
         .http_client
-        .get(relay.upstream_url)
+        .get(upstream_url)
         .send()
         .await
         .map_err(|error| AppError::Internal(anyhow!(error)))?
@@ -2282,6 +2378,7 @@ async fn fetch_guide_category_rows(
         r#"
         SELECT
           c.id AS channel_id,
+          c.profile_id,
           c.name AS channel_name,
           c.logo_url,
           cc.name AS category_name,
@@ -2355,6 +2452,7 @@ async fn fetch_channels(pool: &PgPool, user_id: Uuid) -> Result<Vec<ChannelRespo
         r#"
         SELECT
           c.id,
+          c.profile_id,
           c.name,
           c.logo_url,
           cc.name AS category_name,
@@ -2486,12 +2584,24 @@ fn next_page_offset(offset: i64, limit: i64, total_count: i64) -> Option<i64> {
     (next_offset < total_count).then_some(next_offset)
 }
 
-fn map_guide_category_entry(row: GuideCategoryEntryRow) -> GuideChannelEntryResponse {
-    GuideChannelEntryResponse {
+fn map_guide_category_entry(
+    state: &AppState,
+    request_base_url: &Url,
+    user_id: Uuid,
+    row: GuideCategoryEntryRow,
+) -> Result<GuideChannelEntryResponse, AppError> {
+    Ok(GuideChannelEntryResponse {
         channel: ChannelResponse {
             id: row.channel_id,
+            profile_id: row.profile_id,
             name: row.channel_name,
-            logo_url: row.logo_url,
+            logo_url: rewrite_channel_logo_url(
+                state,
+                request_base_url,
+                user_id,
+                row.profile_id,
+                row.logo_url,
+            )?,
             category_name: row.category_name,
             remote_stream_id: row.remote_stream_id,
             epg_channel_id: row.epg_channel_id,
@@ -2514,7 +2624,56 @@ fn map_guide_category_entry(row: GuideCategoryEntryRow) -> GuideChannelEntryResp
                 .expect("program_end_at should exist when program_id exists"),
             can_catchup: row.program_can_catchup.unwrap_or(false),
         }),
+    })
+}
+
+fn rewrite_channel_logo_urls(
+    state: &AppState,
+    headers: &HeaderMap,
+    user_id: Uuid,
+    channels: &mut [ChannelResponse],
+) -> Result<(), AppError> {
+    let request_base_url = request_base_url(&state.config, headers)?;
+    for channel in channels {
+        channel.logo_url = rewrite_channel_logo_url(
+            state,
+            &request_base_url,
+            user_id,
+            channel.profile_id,
+            channel.logo_url.take(),
+        )?;
     }
+
+    Ok(())
+}
+
+fn rewrite_channel_logo_url(
+    state: &AppState,
+    request_base_url: &Url,
+    user_id: Uuid,
+    profile_id: Uuid,
+    logo_url: Option<String>,
+) -> Result<Option<String>, AppError> {
+    let Some(logo_url) = logo_url else {
+        return Ok(None);
+    };
+
+    if !should_force_relay_for_secure_request(request_base_url, &logo_url) {
+        return Ok(Some(logo_url));
+    }
+
+    let relay_token = issue_relay_token(
+        state,
+        user_id,
+        profile_id,
+        &logo_url,
+        RelayAssetKind::Asset,
+        None,
+    )?;
+    let relay_url =
+        relay_url_for_token(request_base_url, RelayAssetKind::Asset, &relay_token.token)?;
+
+    Ok(Some(relay_url))
 }
 
 fn next_guide_offset(offset: i64, limit: i64, total_count: i64) -> Option<i64> {
@@ -2763,6 +2922,10 @@ fn relay_asset_kind_for_url(url: &Url) -> RelayAssetKind {
 }
 
 fn request_base_url(config: &Config, headers: &HeaderMap) -> Result<Url, AppError> {
+    if let Some(origin) = &config.public_origin {
+        return Ok(origin.clone());
+    }
+
     let forwarded_host = header_value(headers, "x-forwarded-host");
     let host_header = header_value(headers, "host");
     let host = forwarded_host.as_deref().or(host_header.as_deref());
@@ -2771,10 +2934,6 @@ fn request_base_url(config: &Config, headers: &HeaderMap) -> Result<Url, AppErro
     if let Some(host) = host {
         return Url::parse(&format!("{scheme}://{host}"))
             .map_err(|error| AppError::Internal(anyhow!(error)));
-    }
-
-    if let Some(origin) = &config.public_origin {
-        return Ok(origin.clone());
     }
 
     Url::parse(&format!("http://{}", config.bind_address))
@@ -2800,6 +2959,7 @@ fn relay_url_for_token(
         .join(match kind {
             RelayAssetKind::Hls => "/api/relay/hls",
             RelayAssetKind::Raw => "/api/relay/raw",
+            RelayAssetKind::Asset => "/api/relay/asset",
         })
         .map_err(|error| AppError::Internal(anyhow!(error)))?;
     url.query_pairs_mut().append_pair("token", token);
@@ -4351,6 +4511,7 @@ async fn rebuild_channel_search_documents(
 #[derive(Debug, FromRow)]
 struct RecentChannelRow {
     id: Uuid,
+    profile_id: Uuid,
     name: String,
     logo_url: Option<String>,
     category_name: Option<String>,
@@ -4424,6 +4585,7 @@ struct GuideCategorySummaryRow {
 #[derive(Debug, FromRow)]
 struct GuideCategoryEntryRow {
     channel_id: Uuid,
+    profile_id: Uuid,
     channel_name: String,
     logo_url: Option<String>,
     category_name: Option<String>,
@@ -4579,7 +4741,7 @@ mod tests {
 
     #[tokio::test]
     async fn playback_source_for_mode_keeps_http_streams_direct_on_http_pages() {
-        let state = sample_app_state();
+        let state = sample_app_state_without_public_origin();
         let mut headers = HeaderMap::new();
         headers.insert(header::HOST, HeaderValue::from_static("127.0.0.1:8080"));
         headers.insert(
@@ -4642,6 +4804,73 @@ mod tests {
         let result = decode_relay_token(&state.config, &issued.token, RelayAssetKind::Raw);
 
         assert!(matches!(result, Err(AppError::Unauthorized)));
+    }
+
+    #[tokio::test]
+    async fn request_base_url_prefers_public_origin_over_forwarded_headers() {
+        let state = sample_app_state();
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            HeaderName::from_static("x-forwarded-host"),
+            HeaderValue::from_static("internal.example.com"),
+        );
+        headers.insert(
+            HeaderName::from_static("x-forwarded-proto"),
+            HeaderValue::from_static("http"),
+        );
+
+        let url = request_base_url(&state.config, &headers).expect("request base url");
+
+        assert_eq!(url.as_str(), "https://app.example.com/");
+    }
+
+    #[tokio::test]
+    async fn rewrite_channel_logo_url_relays_http_logos_on_https_pages() {
+        let state = sample_app_state();
+        let request_base_url = Url::parse("https://app.example.com").expect("request base url");
+
+        let logo_url = rewrite_channel_logo_url(
+            &state,
+            &request_base_url,
+            Uuid::from_u128(41),
+            Uuid::from_u128(42),
+            Some("http://provider.example.com/logo.png".to_string()),
+        )
+        .expect("rewritten logo url")
+        .expect("logo url");
+
+        assert!(logo_url.starts_with("https://app.example.com/api/relay/asset?token="));
+
+        let relay = decode_relay_token(
+            &state.config,
+            &extract_relay_token(&logo_url),
+            RelayAssetKind::Asset,
+        )
+        .expect("decode relay token");
+        assert_eq!(
+            relay.upstream_url.as_str(),
+            "http://provider.example.com/logo.png"
+        );
+    }
+
+    #[tokio::test]
+    async fn rewrite_channel_logo_url_keeps_https_logos_direct() {
+        let state = sample_app_state();
+        let request_base_url = Url::parse("https://app.example.com").expect("request base url");
+
+        let logo_url = rewrite_channel_logo_url(
+            &state,
+            &request_base_url,
+            Uuid::from_u128(43),
+            Uuid::from_u128(44),
+            Some("https://provider.example.com/logo.png".to_string()),
+        )
+        .expect("rewritten logo url");
+
+        assert_eq!(
+            logo_url.as_deref(),
+            Some("https://provider.example.com/logo.png")
+        );
     }
 
     #[tokio::test]
@@ -4740,29 +4969,38 @@ mod tests {
         assert!(normalized.is_empty());
     }
 
-    #[test]
-    fn maps_guide_entry_rows_into_nested_payloads() {
+    #[tokio::test]
+    async fn maps_guide_entry_rows_into_nested_payloads() {
         let now = Utc::now();
-        let entry = map_guide_category_entry(GuideCategoryEntryRow {
-            channel_id: Uuid::nil(),
-            channel_name: "Arena 1".to_string(),
-            logo_url: Some("https://example.com/logo.png".to_string()),
-            category_name: Some("Uncategorized".to_string()),
-            remote_stream_id: 7,
-            epg_channel_id: Some("arena.1".to_string()),
-            has_catchup: true,
-            archive_duration_hours: Some(48),
-            stream_extension: Some("m3u8".to_string()),
-            is_favorite: true,
-            program_id: Some(Uuid::from_u128(42)),
-            program_channel_id: Some(Uuid::nil()),
-            program_channel_name: Some("Arena 1".to_string()),
-            program_title: Some("Matchday Live".to_string()),
-            program_description: Some("Quarterfinal".to_string()),
-            program_start_at: Some(now),
-            program_end_at: Some(now + ChronoDuration::hours(2)),
-            program_can_catchup: Some(true),
-        });
+        let state = sample_app_state();
+        let request_base_url = Url::parse("https://app.example.com").expect("request base url");
+        let entry = map_guide_category_entry(
+            &state,
+            &request_base_url,
+            Uuid::from_u128(51),
+            GuideCategoryEntryRow {
+                channel_id: Uuid::nil(),
+                profile_id: Uuid::from_u128(52),
+                channel_name: "Arena 1".to_string(),
+                logo_url: Some("https://example.com/logo.png".to_string()),
+                category_name: Some("Uncategorized".to_string()),
+                remote_stream_id: 7,
+                epg_channel_id: Some("arena.1".to_string()),
+                has_catchup: true,
+                archive_duration_hours: Some(48),
+                stream_extension: Some("m3u8".to_string()),
+                is_favorite: true,
+                program_id: Some(Uuid::from_u128(42)),
+                program_channel_id: Some(Uuid::nil()),
+                program_channel_name: Some("Arena 1".to_string()),
+                program_title: Some("Matchday Live".to_string()),
+                program_description: Some("Quarterfinal".to_string()),
+                program_start_at: Some(now),
+                program_end_at: Some(now + ChronoDuration::hours(2)),
+                program_can_catchup: Some(true),
+            },
+        )
+        .expect("guide entry");
 
         assert_eq!(entry.channel.name, "Arena 1");
         assert_eq!(
@@ -4787,28 +5025,37 @@ mod tests {
         );
     }
 
-    #[test]
-    fn maps_guide_entry_rows_without_programs() {
-        let entry = map_guide_category_entry(GuideCategoryEntryRow {
-            channel_id: Uuid::nil(),
-            channel_name: "Arena 2".to_string(),
-            logo_url: None,
-            category_name: Some("Sports".to_string()),
-            remote_stream_id: 8,
-            epg_channel_id: None,
-            has_catchup: false,
-            archive_duration_hours: None,
-            stream_extension: Some("m3u8".to_string()),
-            is_favorite: false,
-            program_id: None,
-            program_channel_id: None,
-            program_channel_name: None,
-            program_title: None,
-            program_description: None,
-            program_start_at: None,
-            program_end_at: None,
-            program_can_catchup: None,
-        });
+    #[tokio::test]
+    async fn maps_guide_entry_rows_without_programs() {
+        let state = sample_app_state();
+        let request_base_url = Url::parse("https://app.example.com").expect("request base url");
+        let entry = map_guide_category_entry(
+            &state,
+            &request_base_url,
+            Uuid::from_u128(53),
+            GuideCategoryEntryRow {
+                channel_id: Uuid::nil(),
+                profile_id: Uuid::from_u128(54),
+                channel_name: "Arena 2".to_string(),
+                logo_url: None,
+                category_name: Some("Sports".to_string()),
+                remote_stream_id: 8,
+                epg_channel_id: None,
+                has_catchup: false,
+                archive_duration_hours: None,
+                stream_extension: Some("m3u8".to_string()),
+                is_favorite: false,
+                program_id: None,
+                program_channel_id: None,
+                program_channel_name: None,
+                program_title: None,
+                program_description: None,
+                program_start_at: None,
+                program_end_at: None,
+                program_can_catchup: None,
+            },
+        )
+        .expect("guide entry");
 
         assert_eq!(entry.channel.name, "Arena 2");
         assert!(entry.program.is_none());
@@ -5081,6 +5328,14 @@ mod tests {
     }
 
     fn sample_app_state() -> AppState {
+        sample_app_state_with_public_origin(Some("https://app.example.com"))
+    }
+
+    fn sample_app_state_without_public_origin() -> AppState {
+        sample_app_state_with_public_origin(None)
+    }
+
+    fn sample_app_state_with_public_origin(public_origin: Option<&str>) -> AppState {
         AppState {
             pool: PgPoolOptions::new()
                 .connect_lazy("postgres://euripus:euripus@localhost/euripus")
@@ -5095,9 +5350,12 @@ mod tests {
                 refresh_token_days: 7,
                 relay_token_minutes: 30,
                 daily_sync_hour_local: 6,
-                public_origin: Some(Url::parse("https://app.example.com").expect("public origin")),
-                allowed_origins: vec!["https://app.example.com".to_string()],
-                browser_cookie_secure: true,
+                public_origin: public_origin
+                    .map(|origin| Url::parse(origin).expect("public origin")),
+                allowed_origins: public_origin
+                    .map(|origin| vec![origin.to_string()])
+                    .unwrap_or_default(),
+                browser_cookie_secure: public_origin.is_some(),
                 vpn_enabled: false,
                 vpn_provider_name: None,
             }),
