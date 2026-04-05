@@ -590,6 +590,10 @@ const INTERRUPTED_SYNC_MESSAGE: &str =
     "Sync was interrupted when the server restarted. Start a new sync.";
 const MIGRATION_0007_CURRENT_SQL: &str =
     include_str!("../migrations/0007_program_search_optimizations.sql");
+const DATABASE_STARTUP_TIMEOUT: Duration = Duration::from_secs(180);
+const DATABASE_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+const DATABASE_RETRY_DELAY_INITIAL: Duration = Duration::from_secs(2);
+const DATABASE_RETRY_DELAY_MAX: Duration = Duration::from_secs(10);
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -599,11 +603,7 @@ async fn main() -> Result<()> {
         .init();
 
     let config = Arc::new(Config::from_env()?);
-    let pool = PgPoolOptions::new()
-        .max_connections(10)
-        .connect(&config.database_url)
-        .await
-        .context("failed to connect to PostgreSQL")?;
+    let pool = wait_for_postgres(&config.database_url).await?;
 
     repair_migration_0007_checksum(&pool).await?;
 
@@ -658,6 +658,52 @@ async fn main() -> Result<()> {
         .await?;
     state.pool.close().await;
     Ok(())
+}
+
+async fn wait_for_postgres(database_url: &str) -> Result<PgPool> {
+    let startup_deadline = tokio::time::Instant::now() + DATABASE_STARTUP_TIMEOUT;
+    let mut retry_delay = DATABASE_RETRY_DELAY_INITIAL;
+    let mut attempt = 1;
+
+    loop {
+        let connect_future = PgPoolOptions::new()
+            .max_connections(10)
+            .connect(database_url);
+        match tokio::time::timeout(DATABASE_CONNECT_TIMEOUT, connect_future).await {
+            Ok(Ok(pool)) => {
+                if attempt > 1 {
+                    info!("connected to PostgreSQL on startup attempt {attempt}");
+                }
+                return Ok(pool);
+            }
+            Ok(Err(error)) => {
+                if tokio::time::Instant::now() >= startup_deadline {
+                    return Err(error)
+                        .context("failed to connect to PostgreSQL before startup timeout");
+                }
+                warn!(
+                    "PostgreSQL is not ready yet on startup attempt {attempt}: {error}. Retrying in {}s",
+                    retry_delay.as_secs()
+                );
+            }
+            Err(_) => {
+                if tokio::time::Instant::now() >= startup_deadline {
+                    return Err(anyhow!(
+                        "timed out while connecting to PostgreSQL before startup timeout"
+                    ));
+                }
+                warn!(
+                    "PostgreSQL connection attempt {attempt} timed out after {}s. Retrying in {}s",
+                    DATABASE_CONNECT_TIMEOUT.as_secs(),
+                    retry_delay.as_secs()
+                );
+            }
+        }
+
+        tokio::time::sleep(retry_delay).await;
+        retry_delay = std::cmp::min(retry_delay * 2, DATABASE_RETRY_DELAY_MAX);
+        attempt += 1;
+    }
 }
 
 async fn health() -> StatusCode {

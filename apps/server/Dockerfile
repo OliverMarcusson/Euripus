@@ -8,7 +8,7 @@ COPY apps/server/migrations apps/server/migrations
 RUN cargo build --release --manifest-path apps/server/Cargo.toml
 
 FROM docker.io/library/debian:bookworm-slim
-RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y ca-certificates curl && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 COPY --from=builder /app/apps/server/target/release/euripus-server /usr/local/bin/euripus-server
