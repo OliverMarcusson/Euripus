@@ -22,8 +22,9 @@ Bring up the Euripus server and PostgreSQL using Docker Compose so the desktop a
 - NordVPN homelab override: `docker-compose.homelab.nordvpn.yml`
 - Server env template: `apps/server/.env.example`
 - NordVPN env template: `apps/server/.env.nordvpn.example`
-- Server image build: `apps/server/Dockerfile`
-- Web image build: `apps/web/Dockerfile`
+- Homelab image env template: `.env.homelab-images.example`
+- Windows publish script: `scripts/publish-homelab-images.ps1`
+- Fedora deploy script: `scripts/deploy-homelab-images.sh`
 - Database migration: `apps/server/migrations/0001_init.sql`
 
 ## Required Environment Values
@@ -102,9 +103,26 @@ If exposing Euripus as a browser service, put a reverse proxy in front of the `w
 
 If you want the Euripus server to perform provider validation, sync jobs, and EPG fetches through NordVPN, use:
 
-`docker compose -f docker-compose.homelab.yml -f docker-compose.homelab.nordvpn.yml up --build -d`
+`EURIPUS_ENABLE_NORDVPN=true ./scripts/deploy-homelab-images.sh`
 
 That override runs a Gluetun container with NordVPN settings from `apps/server/.env.nordvpn` and shares its network namespace with the Rust server. The browser-facing `web` service then proxies `/api` traffic to the Gluetun container.
+
+## GHCR Homelab Workflow
+
+For the browser-first homelab deployment, the target Fedora host should pull prebuilt images instead of building them locally.
+
+1. On the Windows workstation, publish fresh `linux/amd64` images with:
+   `bun run homelab:publish`
+2. On the Fedora host, copy `.env.homelab-images.example` to `.env.homelab-images`.
+3. Set `GHCR_USERNAME` and `GHCR_TOKEN` to a GitHub account and a package read token.
+4. Optionally pin `EURIPUS_IMAGE_TAG` to a published git SHA instead of `homelab-latest`.
+5. Deploy with:
+   `./scripts/deploy-homelab-images.sh`
+
+Default image names:
+
+- `ghcr.io/olivermarcusson/euripus-server`
+- `ghcr.io/olivermarcusson/euripus-web`
 
 This does not proxy the actual IPTV playback stream through NordVPN. Playback remains client-to-provider in v1.
 

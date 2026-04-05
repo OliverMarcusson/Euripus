@@ -12,25 +12,62 @@ This guide describes the browser-first self-hosted deployment for Euripus behind
 ## Required Setup
 
 1. Copy `apps/server/.env.example` to `apps/server/.env`.
-2. Replace `APP_JWT_SECRET`, `APP_ENCRYPTION_KEY_B64`, and `POSTGRES_PASSWORD` with strong values.
-3. Set `APP_PUBLIC_ORIGIN` to your public HTTPS URL, for example `https://euripus.home.arpa`.
-4. Set `APP_ALLOWED_ORIGINS` to include that public origin, plus any local development origins you still use.
-5. Keep `APP_BROWSER_COOKIE_SECURE=true` for a reverse-proxied HTTPS deployment.
+2. Copy `.env.homelab-images.example` to `.env.homelab-images`.
+3. Replace `APP_JWT_SECRET`, `APP_ENCRYPTION_KEY_B64`, and `POSTGRES_PASSWORD` with strong values.
+4. Set `APP_PUBLIC_ORIGIN` to your public HTTPS URL, for example `https://euripus.home.arpa`.
+5. Set `APP_ALLOWED_ORIGINS` to include that public origin, plus any local development origins you still use.
+6. Keep `APP_BROWSER_COOKIE_SECURE=true` for a reverse-proxied HTTPS deployment.
 
-## Start The Stack
+## Publish From Windows
+
+Run image builds on the Windows workstation with Docker Desktop and push them to private GHCR packages:
+
+```powershell
+bun run homelab:publish
+```
+
+The publish script builds `linux/amd64` images for:
+
+- `ghcr.io/olivermarcusson/euripus-server`
+- `ghcr.io/olivermarcusson/euripus-web`
+
+It pushes two tags for each image:
+
+- the current git SHA
+- `homelab-latest`
+
+If `GHCR_USERNAME` and `GHCR_TOKEN` are set in the Windows environment, the script logs in to GHCR before pushing. Otherwise it assumes you have already run `docker login ghcr.io`.
+
+## Deploy On Fedora
+
+Store your private GHCR read credentials in `.env.homelab-images` on the Fedora host:
+
+- `GHCR_USERNAME`
+- `GHCR_TOKEN`
+
+The token should have package read access only. Keep it non-interactive and host-local.
+
+Deploy the latest published images with:
 
 ```bash
-docker compose -f docker-compose.homelab.yml up --build -d
+./scripts/deploy-homelab-images.sh
 ```
+
+Deploy a specific immutable revision by setting `EURIPUS_IMAGE_TAG` in `.env.homelab-images` to the published git SHA.
+
+By default, the deploy script pulls and starts:
+
+- `ghcr.io/olivermarcusson/euripus-server:${EURIPUS_IMAGE_TAG:-homelab-latest}`
+- `ghcr.io/olivermarcusson/euripus-web:${EURIPUS_IMAGE_TAG:-homelab-latest}`
 
 By default, the `web` service is published on host port `8088`. Override it with `EURIPUS_WEB_PORT` if needed.
 
 ## Optional NordVPN Routing
 
-If you want Euripus server-side traffic to leave through NordVPN, start the stack with the override file:
+If you want Euripus server-side traffic to leave through NordVPN, enable it in `.env.homelab-images`:
 
 ```bash
-docker compose -f docker-compose.homelab.yml -f docker-compose.homelab.nordvpn.yml up --build -d
+EURIPUS_ENABLE_NORDVPN=true ./scripts/deploy-homelab-images.sh
 ```
 
 This override adds a `gluetun` container configured for NordVPN and places the Rust server inside Gluetun's network namespace.
@@ -67,6 +104,7 @@ Route your dedicated Euripus host to the single upstream `http://YOUR-HOST:8088`
 
 ## Validation Checklist
 
+- `docker compose -f docker-compose.homelab.yml images` shows the GHCR image references rather than local build contexts.
 - `GET /health` returns `204` through the public web upstream.
 - Loading `/guide` directly in the browser returns the SPA instead of a 404.
 - Registering or logging in from the browser succeeds and survives a full page reload.

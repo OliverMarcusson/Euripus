@@ -13,9 +13,7 @@ services:
       retries: 20
 
   server:
-    build:
-      context: .
-      dockerfile: apps/server/Dockerfile
+    image: ${EURIPUS_SERVER_IMAGE:-ghcr.io/olivermarcusson/euripus-server}:${EURIPUS_IMAGE_TAG:-homelab-latest}
     restart: unless-stopped
     env_file:
       - apps/server/.env
@@ -26,9 +24,7 @@ services:
       - "8080"
 
   web:
-    build:
-      context: .
-      dockerfile: apps/web/Dockerfile
+    image: ${EURIPUS_WEB_IMAGE:-ghcr.io/olivermarcusson/euripus-web}:${EURIPUS_IMAGE_TAG:-homelab-latest}
     restart: unless-stopped
     environment:
       EURIPUS_API_UPSTREAM: server
