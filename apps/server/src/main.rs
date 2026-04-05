@@ -41,6 +41,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256, Sha384};
 use sqlx::{FromRow, PgPool, Postgres, Transaction, postgres::PgPoolOptions};
 use tokio::task::{JoinHandle, JoinSet};
+use tokio::signal;
 use tower_http::{
     cors::{AllowOrigin, CorsLayer},
     trace::TraceLayer,
@@ -648,6 +649,7 @@ async fn main() -> Result<()> {
 
     let bind_address: SocketAddr = state.config.bind_address;
     let cors = build_cors_layer(&state.config)?;
+    let router_state = state.clone();
     if let Some(public_origin) = state.config.public_origin.as_ref() {
         info!("Browser public origin configured as {public_origin}");
     }
@@ -656,18 +658,41 @@ async fn main() -> Result<()> {
         .merge(legacy_auth_router())
         .merge(shared_api_router())
         .nest("/api", browser_api_router())
-        .with_state(state)
+        .with_state(router_state)
         .layer(cors)
         .layer(TraceLayer::new_for_http());
 
     info!("Euripus server listening on {bind_address}");
     let listener = tokio::net::TcpListener::bind(bind_address).await?;
-    axum::serve(listener, app).await?;
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
+    state.pool.close().await;
     Ok(())
 }
 
 async fn health() -> StatusCode {
     StatusCode::NO_CONTENT
+}
+
+async fn shutdown_signal() {
+    #[cfg(unix)]
+    let terminate = async {
+        signal::unix::signal(signal::unix::SignalKind::terminate())
+            .expect("failed to install SIGTERM handler")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = signal::ctrl_c() => {}
+        _ = terminate => {}
+    }
+
+    info!("shutdown signal received, draining server and closing PostgreSQL pool");
 }
 
 async fn repair_migration_0007_checksum(pool: &PgPool) -> Result<()> {
@@ -2643,6 +2668,8 @@ fn map_guide_category_entry(
     user_id: Uuid,
     row: GuideCategoryEntryRow,
 ) -> Result<GuideChannelEntryResponse, AppError> {
+    let program = map_guide_program_response(&row);
+
     Ok(GuideChannelEntryResponse {
         channel: ChannelResponse {
             id: row.channel_id,
@@ -2663,20 +2690,30 @@ fn map_guide_category_entry(
             stream_extension: row.stream_extension,
             is_favorite: row.is_favorite,
         },
-        program: row.program_id.map(|id| ProgramResponse {
-            id,
-            channel_id: row.program_channel_id,
-            channel_name: row.program_channel_name,
-            title: row.program_title.unwrap_or_default(),
-            description: row.program_description,
-            start_at: row
-                .program_start_at
-                .expect("program_start_at should exist when program_id exists"),
-            end_at: row
-                .program_end_at
-                .expect("program_end_at should exist when program_id exists"),
-            can_catchup: row.program_can_catchup.unwrap_or(false),
-        }),
+        program,
+    })
+}
+
+fn map_guide_program_response(row: &GuideCategoryEntryRow) -> Option<ProgramResponse> {
+    let id = row.program_id?;
+    let Some(start_at) = row.program_start_at else {
+        warn!("guide entry for program {id} is missing program_start_at; omitting program payload");
+        return None;
+    };
+    let Some(end_at) = row.program_end_at else {
+        warn!("guide entry for program {id} is missing program_end_at; omitting program payload");
+        return None;
+    };
+
+    Some(ProgramResponse {
+        id,
+        channel_id: row.program_channel_id,
+        channel_name: row.program_channel_name.clone(),
+        title: row.program_title.clone().unwrap_or_default(),
+        description: row.program_description.clone(),
+        start_at,
+        end_at,
+        can_catchup: row.program_can_catchup.unwrap_or(false),
     })
 }
 
@@ -5111,6 +5148,42 @@ mod tests {
         .expect("guide entry");
 
         assert_eq!(entry.channel.name, "Arena 2");
+        assert!(entry.program.is_none());
+    }
+
+    #[tokio::test]
+    async fn maps_guide_entry_rows_with_incomplete_programs_without_panicking() {
+        let state = sample_app_state();
+        let request_base_url = Url::parse("https://app.example.com").expect("request base url");
+        let entry = map_guide_category_entry(
+            &state,
+            &request_base_url,
+            Uuid::from_u128(55),
+            GuideCategoryEntryRow {
+                channel_id: Uuid::nil(),
+                profile_id: Uuid::from_u128(56),
+                channel_name: "Arena 3".to_string(),
+                logo_url: None,
+                category_name: Some("Sports".to_string()),
+                remote_stream_id: 9,
+                epg_channel_id: None,
+                has_catchup: false,
+                archive_duration_hours: None,
+                stream_extension: Some("m3u8".to_string()),
+                is_favorite: false,
+                program_id: Some(Uuid::from_u128(57)),
+                program_channel_id: Some(Uuid::nil()),
+                program_channel_name: Some("Arena 3".to_string()),
+                program_title: Some("Broken Listing".to_string()),
+                program_description: None,
+                program_start_at: None,
+                program_end_at: Some(Utc::now() + ChronoDuration::hours(1)),
+                program_can_catchup: Some(false),
+            },
+        )
+        .expect("guide entry");
+
+        assert_eq!(entry.channel.name, "Arena 3");
         assert!(entry.program.is_none());
     }
 
