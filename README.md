@@ -63,7 +63,7 @@ Published tags:
 - immutable tag: current git SHA
 - moving tag: `homelab-latest`
 
-Private GHCR pulls require a token with package read access on the Fedora host. The deploy script reads `GHCR_USERNAME` and `GHCR_TOKEN` from `.env.homelab-images` and logs in non-interactively before pulling.
+Both helper scripts read `GHCR_USERNAME` and `GHCR_TOKEN` from `.env.homelab-images` by default. Use a token with package write access on the Windows publisher and a read-only package token on the Fedora host. The Fedora deploy script uses `docker` when available and falls back to `podman` automatically.
 
 To route Euripus server-side traffic through NordVPN, add the override file:
 

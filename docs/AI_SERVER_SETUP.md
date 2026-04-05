@@ -114,10 +114,12 @@ For the browser-first homelab deployment, the target Fedora host should pull pre
 1. On the Windows workstation, publish fresh `linux/amd64` images with:
    `bun run homelab:publish`
 2. On the Fedora host, copy `.env.homelab-images.example` to `.env.homelab-images`.
-3. Set `GHCR_USERNAME` and `GHCR_TOKEN` to a GitHub account and a package read token.
+3. Set `GHCR_USERNAME` and `GHCR_TOKEN` to a GitHub account and a package token. Use package write access on the Windows publisher and package read access on the Fedora deploy host.
 4. Optionally pin `EURIPUS_IMAGE_TAG` to a published git SHA instead of `homelab-latest`.
 5. Deploy with:
    `./scripts/deploy-homelab-images.sh`
+
+The deploy script prefers `docker` and falls back to `podman` automatically on Fedora-style hosts.
 
 Default image names:
 
