@@ -101,7 +101,7 @@ describe("SearchPage", () => {
     });
 
     renderSearchPage();
-    fireEvent.change(screen.getByPlaceholderText(/search channels, titles, events, teams/i), {
+    fireEvent.change(screen.getByPlaceholderText(/^search$/i), {
       target: { value: "hammarby" },
     });
 
@@ -142,7 +142,7 @@ describe("SearchPage", () => {
     });
 
     renderSearchPage();
-    fireEvent.change(screen.getByPlaceholderText(/search channels, titles, events, teams/i), {
+    fireEvent.change(screen.getByPlaceholderText(/^search$/i), {
       target: { value: "arena" },
     });
 

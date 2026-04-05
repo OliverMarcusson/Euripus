@@ -223,7 +223,7 @@ describe("GuidePage", () => {
     fireEvent.click((await screen.findAllByRole("button", { name: /show channels/i }))[0]);
 
     expect(await screen.findByText("Arena 3")).toBeInTheDocument();
-    expect(screen.getByText("No current program metadata synced yet.")).toBeInTheDocument();
+    expect(screen.getByText("No program")).toBeInTheDocument();
   });
 
   it("shows only saved included categories", async () => {
@@ -273,8 +273,9 @@ describe("GuidePage", () => {
     });
 
     renderGuidePage();
+    fireEvent.click(await screen.findByRole("button", { name: /show filter/i }));
 
-    fireEvent.change(await screen.findByPlaceholderText(/type 2\+ characters, then press enter/i), {
+    fireEvent.change(await screen.findByPlaceholderText(/filter categories/i), {
       target: { value: "news" },
     });
 
@@ -282,7 +283,7 @@ describe("GuidePage", () => {
     expect(screen.getByRole("button", { name: /news/i })).toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: /show channels/i })).toHaveLength(2);
 
-    fireEvent.keyDown(screen.getByPlaceholderText(/type 2\+ characters, then press enter/i), {
+    fireEvent.keyDown(screen.getByPlaceholderText(/filter categories/i), {
       key: "Enter",
       code: "Enter",
     });
@@ -317,11 +318,12 @@ describe("GuidePage", () => {
     });
 
     renderGuidePage();
+    fireEvent.click(await screen.findByRole("button", { name: /show filter/i }));
 
-    fireEvent.change(await screen.findByPlaceholderText(/type 2\+ characters, then press enter/i), {
+    fireEvent.change(await screen.findByPlaceholderText(/filter categories/i), {
       target: { value: "news" },
     });
-    fireEvent.keyDown(screen.getByPlaceholderText(/type 2\+ characters, then press enter/i), {
+    fireEvent.keyDown(screen.getByPlaceholderText(/filter categories/i), {
       key: "Enter",
       code: "Enter",
     });
@@ -332,12 +334,15 @@ describe("GuidePage", () => {
     expect(screen.getByText("No categories match this filter")).toBeInTheDocument();
   });
 
-  it("can collapse the filter panel", async () => {
+  it("starts with the filter panel collapsed and can expand it", async () => {
     renderGuidePage();
 
-    fireEvent.click(await screen.findByRole("button", { name: /hide filter/i }));
+    expect(await screen.findByRole("button", { name: /show filter/i })).toBeInTheDocument();
+    expect(screen.queryByPlaceholderText(/filter categories/i)).not.toBeInTheDocument();
 
-    expect(screen.queryByPlaceholderText(/type 2\+ characters, then press enter/i)).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /show filter/i })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /show filter/i }));
+
+    expect(await screen.findByPlaceholderText(/filter categories/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /hide filter/i })).toBeInTheDocument();
   });
 });

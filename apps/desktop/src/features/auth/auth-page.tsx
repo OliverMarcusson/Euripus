@@ -1,7 +1,7 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { Tv, Sparkles } from "lucide-react";
+import { Tv } from "lucide-react";
 import { useState } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
@@ -72,17 +72,6 @@ export function AuthPage() {
           Euripus
         </div>
 
-        <div className="relative z-20 mt-auto">
-          <blockquote className="space-y-4">
-            <Sparkles className="size-8 text-primary shadow-primary" />
-            <p className="text-2xl font-medium tracking-tight text-white/90 leading-tight">
-              &ldquo;Experience live television redefined. Immersive streams, seamless switching, and unparalleled cinematic quality.&rdquo;
-            </p>
-            <footer className="text-sm font-medium text-white/60 uppercase tracking-widest mt-4 block">
-              Director's Cut
-            </footer>
-          </blockquote>
-        </div>
       </div>
 
       {/* Right Panel: Sleek Form */}
@@ -101,11 +90,6 @@ export function AuthPage() {
             <h1 className="text-3xl font-bold tracking-tight">
               {mode === "login" ? "Welcome back" : "Create an account"}
             </h1>
-            <p className="text-sm text-muted-foreground">
-              {mode === "login"
-                ? "Enter your credentials to access your live channels."
-                : "Sign up to start streaming immediately."}
-            </p>
           </div>
 
           <div className="grid gap-6">
@@ -170,7 +154,6 @@ export function AuthPage() {
 
             <ServerNetworkStatusCard
               className="border-border/70 bg-muted/20"
-              description="Use this before signing in to confirm that the hosted Euripus server is up and whether it is using the VPN route you expect."
             />
           </div>
         </div>

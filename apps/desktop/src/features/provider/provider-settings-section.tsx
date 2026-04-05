@@ -203,8 +203,8 @@ export function ProviderSettingsSection() {
 
   return (
     <div className="grid gap-6 xl:grid-cols-[minmax(0,1.2fr)_360px]">
-      <Card className="overflow-hidden border-border/80 bg-gradient-to-br from-card via-card to-primary/5">
-        <CardHeader className="flex flex-row items-start justify-between gap-4">
+      <Card className="overflow-hidden rounded-none border-0 bg-transparent shadow-none sm:rounded-xl sm:border sm:border-border/80 sm:bg-gradient-to-br sm:from-card sm:via-card sm:to-primary/5 sm:shadow-sm">
+        <CardHeader className="flex flex-row items-start justify-between gap-4 px-0 pt-0 pb-4 sm:p-5 sm:pb-0">
           <CardTitle>Provider</CardTitle>
           <div className="flex flex-wrap items-center gap-2">
             <Badge
@@ -221,7 +221,7 @@ export function ProviderSettingsSection() {
             <Badge variant="outline">{latestJob?.status ?? "idle"}</Badge>
           </div>
         </CardHeader>
-        <CardContent>
+        <CardContent className="px-0 pb-0 sm:p-5">
           <form
             className="flex flex-col gap-6"
             onSubmit={form.handleSubmit((values) => {
@@ -357,14 +357,10 @@ export function ProviderSettingsSection() {
                 <FieldError errors={[form.formState.errors.playbackMode]} />
               </Field>
 
-              <div className="rounded-2xl border border-border/70 bg-muted/30 p-4">
+              <div className="py-2 sm:rounded-2xl sm:border sm:border-border/70 sm:bg-muted/30 sm:p-4">
                 <div className="mb-4 flex items-center justify-between gap-3">
                   <div className="space-y-1">
                     <FieldLabel>External EPG sources</FieldLabel>
-                    <p className="text-sm text-muted-foreground">
-                      Add XMLTV or gzip-compressed XMLTV feed URLs. Euripus
-                      fetches and merges them server-side.
-                    </p>
                   </div>
                   <Button
                     type="button"
@@ -393,7 +389,7 @@ export function ProviderSettingsSection() {
                       return (
                         <div
                           key={field.fieldId}
-                          className="rounded-2xl border border-border/70 bg-background/60 p-4"
+                          className="border-t border-border/60 py-4 first:border-t-0 first:pt-0 sm:rounded-2xl sm:border sm:border-border/70 sm:bg-background/60 sm:p-4"
                         >
                           <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                             <div className="flex items-center gap-2 text-sm font-medium">
@@ -522,7 +518,7 @@ export function ProviderSettingsSection() {
                           </div>
 
                           {sourceHealth ? (
-                            <div className="mt-3 rounded-xl border border-border/70 bg-muted/40 p-3 text-sm text-muted-foreground">
+                            <div className="mt-3 text-sm text-muted-foreground sm:rounded-xl sm:border sm:border-border/70 sm:bg-muted/40 sm:p-3">
                               <div>
                                 Last sync{" "}
                                 {sourceHealth.lastSyncAt
@@ -545,9 +541,8 @@ export function ProviderSettingsSection() {
                       );
                     })
                   ) : (
-                    <div className="rounded-2xl border border-dashed border-border/70 bg-background/40 p-4 text-sm text-muted-foreground">
-                      No external EPG sources yet. Euripus will still use the
-                      provider&apos;s built-in XMLTV feed as fallback.
+                    <div className="border-t border-dashed border-border/70 py-4 text-sm text-muted-foreground sm:rounded-2xl sm:border sm:bg-background/40 sm:p-4">
+                      No external EPG sources
                     </div>
                   )}
                 </div>
@@ -585,19 +580,21 @@ export function ProviderSettingsSection() {
         </CardContent>
       </Card>
 
+      <Separator className="sm:hidden" />
+
       <div className="flex flex-col gap-6">
-        <Card>
-          <CardHeader>
+        <Card className="rounded-none border-0 bg-transparent shadow-none sm:rounded-xl sm:border sm:bg-card sm:shadow-sm">
+          <CardHeader className="px-0 pt-0 pb-4 sm:p-5 sm:pb-0">
             <CardTitle>Profile health</CardTitle>
           </CardHeader>
-          <CardContent className="flex flex-col gap-4">
+          <CardContent className="flex flex-col gap-4 px-0 pb-0 sm:p-5">
             <StatusRow
               label="Provider status"
               value={provider?.status ?? "missing"}
               detail={
                 provider?.lastValidatedAt
                   ? `Last validated ${formatRelativeTime(provider.lastValidatedAt)}`
-                  : "Not validated"
+                  : undefined
               }
             />
             <Separator />
@@ -617,24 +614,16 @@ export function ProviderSettingsSection() {
                 provider?.outputFormat?.toUpperCase() ??
                 form.watch("outputFormat").toUpperCase()
               }
-              detail="Used for future playback."
             />
             <Separator />
             <StatusRow
               label="Playback routing"
               value={provider?.playbackMode ?? form.watch("playbackMode")}
-              detail={
-                (provider?.playbackMode ?? form.watch("playbackMode")) ===
-                "relay"
-                  ? "Playback flows through the Euripus relay."
-                  : "Playback connects directly to the provider."
-              }
             />
             <Separator />
             <StatusRow
               label="External EPG feeds"
               value={`${displayedEpgSourceCount}`}
-              detail="Merged ahead of the provider XMLTV fallback."
             />
             {provider?.lastSyncError ? (
               <>
@@ -647,22 +636,23 @@ export function ProviderSettingsSection() {
           </CardContent>
         </Card>
 
+        <Separator className="sm:hidden" />
+
         <ServerNetworkStatusCard />
 
-        <Card>
-          <CardHeader>
+        <Separator className="sm:hidden" />
+
+        <Card className="rounded-none border-0 bg-transparent shadow-none sm:rounded-xl sm:border sm:bg-card sm:shadow-sm">
+          <CardHeader className="px-0 pt-0 pb-4 sm:p-5 sm:pb-0">
             <CardTitle>Sync activity</CardTitle>
           </CardHeader>
-          <CardContent className="flex flex-col gap-4">
+          <CardContent className="flex flex-col gap-4 px-0 pb-0 sm:p-5">
             {latestJob ? (
-              <div className="rounded-2xl border border-border/70 bg-muted/40 p-4">
+              <div className="py-2 sm:rounded-2xl sm:border sm:border-border/70 sm:bg-muted/40 sm:p-4">
                 <div className="flex items-center justify-between gap-3">
                   <div className="flex flex-col gap-1">
                     <span className="text-sm font-medium capitalize">
                       {latestJob.currentPhase?.replaceAll("-", " ") ?? latestJob.status}
-                    </span>
-                    <span className="text-sm text-muted-foreground">
-                      {latestJob.phaseMessage ?? "Waiting for the next sync update"}
                     </span>
                   </div>
                   <Badge variant={latestJob.status === "failed" ? "destructive" : latestJob.status === "succeeded" ? "accent" : "outline"}>
@@ -678,7 +668,7 @@ export function ProviderSettingsSection() {
               detail={
                 latestJob?.createdAt
                   ? `Created ${formatDateTime(latestJob.createdAt)}`
-                  : "No job recorded"
+                  : undefined
               }
             />
             <StatusRow
@@ -687,7 +677,7 @@ export function ProviderSettingsSection() {
               detail={
                 latestJob?.startedAt
                   ? `${formatDateTime(latestJob.startedAt)} to ${formatDateTime(latestJob.finishedAt ?? latestJob.startedAt)}`
-                  : "Run a sync to populate timing details"
+                  : undefined
               }
             />
             {latestJob ? (
@@ -732,13 +722,13 @@ function StatusRow({
 }: {
   label: string;
   value: string;
-  detail: string;
+  detail?: string;
 }) {
   return (
     <div className="flex flex-col gap-1">
       <span className="text-sm text-muted-foreground">{label}</span>
       <span className="text-base font-semibold capitalize">{value}</span>
-      <span className="text-sm text-muted-foreground">{detail}</span>
+      {detail ? <span className="text-sm text-muted-foreground">{detail}</span> : null}
     </div>
   );
 }

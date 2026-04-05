@@ -180,7 +180,7 @@ export function GuidePage() {
   }
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-5 sm:gap-6">
       <PageHeader
         title="Live Guide"
         actions={
@@ -220,10 +220,10 @@ export function GuidePage() {
       ) : null}
 
       {guideQuery.isPending ? (
-        <Card>
-          <CardContent className="flex flex-col gap-3 pt-5">
+        <Card className="rounded-none border-0 bg-transparent shadow-none sm:rounded-xl sm:border sm:bg-card sm:shadow-sm">
+          <CardContent className="flex flex-col gap-3 px-0 pt-0 pb-0 sm:p-5 sm:pt-5">
             {Array.from({ length: 5 }).map((_, index) => (
-              <div key={index} className="rounded-2xl border border-border/70 p-5">
+              <div key={index} className="rounded-2xl border border-border/70 p-4 sm:p-5">
                 <Skeleton className="h-5 w-40" />
                 <Skeleton className="mt-3 h-4 w-24" />
               </div>
@@ -233,7 +233,7 @@ export function GuidePage() {
       ) : null}
 
       {!guideQuery.isPending && !categories.length ? (
-        <Card>
+        <Card className="rounded-none border-0 bg-transparent shadow-none sm:rounded-xl sm:border sm:bg-card sm:shadow-sm">
           <CardContent className="p-0">
             <Empty className="border-0">
               <EmptyHeader>
@@ -248,7 +248,7 @@ export function GuidePage() {
       ) : null}
 
       {!guideQuery.isPending && categories.length ? (
-        <Card>
+        <Card className="rounded-none border-0 bg-transparent shadow-none sm:rounded-xl sm:border sm:bg-card sm:shadow-sm">
           <CardContent className="p-0">
             {visibleCategories.length ? (
               visibleCategories.map((category, index) => (
@@ -294,7 +294,7 @@ function GuideCategoryFilterCard({
   onReset,
   onToggleCategory,
 }: GuideCategoryFilterCardProps) {
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(false);
   const selectedCategoryIdSet = useMemo(() => new Set(selectedCategoryIds), [selectedCategoryIds]);
   const ToggleIcon = open ? ChevronDown : ChevronRight;
   const showAppliedFilter = appliedFilter.trim().length >= 2;
@@ -310,43 +310,45 @@ function GuideCategoryFilterCard({
 
   return (
     <Collapsible open={open} onOpenChange={setOpen}>
-      <Card className="overflow-hidden border-border/80 bg-gradient-to-r from-card via-card to-primary/5">
-        <CardHeader className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-          <div className="flex items-center gap-3">
-            <div className="flex size-10 items-center justify-center rounded-2xl bg-primary/10 text-primary">
-              <SlidersHorizontal aria-hidden="true" />
+      <Card className="overflow-hidden rounded-none border-0 bg-transparent shadow-none sm:rounded-xl sm:border sm:border-border/80 sm:bg-gradient-to-r sm:from-card sm:via-card sm:to-primary/5 sm:shadow-sm">
+        <CardHeader className="px-0 pt-0 pb-4 sm:p-5 sm:pb-0">
+          <div className="flex flex-col gap-4 sm:grid sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center sm:gap-x-4 sm:gap-y-3">
+            <div className="flex min-h-10 min-w-0 items-center gap-3">
+              <div className="flex size-10 shrink-0 items-center justify-center rounded-2xl bg-primary/10 text-primary">
+                <SlidersHorizontal aria-hidden="true" />
+              </div>
+              <div className="flex h-10 min-w-0 items-center">
+                <CardTitle className="min-w-0 leading-none">Included categories</CardTitle>
+              </div>
             </div>
-            <div className="flex flex-col gap-1">
-              <CardTitle>Included categories</CardTitle>
+            <div className="flex flex-wrap items-center gap-2 sm:justify-self-end">
+              <Badge variant={selectedCategoryIds.length ? "accent" : "outline"}>
+                {selectedCategoryIds.length ? `${selectedCategoryIds.length} selected` : "All categories"}
+              </Badge>
+              {showAppliedFilter ? <Badge variant="outline">Filter: {appliedFilter.trim()}</Badge> : null}
+              {open ? (
+                <Button variant="ghost" size="sm" onClick={onReset} disabled={!selectedCategoryIds.length || saving}>
+                  <X data-icon="inline-start" />
+                  Show all
+                </Button>
+              ) : null}
+              <CollapsibleTrigger asChild>
+                <Button variant="ghost" size="sm" aria-expanded={open}>
+                  <ToggleIcon data-icon="inline-start" />
+                  {open ? "Hide filter" : "Show filter"}
+                </Button>
+              </CollapsibleTrigger>
             </div>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <Badge variant={selectedCategoryIds.length ? "accent" : "outline"}>
-              {selectedCategoryIds.length ? `${selectedCategoryIds.length} selected` : "All categories"}
-            </Badge>
-            {showAppliedFilter ? <Badge variant="outline">Filter: {appliedFilter.trim()}</Badge> : null}
-            {open ? (
-              <Button variant="ghost" size="sm" onClick={onReset} disabled={!selectedCategoryIds.length || saving}>
-                <X data-icon="inline-start" />
-                Show all
-              </Button>
-            ) : null}
-            <CollapsibleTrigger asChild>
-              <Button variant="ghost" size="sm" aria-expanded={open}>
-                <ToggleIcon data-icon="inline-start" />
-                {open ? "Hide filter" : "Show filter"}
-              </Button>
-            </CollapsibleTrigger>
           </div>
         </CardHeader>
 
         <CollapsibleContent className="overflow-hidden data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down">
-          <CardContent className="flex flex-col gap-4">
+          <CardContent className="flex flex-col gap-4 px-0 pb-0 sm:p-5">
             <div className="relative">
               <SearchIcon className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
               <Input
                 className="pl-10"
-                placeholder="Type 2+ characters, then press Enter..."
+                placeholder="Filter categories"
                 value={filterInput}
                 onChange={(event) => onFilterInputChange(event.target.value)}
                 onKeyDown={handleFilterKeyDown}
@@ -356,7 +358,7 @@ function GuideCategoryFilterCard({
 
             <ScrollArea
               type="always"
-              className="h-[28rem] rounded-2xl border border-border/70 bg-background/70"
+              className="h-[28rem] rounded-none border-0 bg-transparent sm:rounded-2xl sm:border sm:border-border/70 sm:bg-background/70"
               data-testid="guide-category-filter-scroll-area"
             >
               <div className="flex flex-col p-2 pr-3 [content-visibility:auto]">
@@ -390,7 +392,7 @@ function GuideCategoryFilterCard({
                           </div>
                           <span className="truncate font-medium">{category.name}</span>
                         </div>
-                        <div className="flex shrink-0 items-center gap-2">
+                        <div className="flex shrink-0 flex-col items-end gap-1 sm:flex-row sm:items-center sm:gap-2">
                           <Badge variant="outline">{category.channelCount}</Badge>
                           <Badge variant={category.liveNowCount ? "live" : "outline"}>{category.liveNowCount}</Badge>
                         </div>
@@ -399,7 +401,7 @@ function GuideCategoryFilterCard({
                   })
                 ) : (
                   <div className="px-4 py-8 text-center text-sm text-muted-foreground">
-                    {showAppliedFilter ? "No matching categories" : "Type 2+ characters and press Enter to apply a custom filter"}
+                    {showAppliedFilter ? "No matching categories" : "No categories"}
                   </div>
                 )}
               </div>
@@ -434,17 +436,25 @@ function GuideCategorySection({
 
   return (
     <Collapsible open={open} onOpenChange={onToggle}>
-      <div className="flex flex-col gap-4 p-5">
+      <div className="flex flex-col gap-4 px-0 py-4 sm:p-5">
         <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
           <div className="flex min-w-0 flex-1 flex-col gap-3">
-            <div className="flex flex-wrap items-center gap-2">
-              <h2 className="text-lg font-semibold">{category.name}</h2>
-              <Badge variant="outline">{category.channelCount} channels</Badge>
-              <Badge variant={category.liveNowCount ? "live" : "outline"}>{category.liveNowCount} live now</Badge>
+            <div className="flex min-w-0 flex-col gap-2">
+              <h2 className="min-w-0 text-lg font-semibold break-words">{category.name}</h2>
+              <div className="flex flex-wrap items-center gap-2">
+                <Badge variant="outline">{category.channelCount} channels</Badge>
+                <Badge variant={category.liveNowCount ? "live" : "outline"}>{category.liveNowCount} live now</Badge>
+              </div>
             </div>
           </div>
           <CollapsibleTrigger asChild>
-            <Button variant="ghost" aria-expanded={open} data-guide-category-toggle="true" data-tv-autofocus={open ? "true" : undefined}>
+            <Button
+              variant="ghost"
+              className="self-start"
+              aria-expanded={open}
+              data-guide-category-toggle="true"
+              data-tv-autofocus={open ? "true" : undefined}
+            >
               <Icon data-icon="inline-start" />
               {open ? "Hide channels" : "Show channels"}
             </Button>
@@ -456,7 +466,7 @@ function GuideCategorySection({
         <Separator />
         <div className="flex flex-col">
           {isInitialLoading ? (
-            <div className="flex flex-col gap-3 p-5">
+            <div className="flex flex-col gap-3 px-0 py-4 sm:p-5">
               {Array.from({ length: 3 }).map((_, index) => (
                 <div key={index} className="flex items-center gap-4 rounded-2xl border border-border/70 p-4">
                   <Skeleton className="size-11 rounded-2xl" />
@@ -478,23 +488,23 @@ function GuideCategorySection({
                 return (
                   <div key={channel.id}>
                     {index > 0 ? <Separator /> : null}
-                    <div className="flex flex-col gap-4 p-5 lg:flex-row lg:items-center lg:justify-between">
-                      <div className="flex min-w-0 items-start gap-4">
-                        <ChannelAvatar name={channel.name} logoUrl={channel.logoUrl} />
+                    <div className="flex flex-col gap-4 p-4 sm:p-5 lg:flex-row lg:items-center lg:justify-between">
+                      <div className="flex min-w-0 items-start gap-3 sm:gap-4">
+                        <ChannelAvatar name={channel.name} logoUrl={channel.logoUrl} className="shrink-0" />
                         <div className="flex min-w-0 flex-1 flex-col gap-3">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <h3 className="truncate text-base font-semibold">{channel.name}</h3>
-                            {channel.hasCatchup ? <Badge variant="live">Catch-up</Badge> : null}
-                            {channel.archiveDurationHours ? (
-                              <Badge variant="outline">{formatArchiveDuration(channel.archiveDurationHours)}</Badge>
-                            ) : null}
-                            {program && programIsLive ? <Badge variant="accent">Live now</Badge> : null}
+                          <div className="flex min-w-0 flex-col gap-2">
+                            <h3 className="min-w-0 text-base font-semibold break-words">{channel.name}</h3>
+                            <div className="flex flex-wrap items-center gap-2">
+                              {channel.hasCatchup ? <Badge variant="live">Catch-up</Badge> : null}
+                              {channel.archiveDurationHours ? (
+                                <Badge variant="outline">{formatArchiveDuration(channel.archiveDurationHours)}</Badge>
+                              ) : null}
+                              {program && programIsLive ? <Badge variant="accent">Live now</Badge> : null}
+                            </div>
                           </div>
 
                           <div className="flex min-w-0 flex-col gap-2">
-                            <p className="text-sm font-medium">
-                              {program?.title ?? "No current program metadata synced yet."}
-                            </p>
+                            <p className="min-w-0 break-words text-sm font-medium">{program?.title ?? "No program"}</p>
                             {program ? (
                               <>
                                 <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
@@ -508,17 +518,18 @@ function GuideCategorySection({
                         </div>
                       </div>
 
-                      <div className="flex flex-wrap items-center gap-2">
+                      <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:items-center">
                         <Button
                           variant="secondary"
                           size="sm"
+                          className="w-full justify-center sm:w-auto"
                           onClick={() => onFavorite(channel)}
                           disabled={favoritePending && activeFavoriteChannelId === channel.id}
                         >
                           <Heart data-icon="inline-start" />
                           {channel.isFavorite ? "Unfavorite" : "Favorite"}
                         </Button>
-                        <Button size="sm" onClick={() => onPlay(channel.id)}>
+                        <Button size="sm" className="w-full justify-center sm:w-auto" onClick={() => onPlay(channel.id)}>
                           <Play data-icon="inline-start" />
                           Play
                         </Button>
