@@ -30,12 +30,12 @@ export function FavoritesPage() {
   useTvAutoFocus(favorites.length ? "[data-favorite-play='true']" : null, [favorites.length]);
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-5 sm:gap-6">
       <PageHeader title="Favorites" meta={<Badge variant="accent">{favorites.length} saved</Badge>} />
 
       {favoritesQuery.isPending ? (
-        <Card>
-          <CardContent className="flex flex-col gap-3 pt-5">
+        <Card className="rounded-none border-0 bg-transparent shadow-none sm:rounded-xl sm:border sm:bg-card sm:shadow-sm">
+          <CardContent className="flex flex-col gap-3 px-0 pt-0 pb-0 sm:p-5 sm:pt-5">
             {Array.from({ length: 4 }).map((_, index) => (
               <div key={index} className="flex items-center gap-4 rounded-xl border border-border/70 p-4">
                 <Skeleton className="size-11 rounded-2xl" />
@@ -51,7 +51,7 @@ export function FavoritesPage() {
       ) : null}
 
       {!favoritesQuery.isPending && !favorites.length ? (
-        <Card>
+        <Card className="rounded-none border-0 bg-transparent shadow-none sm:rounded-xl sm:border sm:bg-card sm:shadow-sm">
           <CardContent className="p-0">
             <Empty className="border-0">
               <EmptyHeader>
@@ -66,8 +66,8 @@ export function FavoritesPage() {
       ) : null}
 
       {!favoritesQuery.isPending && favorites.length ? (
-        <Card>
-          <CardHeader>
+        <Card className="rounded-none border-0 bg-transparent shadow-none sm:rounded-xl sm:border sm:bg-card sm:shadow-sm">
+          <CardHeader className="px-0 pt-0 pb-4 sm:p-5 sm:pb-0">
             <CardTitle>Saved channels</CardTitle>
           </CardHeader>
           <CardContent className="p-0">
@@ -86,11 +86,9 @@ export function FavoritesPage() {
                           <Badge>{formatArchiveDuration(channel.archiveDurationHours)}</Badge>
                         ) : null}
                       </div>
-                      <p className="text-sm text-muted-foreground">
-                        {channel.streamExtension
-                          ? `Primary stream format: ${channel.streamExtension.toUpperCase()}`
-                          : "Live stream ready for playback."}
-                      </p>
+                      {channel.streamExtension ? (
+                        <p className="text-sm text-muted-foreground">{channel.streamExtension.toUpperCase()}</p>
+                      ) : null}
                     </div>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">

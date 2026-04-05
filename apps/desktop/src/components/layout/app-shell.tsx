@@ -18,6 +18,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { logout } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useAuthStore } from "@/store/auth-store";
+import { usePlayerStore } from "@/store/player-store";
 import { useTvModeStore } from "@/store/tv-mode-store";
 
 const navigation = [
@@ -32,6 +33,7 @@ export function AppShell() {
   const user = useAuthStore((state) => state.user);
   const clearSession = useAuthStore((state) => state.clearSession);
   const isTvMode = useTvModeStore((state) => state.isTvMode);
+  const hasPlayerSource = usePlayerStore((state) => !!state.source);
   const initials = (user?.username ?? "Guest")
     .split(/\s+/)
     .filter(Boolean)
@@ -45,32 +47,68 @@ export function AppShell() {
     clearSession();
   }
 
+  const MobileTopHeader = () => (
+    <div className="md:hidden flex h-14 shrink-0 items-center justify-between border-b border-border/40 bg-sidebar px-4 z-20">
+      <div className="flex items-center gap-2">
+        <Tv className="size-5 text-primary" aria-hidden="true" />
+        <span className="text-sm font-semibold tracking-tight">Euripus</span>
+      </div>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button variant="ghost" size="icon" className="size-8 rounded-full">
+            <Avatar className="size-8">
+              <AvatarFallback className="bg-muted text-xs font-medium">{initials || "GU"}</AvatarFallback>
+            </Avatar>
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="w-56">
+          <DropdownMenuLabel>{user?.username ?? "Guest"}</DropdownMenuLabel>
+          <DropdownMenuSeparator />
+          <DropdownMenuGroup>
+            <DropdownMenuItem asChild>
+              <Link to="/settings">Open settings</Link>
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={handleLogout}>
+              <LogOut data-icon="inline-start" />
+              Sign out
+            </DropdownMenuItem>
+          </DropdownMenuGroup>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </div>
+  );
+
   return (
     <TooltipProvider delayDuration={300}>
       <div
         data-tv-mode={isTvMode ? "true" : "false"}
-        className={cn(
-          "grid h-screen bg-background",
-          isTvMode
-            ? "grid-cols-[280px_minmax(0,1fr)_420px]"
-            : "grid-cols-[240px_minmax(0,1fr)_360px] max-xl:grid-cols-[240px_minmax(0,1fr)] max-xl:grid-rows-[minmax(0,1fr)_320px] max-md:grid-cols-1 max-md:grid-rows-[auto_minmax(0,1fr)_320px]",
-        )}
+        className={cn("flex h-screen w-full flex-col overflow-hidden bg-background md:flex-row")}
       >
-        <aside className="flex min-h-0 flex-col border-r border-border/40 bg-sidebar shadow-[4px_0_24px_rgba(0,0,0,0.02)] z-10">
-          <div className={cn("flex items-center gap-3 border-b border-border/40 px-5 py-6", isTvMode && "px-6 py-7")}>
-            <div className="flex size-10 items-center justify-center rounded-xl bg-primary text-primary-foreground shadow-lg shadow-primary/20">
-              <Tv className="size-4" aria-hidden="true" />
-            </div>
-            <div className="flex flex-col">
-              <span className="text-sm font-semibold tracking-tight">Euripus</span>
-              <span className="text-xs text-muted-foreground">Live TV, search, and sync</span>
+        <MobileTopHeader />
+
+        <aside
+          className={cn(
+            "group/sidebar relative z-20 shrink-0 flex-col border-r border-border/40 bg-sidebar shadow-[4px_0_24px_rgba(0,0,0,0.02)] transition-[width] duration-300",
+            isTvMode
+              ? "w-[80px] overflow-hidden hover:w-[280px] focus-within:w-[280px] flex"
+              : "w-[240px] max-md:hidden flex"
+          )}
+        >
+          <div className="flex h-[88px] shrink-0 items-center px-6 border-b border-border/40 overflow-hidden">
+            <div className="flex items-center gap-4 w-[240px]">
+              <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground shadow-[0_0_12px_rgba(168,85,247,0.4)] ring-1 ring-white/10">
+                <Tv className="size-4 shrink-0" aria-hidden="true" />
+              </div>
+              <div className={cn("flex flex-col min-w-0 transition-opacity duration-200", isTvMode ? "opacity-0 group-hover/sidebar:opacity-100 group-focus-within/sidebar:opacity-100" : "opacity-100")}>
+                <span className="truncate text-[15px] font-bold tracking-[-0.02em] text-foreground/90">Euripus</span>
+              </div>
             </div>
           </div>
 
           <ScrollArea className="min-h-0 flex-1">
-            <div className="flex flex-col gap-6 px-3 py-4">
-              <div className="flex flex-col gap-1">
-                <p className="px-2 text-xs font-medium uppercase tracking-[0.2em] text-muted-foreground">Browse</p>
+            <div className="flex flex-col gap-6 px-3 py-6 w-[240px]">
+              <div className="flex flex-col gap-1.5">
+                <p className={cn("px-4 pb-1 text-[10px] font-bold uppercase tracking-[0.2em] text-muted-foreground/60 transition-opacity duration-200", isTvMode ? "opacity-0 group-hover/sidebar:opacity-100 group-focus-within/sidebar:opacity-100" : "opacity-100")}>Menu</p>
                 <nav className="flex flex-col gap-1">
                   {navigation.map((item) => {
                     const Icon = item.icon;
@@ -84,15 +122,15 @@ export function AppShell() {
                             data-tv-focusable="true"
                             data-tv-autofocus={active ? "true" : undefined}
                             className={cn(
-                              "flex items-center gap-3 rounded-xl px-3 py-3 text-sm font-semibold transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
-                              isTvMode && "min-h-14 px-4 text-base",
+                              "flex items-center gap-4 rounded-xl px-4 py-3 text-[14px] font-semibold transition-all duration-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 overflow-hidden",
+                              isTvMode && "min-h-14",
                               active
-                                ? "bg-primary text-primary-foreground shadow-md shadow-primary/20 translate-x-1"
-                                : "text-muted-foreground hover:bg-muted/50 hover:text-foreground",
+                                ? "bg-primary/10 text-primary translate-x-1"
+                                : "text-muted-foreground/80 hover:bg-muted/40 hover:text-foreground",
                             )}
                           >
-                            <Icon className="size-4" aria-hidden="true" />
-                            <span className="truncate">{item.label}</span>
+                            <Icon className={cn("size-[18px] shrink-0 transition-transform duration-300", active && "scale-110 drop-shadow-[0_0_8px_rgba(168,85,247,0.4)]")} aria-hidden="true" />
+                            <span className={cn("truncate transition-opacity duration-200", isTvMode ? "opacity-0 group-hover/sidebar:opacity-100 group-focus-within/sidebar:opacity-100" : "opacity-100")}>{item.label}</span>
                           </Link>
                         </TooltipTrigger>
                         <TooltipContent side="right" className="md:hidden">
@@ -106,31 +144,32 @@ export function AppShell() {
             </div>
           </ScrollArea>
 
-          <Separator />
+          <Separator className="w-[85%] mx-auto opacity-50" />
 
-          <div className="px-3 py-3">
+          <div className="px-3 py-3 overflow-hidden w-[240px]">
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="ghost" className="h-auto w-full justify-start rounded-xl px-3 py-3 text-left">
-                  <Avatar className="size-9">
-                    <AvatarFallback className="bg-muted text-xs font-medium">{initials || "GU"}</AvatarFallback>
-                  </Avatar>
-                  <div className="flex min-w-0 flex-1 flex-col">
-                    <span className="truncate text-sm font-medium">{user?.username ?? "Guest"}</span>
-                    <span className="truncate text-xs text-muted-foreground">Account menu</span>
+                <Button variant="ghost" className="h-[52px] w-[216px] justify-start rounded-xl px-2.5 text-left overflow-hidden hover:bg-muted/40">
+                  <div className="flex items-center gap-3 w-full">
+                    <Avatar className="size-8 shrink-0 ring-1 ring-border/50">
+                      <AvatarFallback className="bg-primary/5 text-primary text-[10px] font-bold">{initials || "GU"}</AvatarFallback>
+                    </Avatar>
+                    <div className={cn("flex min-w-0 flex-1 flex-col transition-opacity duration-200", isTvMode ? "opacity-0 group-hover/sidebar:opacity-100 group-focus-within/sidebar:opacity-100" : "opacity-100")}>
+                      <span className="truncate text-sm font-semibold text-foreground/90">{user?.username ?? "Guest"}</span>
+                    </div>
+                    <ChevronDown className={cn("text-muted-foreground/50 size-4 shrink-0 transition-opacity duration-200", isTvMode ? "opacity-0 group-hover/sidebar:opacity-100 group-focus-within/sidebar:opacity-100" : "opacity-100")} aria-hidden="true" />
                   </div>
-                  <ChevronDown className="text-muted-foreground" aria-hidden="true" />
                 </Button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-56">
-                <DropdownMenuLabel>{user?.username ?? "Guest"}</DropdownMenuLabel>
+              <DropdownMenuContent align="end" className="w-[200px] rounded-xl">
+                <DropdownMenuLabel className="font-bold">{user?.username ?? "Guest"}</DropdownMenuLabel>
                 <DropdownMenuSeparator />
                 <DropdownMenuGroup>
-                  <DropdownMenuItem asChild>
+                  <DropdownMenuItem asChild className="rounded-lg cursor-pointer">
                     <Link to="/settings">Open settings</Link>
                   </DropdownMenuItem>
-                  <DropdownMenuItem onClick={handleLogout}>
-                    <LogOut data-icon="inline-start" />
+                  <DropdownMenuItem onClick={handleLogout} className="rounded-lg cursor-pointer text-destructive focus:text-destructive">
+                    <LogOut className="mr-2 size-4" />
                     Sign out
                   </DropdownMenuItem>
                 </DropdownMenuGroup>
@@ -139,24 +178,60 @@ export function AppShell() {
           </div>
         </aside>
 
-        <ScrollArea className="min-h-0 max-md:order-2">
-          <main className={cn("mx-auto flex min-h-full w-full max-w-[1200px] flex-col p-6 lg:p-8", isTvMode && "max-w-[1440px] p-8 lg:p-10")}>
-            <Outlet />
-          </main>
-        </ScrollArea>
+        <div className={cn(
+          "flex min-w-0 flex-1 flex-col overflow-hidden relative",
+          !isTvMode ? "md:flex-row" : "flex-row",
+        )}>
+          <ScrollArea className="flex-1 min-w-0 min-h-0 bg-background/50 outline-none z-0">
+            <main className={cn(
+              "mx-auto flex min-h-full w-full max-w-[1240px] flex-col p-4 md:p-8 relative overflow-x-hidden",
+              isTvMode && "max-w-[1600px] p-8 lg:p-12 mb-10"
+            )}>
+              <Outlet />
+            </main>
+          </ScrollArea>
 
-        <aside
-          className={cn(
-            "min-h-0 border-l border-border/40 bg-sidebar shadow-[-4px_0_24px_rgba(0,0,0,0.02)] z-10",
-            !isTvMode && "max-xl:col-span-2 max-xl:border-l-0 max-xl:border-t max-md:order-3 max-md:col-span-1",
-          )}
-        >
-          <ScrollArea className="h-full">
-            <div className="p-5 lg:p-6">
+          <aside
+            className={cn(
+              "z-10 shrink-0 flex flex-col border-border/20 transition-all duration-300",
+              isTvMode
+                ? "w-[380px] border-l relative bg-background/95 backdrop-blur-xl h-full shadow-[-40px_0_100px_rgba(0,0,0,0.4)]"
+                : cn(
+                    hasPlayerSource ? "max-md:border-t max-md:border-border/40" : "max-md:hidden",
+                    "md:h-full md:w-[320px] lg:w-[360px] md:border-l xl:bg-background/40"
+                  )
+            )}
+          >
+            <div className={cn(
+              "p-0 w-full",
+              !isTvMode ? "md:p-5 xl:p-6 md:h-full" : "py-8 pr-8 pl-4 h-full"
+            )}>
               <PlayerView />
             </div>
-          </ScrollArea>
-        </aside>
+          </aside>
+        </div>
+
+        {!isTvMode && (
+          <nav className="md:hidden flex h-16 shrink-0 items-center justify-around border-t border-border/40 bg-sidebar z-30 pb-[env(safe-area-inset-bottom)]">
+            {navigation.map((item) => {
+              const Icon = item.icon;
+              const active = pathname === item.to;
+              return (
+                <Link
+                  key={item.to}
+                  to={item.to}
+                  className={cn(
+                    "relative flex flex-col items-center justify-center gap-[3px] w-full h-full transition-colors",
+                    active ? "text-primary" : "text-muted-foreground/60 hover:text-foreground"
+                  )}
+                >
+                  <Icon className={cn("size-[22px] shrink-0 transition-transform duration-300", active && "scale-110 drop-shadow-[0_0_8px_rgba(168,85,247,0.4)]")} aria-hidden="true" />
+                  <span className="text-[10px] font-bold tracking-wide">{item.label}</span>
+                </Link>
+              );
+            })}
+          </nav>
+        )}
       </div>
     </TooltipProvider>
   );
