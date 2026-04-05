@@ -3,21 +3,53 @@ param()
 
 $ErrorActionPreference = "Stop"
 
+function Assert-LastExitCode {
+  param(
+    [string]$Step
+  )
+
+  if ($LASTEXITCODE -ne 0) {
+    throw "$Step failed with exit code $LASTEXITCODE"
+  }
+}
+
+function Stop-GradleDaemons {
+  $gradleJavaProcesses = Get-CimInstance Win32_Process | Where-Object {
+    $_.Name -eq "java.exe" -and $_.CommandLine -match "gradle-daemon"
+  }
+
+  foreach ($process in $gradleJavaProcesses) {
+    try {
+      Stop-Process -Id $process.ProcessId -Force
+    } catch {
+      Write-Warning "Failed to stop Gradle daemon process $($process.ProcessId): $($_.Exception.Message)"
+    }
+  }
+}
+
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $androidTwaDir = Join-Path $repoRoot "apps/android-twa"
 $androidProjectDir = Join-Path $androidTwaDir "android"
 $publicDir = Join-Path $repoRoot "apps/desktop/public"
+$iconSourcePath = Join-Path $repoRoot "Euripus-icon.png"
+$androidTvIconSourcePath = Join-Path $repoRoot "Euripus-atv-icon.png"
 $icon192Path = Join-Path $publicDir "icon-192.png"
 $icon512Path = Join-Path $publicDir "icon-512.png"
 $configPath = Join-Path $androidTwaDir "bubblewrap.config.json"
 $generatedDir = Join-Path $androidTwaDir ".generated"
+$generatedIconDir = Join-Path $generatedDir "icons"
+$signingDir = Join-Path $generatedDir "signing"
+$keystorePath = Join-Path $signingDir "euripus-tv-release.jks"
+$signingPropsPath = Join-Path $signingDir "release-signing.properties"
 $manifestPath = Join-Path $generatedDir "twa-manifest.json"
 $pythonLogPath = Join-Path $generatedDir "icon-server.log"
 $pythonErrLogPath = Join-Path $generatedDir "icon-server.err.log"
 $androidSdkRoot = Join-Path $env:USERPROFILE ".bubblewrap/android_sdk"
 $sdkManager = Join-Path $androidSdkRoot "tools/bin/sdkmanager.bat"
+$apksigner = Join-Path $androidSdkRoot "build-tools/35.0.0/apksigner.bat"
 $licensesDir = Join-Path $androidSdkRoot "licenses"
 $jdk17Path = "C:\Program Files\Microsoft\jdk-17.0.18.8-hotspot"
+$keytoolPath = Join-Path $jdk17Path "bin/keytool.exe"
 $port = 41731
 
 if (!(Test-Path $configPath)) {
@@ -32,14 +64,38 @@ if (!(Test-Path $sdkManager)) {
   throw "Android SDK manager was not found at $sdkManager"
 }
 
+if (!(Test-Path $apksigner)) {
+  throw "Android APK signer was not found at $apksigner"
+}
+
+if (!(Test-Path $keytoolPath)) {
+  throw "Java keytool was not found at $keytoolPath"
+}
+
 New-Item -ItemType Directory -Force -Path $generatedDir | Out-Null
+New-Item -ItemType Directory -Force -Path $generatedIconDir | Out-Null
+New-Item -ItemType Directory -Force -Path $signingDir | Out-Null
 
-if (!(Test-Path $icon192Path) -or !(Test-Path $icon512Path)) {
-  python -c "import PIL" 2>$null
-  if ($LASTEXITCODE -ne 0) {
-    python -m pip install Pillow | Out-Host
-  }
+python -c "import PIL" 2>$null
+if ($LASTEXITCODE -ne 0) {
+  python -m pip install Pillow | Out-Host
+}
 
+if (Test-Path $iconSourcePath) {
+  @'
+from PIL import Image
+from pathlib import Path
+
+source = Path(r'__SOURCE__')
+public_dir = Path(r'__PUBLIC_DIR__')
+
+with Image.open(source) as img:
+    img = img.convert("RGBA")
+    for size in (512, 192):
+        target = public_dir / f"icon-{size}.png"
+        img.resize((size, size), Image.Resampling.LANCZOS).save(target)
+'@.Replace('__SOURCE__', $iconSourcePath.Replace('\', '\\')).Replace('__PUBLIC_DIR__', $publicDir.Replace('\', '\\')) | python - | Out-Host
+} elseif (!(Test-Path $icon192Path) -or !(Test-Path $icon512Path)) {
   @'
 from PIL import Image, ImageDraw
 from pathlib import Path
@@ -77,6 +133,50 @@ for size in (512, 192):
 '@.Replace('__PUBLIC_DIR__', $publicDir.Replace('\', '\\')) | python - | Out-Host
 }
 
+if (Test-Path $androidTvIconSourcePath) {
+  @'
+from PIL import Image
+from pathlib import Path
+
+source = Path(r'__SOURCE__')
+target = Path(r'__TARGET__')
+
+with Image.open(source) as img:
+    img.convert("RGBA").resize((512, 512), Image.Resampling.LANCZOS).save(target)
+'@.Replace('__SOURCE__', $androidTvIconSourcePath.Replace('\', '\\')).Replace('__TARGET__', (Join-Path $generatedIconDir "android-tv-icon-512.png").Replace('\', '\\')) | python - | Out-Host
+} else {
+  Copy-Item -Path $icon512Path -Destination (Join-Path $generatedIconDir "android-tv-icon-512.png") -Force
+}
+
+if (!(Test-Path $signingPropsPath)) {
+  $password = [Guid]::NewGuid().ToString("N") + [Guid]::NewGuid().ToString("N")
+  @"
+storeFile=$keystorePath
+storePassword=$password
+keyAlias=euripus-tv
+keyPassword=$password
+"@ | Set-Content -Path $signingPropsPath -NoNewline
+}
+
+$signingProps = @{}
+Get-Content $signingPropsPath | ForEach-Object {
+  if ($_ -match '^\s*([^=]+?)\s*=\s*(.*)\s*$') {
+    $signingProps[$matches[1]] = $matches[2]
+  }
+}
+
+if (!(Test-Path $signingProps["storeFile"])) {
+  & $keytoolPath -genkeypair `
+    -keystore $signingProps["storeFile"] `
+    -storepass $signingProps["storePassword"] `
+    -keypass $signingProps["keyPassword"] `
+    -alias $signingProps["keyAlias"] `
+    -keyalg RSA `
+    -keysize 2048 `
+    -validity 3650 `
+    -dname "CN=Euripus Android TV, OU=Local Build, O=Euripus, L=Stockholm, S=Stockholm, C=SE" | Out-Host
+}
+
 $config = Get-Content $configPath -Raw | ConvertFrom-Json
 
 $twaManifest = [ordered]@{
@@ -95,8 +195,8 @@ $twaManifest = [ordered]@{
   enableNotifications = [bool]$config.enableNotifications
   enableSiteSettingsShortcut = $false
   startUrl = $config.startUrl
-  iconUrl = "http://127.0.0.1:$port/icon-512.png"
-  maskableIconUrl = "http://127.0.0.1:$port/icon-512.png"
+  iconUrl = "http://127.0.0.1:$port/android-tv-icon-512.png"
+  maskableIconUrl = "http://127.0.0.1:$port/android-tv-icon-512.png"
   appVersion = $config.appVersionName
   appVersionCode = [int]$config.appVersionCode
   splashScreenFadeOutDuration = 300
@@ -117,7 +217,7 @@ try {
   $pythonProcess = Start-Process `
     -FilePath "python" `
     -ArgumentList @("-m", "http.server", "$port", "--bind", "127.0.0.1") `
-    -WorkingDirectory $publicDir `
+    -WorkingDirectory $generatedIconDir `
     -RedirectStandardOutput $pythonLogPath `
     -RedirectStandardError $pythonErrLogPath `
     -PassThru
@@ -125,7 +225,7 @@ try {
   Start-Sleep -Seconds 2
 
   try {
-    Invoke-WebRequest -Uri "http://127.0.0.1:$port/icon-512.png" -UseBasicParsing | Out-Null
+    Invoke-WebRequest -Uri "http://127.0.0.1:$port/android-tv-icon-512.png" -UseBasicParsing | Out-Null
   } catch {
     throw "Temporary icon server did not start successfully."
   }
@@ -142,8 +242,32 @@ try {
   Set-Content -Path (Join-Path $licensesDir "android-sdk-preview-license") -Value "84831b9409646a918e30573bab4c9c91346d8abd"
 
   & $sdkManager --sdk_root=$androidSdkRoot --install "platform-tools" "platforms;android-36" "build-tools;35.0.0" | Out-Host
+  Assert-LastExitCode "Android SDK install"
+
+  if (Test-Path (Join-Path $androidProjectDir "gradlew.bat")) {
+    Push-Location $androidProjectDir
+    try {
+      & ".\gradlew.bat" --stop | Out-Host
+    } finally {
+      Pop-Location
+    }
+  }
+
+  Stop-GradleDaemons
+  Start-Sleep -Seconds 2
+
+  foreach ($path in @(
+    (Join-Path $androidProjectDir "app/build"),
+    (Join-Path $androidProjectDir "build"),
+    (Join-Path $androidProjectDir ".gradle")
+  )) {
+    if (Test-Path $path) {
+      Remove-Item -LiteralPath $path -Recurse -Force
+    }
+  }
 
   npx --yes @bubblewrap/cli update --skipVersionUpgrade --directory $androidProjectDir --manifest $manifestPath
+  Assert-LastExitCode "Bubblewrap update"
 
   $androidManifestPath = Join-Path $androidProjectDir "app/src/main/AndroidManifest.xml"
   $androidManifest = Get-Content $androidManifestPath -Raw
@@ -161,9 +285,35 @@ try {
   Push-Location $androidProjectDir
   try {
     & ".\gradlew.bat" assembleDebug
+    Assert-LastExitCode "Gradle assembleDebug"
+    & ".\gradlew.bat" assembleRelease
+    Assert-LastExitCode "Gradle assembleRelease"
   } finally {
     Pop-Location
   }
+
+  $unsignedReleaseApk = Join-Path $androidProjectDir "app/build/outputs/apk/release/app-release-unsigned.apk"
+  $signedReleaseApk = Join-Path $androidProjectDir "app/build/outputs/apk/release/app-release-signed.apk"
+
+  if (!(Test-Path $unsignedReleaseApk)) {
+    throw "Expected unsigned release APK at $unsignedReleaseApk"
+  }
+
+  if (Test-Path $signedReleaseApk) {
+    Remove-Item -LiteralPath $signedReleaseApk -Force
+  }
+
+  & $apksigner sign `
+    --ks $signingProps["storeFile"] `
+    --ks-key-alias $signingProps["keyAlias"] `
+    --ks-pass "pass:$($signingProps["storePassword"])" `
+    --key-pass "pass:$($signingProps["keyPassword"])" `
+    --out $signedReleaseApk `
+    $unsignedReleaseApk | Out-Host
+  Assert-LastExitCode "APK signing"
+
+  & $apksigner verify --verbose $signedReleaseApk | Out-Host
+  Assert-LastExitCode "APK verification"
 } finally {
   if ($pythonProcess -and !$pythonProcess.HasExited) {
     Stop-Process -Id $pythonProcess.Id -Force
