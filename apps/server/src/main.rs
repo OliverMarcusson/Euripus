@@ -38,7 +38,7 @@ use cookie::time::Duration as CookieDuration;
 use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation, decode, encode};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
+use sha2::{Digest, Sha256, Sha384};
 use sqlx::{FromRow, PgPool, Postgres, Transaction, postgres::PgPoolOptions};
 use tokio::task::{JoinHandle, JoinSet};
 use tower_http::{
@@ -587,6 +587,19 @@ const PUBLIC_IP_LOOKUP_URL: &str = "https://api.ipify.org";
 const PUBLIC_IP_LOOKUP_TIMEOUT_SECONDS: u64 = 5;
 const INTERRUPTED_SYNC_MESSAGE: &str =
     "Sync was interrupted when the server restarted. Start a new sync.";
+const MIGRATION_0007_ORIGINAL_SQL: &str = r#"CREATE INDEX IF NOT EXISTS programs_user_profile_idx
+  ON programs(user_id, profile_id);
+
+CREATE INDEX IF NOT EXISTS programs_search_tsv_idx
+  ON programs
+  USING GIN (to_tsvector('simple', concat_ws(' ', title, channel_name, description)));
+
+CREATE INDEX IF NOT EXISTS programs_search_trgm_idx
+  ON programs
+  USING GIN ((concat_ws(' ', title, channel_name, description)) gin_trgm_ops);
+"#;
+const MIGRATION_0007_CURRENT_SQL: &str =
+    include_str!("../migrations/0007_program_search_optimizations.sql");
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -601,6 +614,8 @@ async fn main() -> Result<()> {
         .connect(&config.database_url)
         .await
         .context("failed to connect to PostgreSQL")?;
+
+    repair_migration_0007_checksum(&pool).await?;
 
     sqlx::migrate!("./migrations")
         .run(&pool)
@@ -653,6 +668,44 @@ async fn main() -> Result<()> {
 
 async fn health() -> StatusCode {
     StatusCode::NO_CONTENT
+}
+
+async fn repair_migration_0007_checksum(pool: &PgPool) -> Result<()> {
+    let migrations_table_exists = sqlx::query_scalar::<_, bool>(
+        "SELECT to_regclass('_sqlx_migrations') IS NOT NULL",
+    )
+    .fetch_one(pool)
+    .await
+    .context("failed to check for sqlx migrations table")?;
+
+    if !migrations_table_exists {
+        return Ok(());
+    }
+
+    let original_checksum = Sha384::digest(MIGRATION_0007_ORIGINAL_SQL.as_bytes()).to_vec();
+    let current_checksum = Sha384::digest(MIGRATION_0007_CURRENT_SQL.as_bytes()).to_vec();
+
+    let updated_rows = sqlx::query(
+        r#"
+        UPDATE _sqlx_migrations
+        SET checksum = $1
+        WHERE version = 7 AND checksum = $2
+        "#,
+    )
+    .bind(current_checksum)
+    .bind(original_checksum)
+    .execute(pool)
+    .await
+    .context("failed to repair migration 0007 checksum")?
+    .rows_affected();
+
+    if updated_rows > 0 {
+        warn!(
+            "repaired sqlx migration checksum for version 7 to match the immutable search index fix"
+        );
+    }
+
+    Ok(())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
