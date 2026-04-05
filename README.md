@@ -41,21 +41,35 @@ Useful variants:
 
 ## Homelab Deployment
 
-Use `docker-compose.homelab.yml` for the browser-first self-hosted deployment:
+Use `docker-compose.homelab.yml` for the browser-first self-hosted deployment. The homelab host now pulls prebuilt Linux images from GHCR instead of building them locally.
 
 1. Copy `apps/server/.env.example` to `apps/server/.env` and replace the placeholder secrets.
-2. Set `APP_PUBLIC_ORIGIN` to the HTTPS URL exposed by your reverse proxy.
-3. Set `APP_ALLOWED_ORIGINS` to include your public browser origin and any local development origins you still need.
-4. Start the homelab stack with `docker compose -f docker-compose.homelab.yml up --build -d`.
-5. Point your reverse proxy at the host port `8088` by default, or override `EURIPUS_WEB_PORT`.
+2. Copy `.env.homelab-images.example` to `.env.homelab-images`.
+3. Set `APP_PUBLIC_ORIGIN` to the HTTPS URL exposed by your reverse proxy.
+4. Set `APP_ALLOWED_ORIGINS` to include your public browser origin and any local development origins you still need.
+5. On your Windows workstation, publish fresh images with `bun run homelab:publish`.
+6. On the Fedora homelab host, deploy them with `./scripts/deploy-homelab-images.sh`.
+7. Point your reverse proxy at the host port `8088` by default, or override `EURIPUS_WEB_PORT`.
 
 The `web` service is the only public upstream. It serves the SPA, forwards `/api/*` to the Rust backend, and keeps PostgreSQL private inside the Compose network.
+
+Default image names:
+
+- `ghcr.io/olivermarcusson/euripus-server`
+- `ghcr.io/olivermarcusson/euripus-web`
+
+Published tags:
+
+- immutable tag: current git SHA
+- moving tag: `homelab-latest`
+
+Private GHCR pulls require a token with package read access on the Fedora host. The deploy script reads `GHCR_USERNAME` and `GHCR_TOKEN` from `.env.homelab-images` and logs in non-interactively before pulling.
 
 To route Euripus server-side traffic through NordVPN, add the override file:
 
 ```bash
 cp apps/server/.env.nordvpn.example apps/server/.env.nordvpn
-docker compose -f docker-compose.homelab.yml -f docker-compose.homelab.nordvpn.yml up --build -d
+EURIPUS_ENABLE_NORDVPN=true ./scripts/deploy-homelab-images.sh
 ```
 
 That only affects server-originated traffic such as provider validation, sync jobs, and EPG fetches. Playback still goes directly from the client device to the IPTV provider.
