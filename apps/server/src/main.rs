@@ -40,8 +40,8 @@ use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256, Sha384};
 use sqlx::{FromRow, PgPool, Postgres, Transaction, postgres::PgPoolOptions};
-use tokio::task::{JoinHandle, JoinSet};
 use tokio::signal;
+use tokio::task::{JoinHandle, JoinSet};
 use tower_http::{
     cors::{AllowOrigin, CorsLayer},
     trace::TraceLayer,
@@ -685,12 +685,11 @@ async fn shutdown_signal() {
 }
 
 async fn repair_migration_0007_checksum(pool: &PgPool) -> Result<()> {
-    let migrations_table_exists = sqlx::query_scalar::<_, bool>(
-        "SELECT to_regclass('_sqlx_migrations') IS NOT NULL",
-    )
-    .fetch_one(pool)
-    .await
-    .context("failed to check for sqlx migrations table")?;
+    let migrations_table_exists =
+        sqlx::query_scalar::<_, bool>("SELECT to_regclass('_sqlx_migrations') IS NOT NULL")
+            .fetch_one(pool)
+            .await
+            .context("failed to check for sqlx migrations table")?;
 
     if !migrations_table_exists {
         return Ok(());
@@ -1902,37 +1901,23 @@ async fn search_programs(
         WITH page AS (
           SELECT ranked.id, ROW_NUMBER() OVER () AS ordinal
           FROM (
-            SELECT
-              p.id,
-              p.title,
-              p.channel_id,
-              p.start_at,
-              p.end_at,
-              p.can_catchup,
-              coalesce(p.title, '') || ' ' || coalesce(p.channel_name, '') || ' ' || coalesce(p.description, '') AS search_text
-            FROM programs p
-            WHERE p.user_id = $1
-              AND (
-                to_tsvector(
-                  'simple',
-                  coalesce(p.title, '') || ' ' || coalesce(p.channel_name, '') || ' ' || coalesce(p.description, '')
-                ) @@ plainto_tsquery('simple', $2)
-                OR (coalesce(p.title, '') || ' ' || coalesce(p.channel_name, '') || ' ' || coalesce(p.description, '')) % $2
-              )
+            SELECT p.id
+            FROM search_documents sd
+            JOIN programs p ON p.id = sd.entity_id
+            WHERE sd.user_id = $1
+              AND sd.entity_type = 'program'
+              AND (sd.tsv @@ plainto_tsquery('simple', $2) OR sd.search_text % $2)
             ORDER BY
               CASE
-                WHEN p.channel_id IS NOT NULL AND p.start_at <= NOW() AND p.end_at >= NOW() THEN 0
-                WHEN p.channel_id IS NOT NULL AND p.end_at <= NOW() AND p.can_catchup THEN 1
-                WHEN lower(p.title) = lower($2) THEN 2
-                WHEN lower(p.title) LIKE lower($2 || '%') THEN 3
-                WHEN p.start_at > NOW() THEN 4
+                WHEN p.channel_id IS NOT NULL AND sd.starts_at <= NOW() AND sd.ends_at >= NOW() THEN 0
+                WHEN p.channel_id IS NOT NULL AND sd.ends_at <= NOW() AND p.can_catchup THEN 1
+                WHEN lower(sd.title) = lower($2) THEN 2
+                WHEN lower(sd.title) LIKE lower($2 || '%') THEN 3
+                WHEN sd.starts_at > NOW() THEN 4
                 ELSE 5
               END,
-              similarity(
-                coalesce(p.title, '') || ' ' || coalesce(p.channel_name, '') || ' ' || coalesce(p.description, ''),
-                $2
-              ) DESC,
-              p.start_at ASC
+              similarity(sd.search_text, $2) DESC,
+              sd.starts_at ASC
             OFFSET $3
             LIMIT $4
           ) ranked
@@ -2625,15 +2610,10 @@ async fn count_program_search_results(pool: &PgPool, user_id: Uuid, query: &str)
     let total_count = sqlx::query_scalar::<_, i64>(
         r#"
         SELECT COUNT(*)
-        FROM programs p
-        WHERE p.user_id = $1
-          AND (
-            to_tsvector(
-              'simple',
-              coalesce(p.title, '') || ' ' || coalesce(p.channel_name, '') || ' ' || coalesce(p.description, '')
-            ) @@ plainto_tsquery('simple', $2)
-            OR (coalesce(p.title, '') || ' ' || coalesce(p.channel_name, '') || ' ' || coalesce(p.description, '')) % $2
-          )
+        FROM search_documents sd
+        WHERE sd.user_id = $1
+          AND sd.entity_type = 'program'
+          AND (sd.tsv @@ plainto_tsquery('simple', $2) OR sd.search_text % $2)
         "#,
     )
     .bind(user_id)
@@ -3932,10 +3912,10 @@ async fn persist_full_sync_data(
         "rebuilding-search",
         6,
         job_type,
-        "Refreshing channel search",
+        "Refreshing search",
     )
     .await?;
-    rebuild_channel_search_documents(&mut transaction, user_id).await?;
+    rebuild_search_documents(&mut transaction, user_id).await?;
 
     transaction.commit().await?;
     Ok(source_statuses)
@@ -3969,6 +3949,17 @@ async fn persist_epg_sync_data(
         .execute(&mut *transaction)
         .await?;
     bulk_insert_programmes(&mut transaction, user_id, profile_id, &programmes).await?;
+
+    update_sync_job_phase(
+        pool,
+        job_id,
+        "rebuilding-search",
+        4,
+        job_type,
+        "Refreshing search",
+    )
+    .await?;
+    rebuild_search_documents(&mut transaction, user_id).await?;
 
     transaction.commit().await?;
     Ok(source_statuses)
@@ -4541,7 +4532,7 @@ async fn bulk_insert_programmes(
     Ok(())
 }
 
-async fn rebuild_channel_search_documents(
+async fn rebuild_search_documents(
     transaction: &mut Transaction<'_, Postgres>,
     user_id: Uuid,
 ) -> Result<()> {
@@ -4576,6 +4567,26 @@ async fn rebuild_channel_search_documents(
         FROM channels c
         LEFT JOIN channel_categories cc ON cc.id = c.category_id
         WHERE c.user_id = $1
+        "#,
+    )
+    .bind(user_id)
+    .execute(&mut **transaction)
+    .await?;
+
+    sqlx::query(
+        r#"
+        INSERT INTO search_documents (user_id, entity_type, entity_id, title, subtitle, search_text, starts_at, ends_at)
+        SELECT
+          $1,
+          'program',
+          p.id,
+          p.title,
+          p.channel_name,
+          concat_ws(' ', p.title, p.channel_name, p.description),
+          p.start_at,
+          p.end_at
+        FROM programs p
+        WHERE p.user_id = $1
         "#,
     )
     .bind(user_id)
