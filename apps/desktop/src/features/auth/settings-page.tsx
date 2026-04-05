@@ -1,5 +1,5 @@
-import { useQuery } from "@tanstack/react-query";
-import { LaptopMinimal, Moon, Radio, Sun } from "lucide-react";
+import { useMutation, useQuery } from "@tanstack/react-query";
+import { LaptopMinimal, Moon, Play, Radio, Sun } from "lucide-react";
 import { PageHeader } from "@/components/layout/page-header";
 import { ChannelAvatar } from "@/components/ui/channel-avatar";
 import { Badge } from "@/components/ui/badge";
@@ -11,10 +11,11 @@ import { Separator } from "@/components/ui/separator";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { ProviderSettingsSection } from "@/features/provider/provider-settings-section";
 import { useChannelFavoriteMutation } from "@/hooks/use-channel-favorite";
-import { getProvider, getRecents } from "@/lib/api";
+import { getProvider, getRecents, startChannelPlayback } from "@/lib/api";
 import { formatDateTime, formatRelativeTime } from "@/lib/utils";
 import type { ThemePreference } from "@/store/theme-store";
 import { useThemeStore } from "@/store/theme-store";
+import { usePlayerStore } from "@/store/player-store";
 import type { TvModePreference } from "@/store/tv-mode-store";
 import { useTvModeStore } from "@/store/tv-mode-store";
 
@@ -41,6 +42,8 @@ export function SettingsPage() {
   const recentsQuery = useQuery({ queryKey: ["recents"], queryFn: getRecents });
   const providerQuery = useQuery({ queryKey: ["provider"], queryFn: getProvider });
   const favoriteMutation = useChannelFavoriteMutation();
+  const setLoading = usePlayerStore((state) => state.setLoading);
+  const setSource = usePlayerStore((state) => state.setSource);
   const preference = useThemeStore((state) => state.preference);
   const resolvedTheme = useThemeStore((state) => state.resolvedTheme);
   const setPreference = useThemeStore((state) => state.setPreference);
@@ -49,9 +52,15 @@ export function SettingsPage() {
   const setTvModePreference = useTvModeStore((state) => state.setPreference);
   const recents = recentsQuery.data ?? [];
   const provider = providerQuery.data;
+  const playMutation = useMutation({
+    mutationFn: startChannelPlayback,
+    onMutate: () => setLoading(true),
+    onSuccess: (source) => setSource(source),
+    onSettled: () => setLoading(false),
+  });
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-5 sm:gap-6">
       <PageHeader
         title="Settings"
         meta={
@@ -65,11 +74,11 @@ export function SettingsPage() {
       />
 
       <div className="grid gap-6 xl:grid-cols-[320px_minmax(0,1fr)]">
-        <Card className="self-start">
-          <CardHeader>
+        <Card className="self-start rounded-none border-0 bg-transparent shadow-none sm:rounded-xl sm:border sm:bg-card sm:shadow-sm">
+          <CardHeader className="px-0 pt-0 pb-4 sm:p-5 sm:pb-0">
             <CardTitle>Appearance</CardTitle>
           </CardHeader>
-          <CardContent className="flex flex-col gap-4">
+          <CardContent className="flex flex-col gap-4 px-0 pb-0 sm:p-5">
             <ToggleGroup
               type="single"
               value={preference}
@@ -95,10 +104,7 @@ export function SettingsPage() {
             <Separator />
 
             <div className="flex flex-col gap-3">
-              <div className="flex flex-col gap-1">
-                <span className="text-sm font-medium">Remote-friendly UI</span>
-                <span className="text-sm text-muted-foreground">Auto-detect Android TV or force TV mode manually.</span>
-              </div>
+              <span className="text-sm font-medium">Remote-friendly UI</span>
               <ToggleGroup
                 type="single"
                 value={tvModePreference}
@@ -119,14 +125,16 @@ export function SettingsPage() {
           </CardContent>
         </Card>
 
-        <Card className="overflow-hidden">
-          <CardHeader className="flex flex-row items-center justify-between gap-4">
+        <Separator className="sm:hidden" />
+
+        <Card className="overflow-hidden rounded-none border-0 bg-transparent shadow-none sm:rounded-xl sm:border sm:bg-card sm:shadow-sm">
+          <CardHeader className="flex flex-row items-center justify-between gap-4 px-0 pt-0 pb-4 sm:p-5 sm:pb-0">
             <CardTitle>Recent channels</CardTitle>
             <Badge variant="outline">{recents.length}</Badge>
           </CardHeader>
           <CardContent className="p-0">
             {recents.length ? (
-              <ScrollArea className="max-h-[26rem]" data-testid="recent-channels-scroll-area">
+              <ScrollArea className="h-[24rem] sm:h-[26rem]" data-testid="recent-channels-scroll-area">
                 <div className="flex flex-col">
                   {recents.map((recent, index) => (
                     <div key={recent.channel.id}>
@@ -154,6 +162,14 @@ export function SettingsPage() {
                           >
                             {recent.channel.isFavorite ? "Unfavorite" : "Favorite"}
                           </Button>
+                          <Button
+                            size="sm"
+                            onClick={() => playMutation.mutate(recent.channel.id)}
+                            disabled={playMutation.isPending}
+                          >
+                            <Play data-icon="inline-start" />
+                            Play
+                          </Button>
                         </div>
                       </div>
                     </div>
@@ -173,6 +189,8 @@ export function SettingsPage() {
           </CardContent>
         </Card>
       </div>
+
+      <Separator className="sm:hidden" />
 
       <ProviderSettingsSection />
     </div>

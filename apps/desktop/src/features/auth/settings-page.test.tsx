@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { SettingsPage } from "@/features/auth/settings-page";
-import { getProvider, getRecents, getServerNetworkStatus, getSyncStatus, saveProvider } from "@/lib/api";
+import { getProvider, getRecents, getServerNetworkStatus, getSyncStatus, saveProvider, startChannelPlayback } from "@/lib/api";
 import { useThemeStore } from "@/store/theme-store";
 import { useTvModeStore } from "@/store/tv-mode-store";
 
@@ -13,6 +13,7 @@ vi.mock("@/lib/api", () => ({
   getSyncStatus: vi.fn(),
   removeFavorite: vi.fn(),
   saveProvider: vi.fn(),
+  startChannelPlayback: vi.fn(),
   triggerProviderSync: vi.fn(),
   validateProvider: vi.fn(),
 }));
@@ -22,6 +23,7 @@ const mockedGetProvider = vi.mocked(getProvider);
 const mockedGetServerNetworkStatus = vi.mocked(getServerNetworkStatus);
 const mockedGetSyncStatus = vi.mocked(getSyncStatus);
 const mockedSaveProvider = vi.mocked(saveProvider);
+const mockedStartChannelPlayback = vi.mocked(startChannelPlayback);
 
 describe("SettingsPage", () => {
   beforeEach(() => {
@@ -64,6 +66,16 @@ describe("SettingsPage", () => {
         updatedAt: "2026-04-04T12:00:00.000Z",
       })),
     }));
+    mockedStartChannelPlayback.mockResolvedValue({
+      kind: "hls",
+      url: "https://stream.example.com/channel.m3u8",
+      headers: {},
+      live: true,
+      catchup: false,
+      expiresAt: null,
+      unsupportedReason: null,
+      title: "Arena 1",
+    });
     useThemeStore.getState().setPreference("system");
     useTvModeStore.getState().setPreference("auto");
   });
@@ -137,6 +149,7 @@ describe("SettingsPage", () => {
 
     expect(await screen.findByText("Provider")).toBeInTheDocument();
     expect(await screen.findByText("Arena 1")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^play$/i })).toBeInTheDocument();
     expect(
       await screen.findByDisplayValue(
         "https://open-epg.com/files/sweden4.xml.gz",
