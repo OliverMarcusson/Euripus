@@ -146,9 +146,16 @@ export function ProviderSettingsSection() {
     mutationFn: triggerProviderSync,
     onSuccess: async () => {
       await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["provider"] }),
         queryClient.invalidateQueries({ queryKey: ["sync-status"] }),
         queryClient.invalidateQueries({ queryKey: ["channels"] }),
         queryClient.invalidateQueries({ queryKey: ["guide"] }),
+      ]);
+    },
+    onError: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["provider"] }),
+        queryClient.invalidateQueries({ queryKey: ["sync-status"] }),
       ]);
     },
   });
@@ -157,6 +164,8 @@ export function ProviderSettingsSection() {
   const latestJob = syncQuery.data;
   const watchedEpgSources = form.watch("epgSources");
   const syncProgressValue = latestJob ? getSyncProgressValue(latestJob) : 0;
+  const syncErrorMessage = syncMutation.error instanceof Error ? syncMutation.error.message : null;
+  const syncBlockedByActiveJob = latestJob?.status === "queued" || latestJob?.status === "running";
   const displayedEpgSourceCount = form.formState.isDirty
     ? watchedEpgSources.length
     : provider?.epgSources.length ?? watchedEpgSources.length;
@@ -692,9 +701,14 @@ export function ProviderSettingsSection() {
                 {latestJob.errorMessage}
               </div>
             ) : null}
+            {syncErrorMessage ? (
+              <div className="rounded-2xl border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">
+                {syncErrorMessage}
+              </div>
+            ) : null}
             <Button
               onClick={() => syncMutation.mutate()}
-              disabled={syncMutation.isPending || !provider}
+              disabled={syncMutation.isPending || syncBlockedByActiveJob || !provider}
             >
               <RefreshCcw data-icon="inline-start" />
               {syncMutation.isPending ? "Syncing..." : "Trigger full sync"}
