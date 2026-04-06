@@ -6,7 +6,7 @@ use std::{
     collections::{HashMap, HashSet},
     fs,
     net::{IpAddr, SocketAddr},
-    path::Path,
+    path::Path as FsPath,
     str::FromStr,
     sync::Arc,
     time::{Duration, Instant},
@@ -69,7 +69,6 @@ struct AppState {
     http_client: reqwest::Client,
     meili: Option<Arc<MeilisearchClient>>,
     session_cache: Arc<DashMap<(Uuid, Uuid), Instant>>,
-    remote_device_channels: Arc<DashMap<Uuid, broadcast::Sender<RemoteDeviceEventPayload>>>,
     receiver_channels: Arc<DashMap<Uuid, broadcast::Sender<ReceiverEventPayload>>>,
 }
 
@@ -347,34 +346,6 @@ struct PlaybackSourceResponse {
     title: String,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
-#[serde(rename_all = "camelCase")]
-struct PlaybackDeviceCurrentPlaybackResponse {
-    title: String,
-    source_kind: String,
-    live: bool,
-    catchup: bool,
-    updated_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Serialize, Clone)]
-#[serde(rename_all = "camelCase")]
-struct PlaybackDeviceResponse {
-    id: Uuid,
-    device_key: String,
-    name: String,
-    platform: String,
-    form_factor_hint: Option<String>,
-    remote_target_enabled: bool,
-    online: bool,
-    controllable: bool,
-    current_controller: bool,
-    current: bool,
-    last_seen_at: DateTime<Utc>,
-    updated_at: DateTime<Utc>,
-    current_playback: Option<PlaybackDeviceCurrentPlaybackResponse>,
-}
-
 #[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct ReceiverPlaybackStateResponse {
@@ -421,14 +392,6 @@ struct RemotePlaybackCommandResponse {
     status: String,
     source_title: String,
     created_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-#[serde(rename_all = "camelCase")]
-struct RemoteDeviceEventPayload {
-    event_type: String,
-    command: RemotePlaybackCommandResponse,
-    source: PlaybackSourceResponse,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -506,25 +469,6 @@ struct SearchQuery {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct PlaybackDeviceRegistrationPayload {
-    device_key: String,
-    name: String,
-    platform: String,
-    form_factor_hint: Option<String>,
-    remote_target_enabled: bool,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct PlaybackDevicePlaybackStatePayload {
-    title: Option<String>,
-    source_kind: Option<String>,
-    live: Option<bool>,
-    catchup: Option<bool>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
 struct RemoteControllerTargetPayload {
     device_id: Uuid,
 }
@@ -594,12 +538,6 @@ struct RemoteCommandAckPayload {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct RemoteEventsQuery {
-    access_token: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
 struct ReceiverEventsQuery {
     session_token: Option<String>,
 }
@@ -642,49 +580,6 @@ struct SessionRecord {
     expires_at: DateTime<Utc>,
     revoked_at: Option<DateTime<Utc>>,
     last_used_at: Option<DateTime<Utc>>,
-}
-
-#[derive(Debug, FromRow, Clone)]
-struct PlaybackDeviceRecord {
-    id: Uuid,
-    user_id: Uuid,
-    session_id: Uuid,
-    device_key: String,
-    device_name: String,
-    platform: String,
-    form_factor_hint: Option<String>,
-    remote_target_enabled: bool,
-    current_playback_title: Option<String>,
-    current_playback_kind: Option<String>,
-    current_playback_live: Option<bool>,
-    current_playback_catchup: Option<bool>,
-    current_playback_updated_at: Option<DateTime<Utc>>,
-    current_controller_session_id: Option<Uuid>,
-    last_seen_at: DateTime<Utc>,
-    created_at: DateTime<Utc>,
-    updated_at: DateTime<Utc>,
-}
-
-#[derive(Debug, FromRow)]
-struct RemoteControllerTargetRecord {
-    selected_at: DateTime<Utc>,
-    id: Uuid,
-    user_id: Uuid,
-    session_id: Uuid,
-    device_key: String,
-    device_name: String,
-    platform: String,
-    form_factor_hint: Option<String>,
-    remote_target_enabled: bool,
-    current_playback_title: Option<String>,
-    current_playback_kind: Option<String>,
-    current_playback_live: Option<bool>,
-    current_playback_catchup: Option<bool>,
-    current_playback_updated_at: Option<DateTime<Utc>>,
-    current_controller_session_id: Option<Uuid>,
-    last_seen_at: DateTime<Utc>,
-    created_at: DateTime<Utc>,
-    updated_at: DateTime<Utc>,
 }
 
 #[derive(Debug, FromRow, Clone)]
@@ -1005,8 +900,6 @@ const DATABASE_RETRY_DELAY_INITIAL: Duration = Duration::from_secs(2);
 const DATABASE_RETRY_DELAY_MAX: Duration = Duration::from_secs(10);
 const SESSION_CACHE_TTL: Duration = Duration::from_secs(30);
 const MEILI_INDEX_BATCH_SIZE: i64 = 10_000;
-const REMOTE_DEVICE_TTL: Duration = Duration::from_secs(45);
-const REMOTE_DEVICE_CHANNEL_CAPACITY: usize = 32;
 const RECEIVER_TTL: Duration = Duration::from_secs(45);
 const RECEIVER_SESSION_TTL_HOURS: i64 = 12;
 const RECEIVER_PAIRING_CODE_MINUTES: i64 = 5;
@@ -1052,7 +945,6 @@ async fn main() -> Result<()> {
             .build()?,
         meili,
         session_cache: Arc::new(DashMap::new()),
-        remote_device_channels: Arc::new(DashMap::new()),
         receiver_channels: Arc::new(DashMap::new()),
     };
 
@@ -1248,7 +1140,7 @@ async fn repair_sqlx_migration_checksums(pool: &PgPool) -> Result<()> {
         return Ok(());
     }
 
-    let migrations_dir = Path::new("./migrations");
+    let migrations_dir = FsPath::new("./migrations");
     if !migrations_dir.exists() {
         warn!(
             "sqlx migrations directory {} not found, skipping checksum repair",
@@ -1258,9 +1150,12 @@ async fn repair_sqlx_migration_checksums(pool: &PgPool) -> Result<()> {
     }
 
     let mut repaired_versions = Vec::new();
-    for entry in fs::read_dir(migrations_dir)
-        .with_context(|| format!("failed to read migrations directory {}", migrations_dir.display()))?
-    {
+    for entry in fs::read_dir(migrations_dir).with_context(|| {
+        format!(
+            "failed to read migrations directory {}",
+            migrations_dir.display()
+        )
+    })? {
         let path = entry?.path();
         if path.extension().and_then(|ext| ext.to_str()) != Some("sql") {
             continue;
@@ -1390,10 +1285,6 @@ fn shared_api_router() -> Router<AppState> {
         .route("/recents", get(list_recents))
         .route("/playback/channel/{id}", post(play_channel))
         .route("/playback/program/{id}", post(play_program))
-        .route(
-            "/remote/devices",
-            get(list_remote_devices).post(register_playback_device),
-        )
         .route("/remote/receivers", get(list_remote_receivers))
         .route("/remote/pair", post(pair_receiver))
         .route("/remote/receivers/{id}", delete(unpair_receiver))
@@ -1409,16 +1300,6 @@ fn shared_api_router() -> Router<AppState> {
         .route("/remote/command/play", post(resume_remote_playback))
         .route("/remote/command/seek", post(seek_remote_playback))
         .route("/remote/command/stop", post(stop_remote_playback))
-        .route("/remote/devices/{id}/heartbeat", post(heartbeat_playback_device))
-        .route("/remote/devices/{id}/events", get(stream_playback_device_events))
-        .route(
-            "/remote/devices/{id}/playback-state",
-            post(update_playback_device_state),
-        )
-        .route(
-            "/remote/devices/{id}/commands/{command_id}/ack",
-            post(acknowledge_remote_command),
-        )
         .route("/receiver/pair", post(pair_receiver))
 }
 
@@ -1441,7 +1322,10 @@ fn browser_api_router() -> Router<AppState> {
         .route("/receiver/pairing-code", post(issue_receiver_pairing_code))
         .route("/receiver/events", get(stream_receiver_events))
         .route("/receiver/heartbeat", post(heartbeat_receiver))
-        .route("/receiver/playback-state", post(update_receiver_playback_state))
+        .route(
+            "/receiver/playback-state",
+            post(update_receiver_playback_state),
+        )
         .route(
             "/receiver/commands/{command_id}/ack",
             post(acknowledge_receiver_command),
@@ -2964,7 +2848,9 @@ async fn resolve_program_playback_source(
                 None,
             )
         }
-        ProgramPlaybackBehavior::Unsupported(reason) => Ok(unsupported_playback(&row.title, reason)),
+        ProgramPlaybackBehavior::Unsupported(reason) => {
+            Ok(unsupported_playback(&row.title, reason))
+        }
     }
 }
 
@@ -2976,7 +2862,8 @@ async fn create_receiver_session(
     let device_name = payload.name.trim();
     let platform = payload.platform.trim();
     let app_kind = payload.app_kind.trim();
-    if device_key.is_empty() || device_name.is_empty() || platform.is_empty() || app_kind.is_empty() {
+    if device_key.is_empty() || device_name.is_empty() || platform.is_empty() || app_kind.is_empty()
+    {
         return Err(AppError::BadRequest(
             "Device key, name, platform, and app kind are required.".to_string(),
         ));
@@ -3085,7 +2972,10 @@ async fn create_receiver_session(
     Ok(Json(ReceiverSessionResponse {
         session_token,
         expires_at,
-        receiver_credential: record.remembered.then(|| payload.receiver_credential.unwrap_or_default()).filter(|v| !v.is_empty()),
+        receiver_credential: record
+            .remembered
+            .then(|| payload.receiver_credential.unwrap_or_default())
+            .filter(|v| !v.is_empty()),
         device: receiver_device_response(&state, None, &record),
         pairing_code: pairing_code.as_ref().map(|value| value.code.clone()),
         paired: record.owner_user_id.is_some() && record.revoked_at.is_none(),
@@ -3134,13 +3024,15 @@ async fn pair_receiver(
     .await?
     .ok_or_else(|| AppError::BadRequest("That pairing code is not valid.".to_string()))?;
 
-    let receiver_credential = payload
-        .remember_device
-        .then(generate_refresh_token);
+    let receiver_credential = payload.remember_device.then(generate_refresh_token);
     let credential_hash = receiver_credential
         .as_ref()
         .map(|value| hash_receiver_token(value));
-    let name = payload.name.as_deref().map(str::trim).filter(|value| !value.is_empty());
+    let name = payload
+        .name
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
     let record = sqlx::query_as::<_, ReceiverDeviceRecord>(
         r#"
         UPDATE receiver_devices
@@ -3281,8 +3173,11 @@ async fn stream_receiver_events(
     State(state): State<AppState>,
     headers: HeaderMap,
     Query(query): Query<ReceiverEventsQuery>,
-) -> Result<Sse<impl futures_util::Stream<Item = Result<Event, std::convert::Infallible>>>, AppError> {
-    let receiver = require_receiver_auth_with_optional_query_token(&state, &headers, query.session_token).await?;
+) -> Result<Sse<impl futures_util::Stream<Item = Result<Event, std::convert::Infallible>>>, AppError>
+{
+    let receiver =
+        require_receiver_auth_with_optional_query_token(&state, &headers, query.session_token)
+            .await?;
     let sender = receiver_sender(&state, receiver.receiver_device_id);
     let stream = BroadcastStream::new(sender.subscribe()).filter_map(|message| match message {
         Ok(payload) => {
@@ -3363,345 +3258,20 @@ async fn acknowledge_receiver_command(
     Ok(StatusCode::NO_CONTENT)
 }
 
-async fn list_remote_devices(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> ApiResult<Vec<PlaybackDeviceResponse>> {
-    let auth = require_auth(&state, &headers).await?;
-    let devices = sqlx::query_as::<_, PlaybackDeviceRecord>(
-        r#"
-        SELECT
-          id,
-          user_id,
-          session_id,
-          device_key,
-          device_name,
-          platform,
-          form_factor_hint,
-          remote_target_enabled,
-          current_playback_title,
-          current_playback_kind,
-          current_playback_live,
-          current_playback_catchup,
-          current_playback_updated_at,
-          current_controller_session_id,
-          last_seen_at,
-          created_at,
-          updated_at
-        FROM playback_devices
-        WHERE user_id = $1 AND remote_target_enabled = TRUE
-        ORDER BY updated_at DESC
-        "#,
-    )
-    .bind(auth.user_id)
-    .fetch_all(&state.pool)
-    .await?;
-
-    let items = devices
-        .into_iter()
-        .filter(|device| is_playback_device_online(&state, device))
-        .map(|device| playback_device_response(&state, &auth, &device))
-        .collect();
-
-    Ok(Json(items))
-}
-
-async fn register_playback_device(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(payload): Json<PlaybackDeviceRegistrationPayload>,
-) -> ApiResult<PlaybackDeviceResponse> {
-    let auth = require_auth(&state, &headers).await?;
-    let device_key = payload.device_key.trim();
-    let device_name = payload.name.trim();
-    let platform = payload.platform.trim();
-
-    if device_key.is_empty() || device_name.is_empty() || platform.is_empty() {
-        return Err(AppError::BadRequest(
-            "Device key, name, and platform are required.".to_string(),
-        ));
-    }
-
-    let record = sqlx::query_as::<_, PlaybackDeviceRecord>(
-        r#"
-        INSERT INTO playback_devices (
-          user_id,
-          session_id,
-          device_key,
-          device_name,
-          platform,
-          form_factor_hint,
-          remote_target_enabled,
-          last_seen_at,
-          updated_at
-        )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW())
-        ON CONFLICT (user_id, device_key)
-        DO UPDATE SET
-          session_id = EXCLUDED.session_id,
-          device_name = EXCLUDED.device_name,
-          platform = EXCLUDED.platform,
-          form_factor_hint = EXCLUDED.form_factor_hint,
-          remote_target_enabled = EXCLUDED.remote_target_enabled,
-          last_seen_at = NOW(),
-          updated_at = NOW()
-        RETURNING
-          id,
-          user_id,
-          session_id,
-          device_key,
-          device_name,
-          platform,
-          form_factor_hint,
-          remote_target_enabled,
-          current_playback_title,
-          current_playback_kind,
-          current_playback_live,
-          current_playback_catchup,
-          current_playback_updated_at,
-          current_controller_session_id,
-          last_seen_at,
-          created_at,
-          updated_at
-        "#,
-    )
-    .bind(auth.user_id)
-    .bind(auth.session_id)
-    .bind(device_key)
-    .bind(device_name)
-    .bind(platform)
-    .bind(payload.form_factor_hint)
-    .bind(payload.remote_target_enabled)
-    .fetch_one(&state.pool)
-    .await?;
-
-    if !record.remote_target_enabled {
-        sqlx::query("DELETE FROM remote_playback_sessions WHERE target_device_id = $1")
-            .bind(record.id)
-            .execute(&state.pool)
-            .await?;
-        sqlx::query(
-            r#"
-            UPDATE playback_devices
-            SET current_controller_session_id = NULL, updated_at = NOW()
-            WHERE id = $1
-            "#,
-        )
-        .bind(record.id)
-        .execute(&state.pool)
-        .await?;
-    }
-
-    Ok(Json(playback_device_response(&state, &auth, &record)))
-}
-
-async fn heartbeat_playback_device(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path(id): Path<Uuid>,
-) -> Result<StatusCode, AppError> {
-    let auth = require_auth(&state, &headers).await?;
-    let updated = sqlx::query(
-        r#"
-        UPDATE playback_devices
-        SET last_seen_at = NOW(), updated_at = NOW()
-        WHERE id = $1 AND user_id = $2 AND session_id = $3
-        "#,
-    )
-    .bind(id)
-    .bind(auth.user_id)
-    .bind(auth.session_id)
-    .execute(&state.pool)
-    .await?
-    .rows_affected();
-
-    if updated == 0 {
-        return Err(AppError::NotFound("Playback device not found".to_string()));
-    }
-
-    Ok(StatusCode::NO_CONTENT)
-}
-
-async fn stream_playback_device_events(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path(id): Path<Uuid>,
-    Query(query): Query<RemoteEventsQuery>,
-) -> Result<Sse<impl futures_util::Stream<Item = Result<Event, std::convert::Infallible>>>, AppError>
-{
-    let auth = require_auth_with_optional_query_token(&state, &headers, query.access_token).await?;
-    let device = sqlx::query_as::<_, PlaybackDeviceRecord>(
-        r#"
-        SELECT
-          id,
-          user_id,
-          session_id,
-          device_key,
-          device_name,
-          platform,
-          form_factor_hint,
-          remote_target_enabled,
-          current_playback_title,
-          current_playback_kind,
-          current_playback_live,
-          current_playback_catchup,
-          current_playback_updated_at,
-          current_controller_session_id,
-          last_seen_at,
-          created_at,
-          updated_at
-        FROM playback_devices
-        WHERE id = $1 AND user_id = $2 AND session_id = $3
-        "#,
-    )
-    .bind(id)
-    .bind(auth.user_id)
-    .bind(auth.session_id)
-    .fetch_optional(&state.pool)
-    .await?
-    .ok_or_else(|| AppError::NotFound("Playback device not found".to_string()))?;
-
-    if !device.remote_target_enabled {
-        return Err(AppError::BadRequest(
-            "Remote playback target is disabled for this device.".to_string(),
-        ));
-    }
-
-    let sender = remote_device_sender(&state, id);
-    let stream = BroadcastStream::new(sender.subscribe()).filter_map(|message| match message {
-        Ok(payload) => {
-            let event = Event::default()
-                .event(payload.event_type.clone())
-                .json_data(payload)
-                .expect("remote event should serialize");
-            Some(Ok(event))
-        }
-        Err(_) => None,
-    });
-
-    Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
-}
-
-async fn update_playback_device_state(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path(id): Path<Uuid>,
-    Json(payload): Json<PlaybackDevicePlaybackStatePayload>,
-) -> Result<StatusCode, AppError> {
-    let auth = require_auth(&state, &headers).await?;
-    let updated = if payload.title.is_none() {
-        sqlx::query(
-            r#"
-            UPDATE playback_devices
-            SET
-              current_playback_title = NULL,
-              current_playback_kind = NULL,
-              current_playback_live = NULL,
-              current_playback_catchup = NULL,
-              current_playback_updated_at = NULL,
-              last_seen_at = NOW(),
-              updated_at = NOW()
-            WHERE id = $1 AND user_id = $2 AND session_id = $3
-            "#,
-        )
-        .bind(id)
-        .bind(auth.user_id)
-        .bind(auth.session_id)
-        .execute(&state.pool)
-        .await?
-        .rows_affected()
-    } else {
-        sqlx::query(
-            r#"
-            UPDATE playback_devices
-            SET
-              current_playback_title = $4,
-              current_playback_kind = $5,
-              current_playback_live = $6,
-              current_playback_catchup = $7,
-              current_playback_updated_at = NOW(),
-              last_seen_at = NOW(),
-              updated_at = NOW()
-            WHERE id = $1 AND user_id = $2 AND session_id = $3
-            "#,
-        )
-        .bind(id)
-        .bind(auth.user_id)
-        .bind(auth.session_id)
-        .bind(payload.title)
-        .bind(payload.source_kind)
-        .bind(payload.live)
-        .bind(payload.catchup)
-        .execute(&state.pool)
-        .await?
-        .rows_affected()
-    };
-
-    if updated == 0 {
-        return Err(AppError::NotFound("Playback device not found".to_string()));
-    }
-
-    Ok(StatusCode::NO_CONTENT)
-}
-
-async fn acknowledge_remote_command(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path((id, command_id)): Path<(Uuid, Uuid)>,
-    Json(payload): Json<RemoteCommandAckPayload>,
-) -> Result<StatusCode, AppError> {
-    let auth = require_auth(&state, &headers).await?;
-    let status = payload.status.as_str();
-    if !matches!(status, "delivered" | "acknowledged" | "failed") {
-        return Err(AppError::BadRequest(
-            "Invalid remote command acknowledgement status.".to_string(),
-        ));
-    }
-
-    let updated = sqlx::query(
-        r#"
-        UPDATE remote_playback_commands
-        SET
-          status = $4,
-          error_message = $5,
-          delivered_at = CASE WHEN $4 = 'delivered' THEN NOW() ELSE delivered_at END,
-          acknowledged_at = CASE WHEN $4 = 'acknowledged' THEN NOW() ELSE acknowledged_at END,
-          failed_at = CASE WHEN $4 = 'failed' THEN NOW() ELSE failed_at END
-        WHERE id = $1
-          AND target_device_id = $2
-          AND EXISTS (
-            SELECT 1
-            FROM playback_devices d
-            WHERE d.id = $2 AND d.user_id = $3 AND d.session_id = $6
-          )
-        "#,
-    )
-    .bind(command_id)
-    .bind(id)
-    .bind(auth.user_id)
-    .bind(status)
-    .bind(payload.error_message)
-    .bind(auth.session_id)
-    .execute(&state.pool)
-    .await?
-    .rows_affected();
-
-    if updated == 0 {
-        return Err(AppError::NotFound("Remote command not found".to_string()));
-    }
-
-    Ok(StatusCode::NO_CONTENT)
-}
-
 async fn get_remote_controller_target(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> ApiResult<Option<RemoteControllerTargetResponse>> {
     let auth = require_auth(&state, &headers).await?;
-    let target = load_receiver_controller_target_record(&state.pool, auth.user_id, auth.session_id).await?;
+    let target =
+        load_receiver_controller_target_record(&state.pool, auth.user_id, auth.session_id).await?;
 
     Ok(Json(target.map(|record| RemoteControllerTargetResponse {
-        device: receiver_device_response(&state, Some(&auth), &receiver_device_record_from_target(record.clone())),
+        device: receiver_device_response(
+            &state,
+            Some(&auth),
+            &receiver_device_record_from_target(record.clone()),
+        ),
         selected_at: record.selected_at,
     })))
 }
@@ -3714,11 +3284,11 @@ async fn select_remote_controller_target(
     let auth = require_auth(&state, &headers).await?;
     let device = load_receiver_device(&state.pool, payload.device_id)
         .await?
-        .ok_or_else(|| AppError::NotFound("Playback device not found".to_string()))?;
+        .ok_or_else(|| AppError::NotFound("Receiver not found".to_string()))?;
 
     if device.owner_user_id != Some(auth.user_id) || !is_receiver_online(&state, &device) {
         return Err(AppError::BadRequest(
-            "That playback target is not currently available.".to_string(),
+            "That receiver is not currently available.".to_string(),
         ));
     }
 
@@ -3742,12 +3312,17 @@ async fn select_remote_controller_target(
     .execute(&state.pool)
     .await?;
 
-    let selected = load_receiver_controller_target_record(&state.pool, auth.user_id, auth.session_id)
-        .await?
-        .ok_or_else(|| AppError::NotFound("Remote controller target not found".to_string()))?;
+    let selected =
+        load_receiver_controller_target_record(&state.pool, auth.user_id, auth.session_id)
+            .await?
+            .ok_or_else(|| AppError::NotFound("Remote controller target not found".to_string()))?;
 
     Ok(Json(RemoteControllerTargetResponse {
-        device: receiver_device_response(&state, Some(&auth), &receiver_device_record_from_target(selected.clone())),
+        device: receiver_device_response(
+            &state,
+            Some(&auth),
+            &receiver_device_record_from_target(selected.clone()),
+        ),
         selected_at: selected.selected_at,
     }))
 }
@@ -3774,7 +3349,8 @@ async fn play_channel_remotely(
 ) -> ApiResult<RemotePlaybackCommandResponse> {
     let auth = require_auth(&state, &headers).await?;
     let target = current_remote_target_for_control(&state, &auth).await?;
-    let source = resolve_channel_playback_source_for_receiver(&state, &headers, auth.user_id, id).await?;
+    let source =
+        resolve_channel_playback_source_for_receiver(&state, &headers, auth.user_id, id).await?;
 
     Ok(Json(
         deliver_remote_playback_command(&state, &auth, &target, source).await?,
@@ -3788,7 +3364,8 @@ async fn play_program_remotely(
 ) -> ApiResult<RemotePlaybackCommandResponse> {
     let auth = require_auth(&state, &headers).await?;
     let target = current_remote_target_for_control(&state, &auth).await?;
-    let source = resolve_program_playback_source_for_receiver(&state, &headers, auth.user_id, id).await?;
+    let source =
+        resolve_program_playback_source_for_receiver(&state, &headers, auth.user_id, id).await?;
 
     Ok(Json(
         deliver_remote_playback_command(&state, &auth, &target, source).await?,
@@ -3825,7 +3402,14 @@ async fn seek_remote_playback(
     let auth = require_auth(&state, &headers).await?;
     let target = current_remote_target_for_control(&state, &auth).await?;
     Ok(Json(
-        deliver_receiver_transport_command(&state, &auth, &target, "seek", payload.position_seconds).await?,
+        deliver_receiver_transport_command(
+            &state,
+            &auth,
+            &target,
+            "seek",
+            payload.position_seconds,
+        )
+        .await?,
     ))
 }
 
@@ -4668,7 +4252,9 @@ async fn resolve_program_playback_source_for_receiver(
                 None,
             )
         }
-        ProgramPlaybackBehavior::Unsupported(reason) => Ok(unsupported_playback(&row.title, reason)),
+        ProgramPlaybackBehavior::Unsupported(reason) => {
+            Ok(unsupported_playback(&row.title, reason))
+        }
     }
 }
 
@@ -5022,35 +4608,12 @@ fn playback_credentials(
     })
 }
 
-fn remote_device_sender(
-    state: &AppState,
-    device_id: Uuid,
-) -> broadcast::Sender<RemoteDeviceEventPayload> {
-    state
-        .remote_device_channels
-        .entry(device_id)
-        .or_insert_with(|| broadcast::channel(REMOTE_DEVICE_CHANNEL_CAPACITY).0)
-        .clone()
-}
-
 fn receiver_sender(state: &AppState, device_id: Uuid) -> broadcast::Sender<ReceiverEventPayload> {
     state
         .receiver_channels
         .entry(device_id)
         .or_insert_with(|| broadcast::channel(RECEIVER_CHANNEL_CAPACITY).0)
         .clone()
-}
-
-fn is_playback_device_online(state: &AppState, device: &PlaybackDeviceRecord) -> bool {
-    let ttl = ChronoDuration::from_std(REMOTE_DEVICE_TTL).expect("remote device ttl");
-    let fresh = device.last_seen_at + ttl > Utc::now();
-    let connected = state
-        .remote_device_channels
-        .get(&device.id)
-        .map(|sender| sender.receiver_count() > 0)
-        .unwrap_or(false);
-
-    fresh && connected
 }
 
 fn is_receiver_online(state: &AppState, device: &ReceiverDeviceRecord) -> bool {
@@ -5067,75 +4630,6 @@ fn is_receiver_online(state: &AppState, device: &ReceiverDeviceRecord) -> bool {
         .unwrap_or(false);
 
     fresh && connected
-}
-
-fn playback_device_response(
-    state: &AppState,
-    auth: &AuthContext,
-    record: &PlaybackDeviceRecord,
-) -> PlaybackDeviceResponse {
-    PlaybackDeviceResponse {
-        id: record.id,
-        device_key: record.device_key.clone(),
-        name: record.device_name.clone(),
-        platform: record.platform.clone(),
-        form_factor_hint: record.form_factor_hint.clone(),
-        remote_target_enabled: record.remote_target_enabled,
-        online: is_playback_device_online(state, record),
-        controllable: record.remote_target_enabled && is_playback_device_online(state, record),
-        current_controller: record.current_controller_session_id == Some(auth.session_id),
-        current: record.session_id == auth.session_id,
-        last_seen_at: record.last_seen_at,
-        updated_at: record.updated_at,
-        current_playback: record.current_playback_title.as_ref().map(|title| {
-            PlaybackDeviceCurrentPlaybackResponse {
-                title: title.clone(),
-                source_kind: record
-                    .current_playback_kind
-                    .clone()
-                    .unwrap_or_else(|| "unsupported".to_string()),
-                live: record.current_playback_live.unwrap_or(false),
-                catchup: record.current_playback_catchup.unwrap_or(false),
-                updated_at: record.current_playback_updated_at.unwrap_or(record.updated_at),
-            }
-        }),
-    }
-}
-
-async fn load_playback_device(
-    pool: &PgPool,
-    user_id: Uuid,
-    device_id: Uuid,
-) -> Result<Option<PlaybackDeviceRecord>, AppError> {
-    sqlx::query_as::<_, PlaybackDeviceRecord>(
-        r#"
-        SELECT
-          id,
-          user_id,
-          session_id,
-          device_key,
-          device_name,
-          platform,
-          form_factor_hint,
-          remote_target_enabled,
-          current_playback_title,
-          current_playback_kind,
-          current_playback_live,
-          current_playback_catchup,
-          current_playback_updated_at,
-          current_controller_session_id,
-          last_seen_at,
-          created_at,
-          updated_at
-        FROM playback_devices
-        WHERE user_id = $1 AND id = $2
-        "#,
-    )
-    .bind(user_id)
-    .bind(device_id)
-    .fetch_optional(pool)
-    .await
-    .map_err(AppError::from)
 }
 
 async fn load_receiver_device(
@@ -5203,7 +4697,9 @@ async fn load_receiver_controller_target_record(
     .map_err(AppError::from)
 }
 
-fn receiver_device_record_from_target(record: ReceiverControllerTargetRecord) -> ReceiverDeviceRecord {
+fn receiver_device_record_from_target(
+    record: ReceiverControllerTargetRecord,
+) -> ReceiverDeviceRecord {
     ReceiverDeviceRecord {
         id: record.id,
         owner_user_id: record.owner_user_id,
@@ -5246,18 +4742,22 @@ fn receiver_device_response(
         current_controller: false,
         last_seen_at: record.last_seen_at,
         updated_at: record.updated_at,
-        current_playback: record.current_playback_title.as_ref().map(|title| ReceiverPlaybackStateResponse {
-            title: title.clone(),
-            source_kind: record
-                .current_playback_kind
-                .clone()
-                .unwrap_or_else(|| "unsupported".to_string()),
-            live: record.current_playback_live.unwrap_or(false),
-            catchup: record.current_playback_catchup.unwrap_or(false),
-            updated_at: record.current_playback_updated_at.unwrap_or(record.updated_at),
-            paused: record.current_playback_paused.unwrap_or(false),
-            position_seconds: record.current_playback_position_seconds,
-            duration_seconds: record.current_playback_duration_seconds,
+        current_playback: record.current_playback_title.as_ref().map(|title| {
+            ReceiverPlaybackStateResponse {
+                title: title.clone(),
+                source_kind: record
+                    .current_playback_kind
+                    .clone()
+                    .unwrap_or_else(|| "unsupported".to_string()),
+                live: record.current_playback_live.unwrap_or(false),
+                catchup: record.current_playback_catchup.unwrap_or(false),
+                updated_at: record
+                    .current_playback_updated_at
+                    .unwrap_or(record.updated_at),
+                paused: record.current_playback_paused.unwrap_or(false),
+                position_seconds: record.current_playback_position_seconds,
+                duration_seconds: record.current_playback_duration_seconds,
+            }
         }),
     }
 }
@@ -5268,11 +4768,11 @@ async fn current_remote_target_for_control(
 ) -> Result<ReceiverDeviceRecord, AppError> {
     let record = load_receiver_controller_target_record(&state.pool, auth.user_id, auth.session_id)
         .await?
-        .ok_or_else(|| AppError::BadRequest("Select a playback target first.".to_string()))?;
+        .ok_or_else(|| AppError::BadRequest("Select a receiver first.".to_string()))?;
     let device = receiver_device_record_from_target(record);
     if device.owner_user_id != Some(auth.user_id) || !is_receiver_online(state, &device) {
         return Err(AppError::BadRequest(
-            "The selected playback target is not currently available.".to_string(),
+            "The selected receiver is not currently available.".to_string(),
         ));
     }
 
@@ -5331,7 +4831,7 @@ async fn deliver_remote_playback_command(
         .await?;
 
         return Err(AppError::BadRequest(
-            "The selected playback target is not currently connected.".to_string(),
+            "The selected receiver is not currently connected.".to_string(),
         ));
     }
 
@@ -5348,18 +4848,6 @@ async fn deliver_remote_playback_command(
     .fetch_one(&state.pool)
     .await
     .map_err(AppError::from)
-}
-
-async fn require_auth_with_optional_query_token(
-    state: &AppState,
-    headers: &HeaderMap,
-    access_token: Option<String>,
-) -> Result<AuthContext, AppError> {
-    if let Some(token) = access_token.filter(|token| !token.is_empty()) {
-        return auth_context_from_access_token(state, &token).await;
-    }
-
-    require_auth(state, headers).await
 }
 
 async fn require_receiver_auth_with_optional_query_token(
@@ -5852,7 +5340,7 @@ async fn deliver_receiver_transport_command(
     };
     if receiver_sender(state, target.id).send(event).is_err() {
         return Err(AppError::BadRequest(
-            "The selected playback target is not currently connected.".to_string(),
+            "The selected receiver is not currently connected.".to_string(),
         ));
     }
 
@@ -8168,86 +7656,6 @@ mod tests {
         assert_eq!(statuses[0].last_program_count, Some(1));
     }
 
-    #[tokio::test]
-    async fn playback_device_is_online_only_when_recent_and_connected() {
-        let state = sample_app_state();
-        let device = PlaybackDeviceRecord {
-            id: Uuid::from_u128(31),
-            user_id: Uuid::from_u128(32),
-            session_id: Uuid::from_u128(33),
-            device_key: "device-key".to_string(),
-            device_name: "Living room TV".to_string(),
-            platform: "web".to_string(),
-            form_factor_hint: Some("large-screen".to_string()),
-            remote_target_enabled: true,
-            current_playback_title: None,
-            current_playback_kind: None,
-            current_playback_live: None,
-            current_playback_catchup: None,
-            current_playback_updated_at: None,
-            current_controller_session_id: None,
-            last_seen_at: Utc::now(),
-            created_at: Utc::now(),
-            updated_at: Utc::now(),
-        };
-        let (sender, _receiver) = broadcast::channel(4);
-        state.remote_device_channels.insert(device.id, sender);
-
-        assert!(is_playback_device_online(&state, &device));
-
-        let stale = PlaybackDeviceRecord {
-            last_seen_at: Utc::now() - ChronoDuration::minutes(5),
-            ..device
-        };
-        assert!(!is_playback_device_online(&state, &stale));
-    }
-
-    #[tokio::test]
-    async fn playback_device_response_marks_current_controller_session() {
-        let state = sample_app_state();
-        let device = PlaybackDeviceRecord {
-            id: Uuid::from_u128(41),
-            user_id: Uuid::from_u128(42),
-            session_id: Uuid::from_u128(43),
-            device_key: "device-key".to_string(),
-            device_name: "Living room TV".to_string(),
-            platform: "web".to_string(),
-            form_factor_hint: Some("large-screen".to_string()),
-            remote_target_enabled: true,
-            current_playback_title: Some("Arena 1".to_string()),
-            current_playback_kind: Some("hls".to_string()),
-            current_playback_live: Some(true),
-            current_playback_catchup: Some(false),
-            current_playback_updated_at: Some(Utc::now()),
-            current_controller_session_id: Some(Uuid::from_u128(44)),
-            last_seen_at: Utc::now(),
-            created_at: Utc::now(),
-            updated_at: Utc::now(),
-        };
-        let (sender, _receiver) = broadcast::channel(4);
-        state.remote_device_channels.insert(device.id, sender);
-
-        let response = playback_device_response(
-            &state,
-            &AuthContext {
-                user_id: Uuid::from_u128(42),
-                session_id: Uuid::from_u128(44),
-            },
-            &device,
-        );
-
-        assert!(response.online);
-        assert!(response.controllable);
-        assert!(response.current_controller);
-        assert_eq!(
-            response
-                .current_playback
-                .as_ref()
-                .map(|playback| playback.title.as_str()),
-            Some("Arena 1")
-        );
-    }
-
     fn sample_program_playback_row(
         start_at: DateTime<Utc>,
         end_at: DateTime<Utc>,
@@ -8309,7 +7717,6 @@ mod tests {
             http_client: reqwest::Client::new(),
             meili: None,
             session_cache: Arc::new(DashMap::new()),
-            remote_device_channels: Arc::new(DashMap::new()),
             receiver_channels: Arc::new(DashMap::new()),
         }
     }

@@ -1,5 +1,21 @@
-import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, ChevronDown, ChevronRight, Heart, Play, Radio, RefreshCcw, Search as SearchIcon, SlidersHorizontal, X } from "lucide-react";
+import {
+  useInfiniteQuery,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
+import {
+  Check,
+  ChevronDown,
+  ChevronRight,
+  Heart,
+  Play,
+  Radio,
+  RefreshCcw,
+  Search as SearchIcon,
+  SlidersHorizontal,
+  X,
+} from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import type { KeyboardEvent } from "react";
 import type { GuideCategorySummary, GuidePreferences } from "@euripus/shared";
@@ -8,8 +24,17 @@ import { ChannelAvatar } from "@/components/ui/channel-avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { Empty, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
+import {
+  Empty,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty";
 import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -17,9 +42,18 @@ import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useChannelFavoriteMutation } from "@/hooks/use-channel-favorite";
 import { useChannelPlaybackMutation } from "@/hooks/use-playback-actions";
-import { useTvAutoFocus } from "@/hooks/use-tv-auto-focus";
-import { getGuide, getGuideCategory, getGuidePreferences, saveGuidePreferences } from "@/lib/api";
-import { cn, formatArchiveDuration, formatTimeRange, getTimeProgress } from "@/lib/utils";
+import {
+  getGuide,
+  getGuideCategory,
+  getGuidePreferences,
+  saveGuidePreferences,
+} from "@/lib/api";
+import {
+  cn,
+  formatArchiveDuration,
+  formatTimeRange,
+  getTimeProgress,
+} from "@/lib/utils";
 
 const GUIDE_PAGE_SIZE = 40;
 
@@ -74,17 +108,28 @@ export function GuidePage() {
     mutationFn: saveGuidePreferences,
     onMutate: async (nextPreferences) => {
       await queryClient.cancelQueries({ queryKey: ["guide", "preferences"] });
-      const previousPreferences = queryClient.getQueryData<GuidePreferences>(["guide", "preferences"]);
-      queryClient.setQueryData<GuidePreferences>(["guide", "preferences"], nextPreferences);
+      const previousPreferences = queryClient.getQueryData<GuidePreferences>([
+        "guide",
+        "preferences",
+      ]);
+      queryClient.setQueryData<GuidePreferences>(
+        ["guide", "preferences"],
+        nextPreferences,
+      );
       return { previousPreferences };
     },
     onError: (_error, _variables, context) => {
       if (context?.previousPreferences) {
-        queryClient.setQueryData(["guide", "preferences"], context.previousPreferences);
+        queryClient.setQueryData(
+          ["guide", "preferences"],
+          context.previousPreferences,
+        );
       }
     },
     onSettled: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["guide", "preferences"] });
+      await queryClient.invalidateQueries({
+        queryKey: ["guide", "preferences"],
+      });
     },
   });
   const favoriteMutation = useChannelFavoriteMutation();
@@ -92,7 +137,9 @@ export function GuidePage() {
 
   function toggleCategory(categoryId: string, nextOpen: boolean) {
     setOpenCategories((current) =>
-      nextOpen ? [...new Set([...current, categoryId])] : current.filter((id) => id !== categoryId),
+      nextOpen
+        ? [...new Set([...current, categoryId])]
+        : current.filter((id) => id !== categoryId),
     );
   }
 
@@ -101,14 +148,26 @@ export function GuidePage() {
   }
 
   const categories = guideQuery.data?.categories ?? [];
-  const liveCount = categories.reduce((sum, category) => sum + category.liveNowCount, 0);
-  const availableCategoryIds = useMemo(() => new Set(categories.map((category) => category.id)), [categories]);
+  const liveCount = categories.reduce(
+    (sum, category) => sum + category.liveNowCount,
+    0,
+  );
+  const availableCategoryIds = useMemo(
+    () => new Set(categories.map((category) => category.id)),
+    [categories],
+  );
   const savedCategoryIds = preferencesQuery.data?.includedCategoryIds ?? [];
   const validSelectedCategoryIds = useMemo(
-    () => savedCategoryIds.filter((categoryId) => availableCategoryIds.has(categoryId)),
+    () =>
+      savedCategoryIds.filter((categoryId) =>
+        availableCategoryIds.has(categoryId),
+      ),
     [availableCategoryIds, savedCategoryIds],
   );
-  const selectedCategoryIdsSet = useMemo(() => new Set(validSelectedCategoryIds), [validSelectedCategoryIds]);
+  const selectedCategoryIdsSet = useMemo(
+    () => new Set(validSelectedCategoryIds),
+    [validSelectedCategoryIds],
+  );
   const normalizedAppliedFilter = appliedFilter.trim().toLowerCase();
   const shouldApplyFilter = normalizedAppliedFilter.length >= 2;
   const chooserCategories = useMemo(() => {
@@ -116,34 +175,42 @@ export function GuidePage() {
       return categories;
     }
 
-    return categories.filter((category) => category.name.toLowerCase().includes(normalizedAppliedFilter));
+    return categories.filter((category) =>
+      category.name.toLowerCase().includes(normalizedAppliedFilter),
+    );
   }, [categories, normalizedAppliedFilter, shouldApplyFilter]);
   const selectedCategories = useMemo(() => {
     if (!validSelectedCategoryIds.length) {
       return categories;
     }
 
-    return categories.filter((category) => selectedCategoryIdsSet.has(category.id));
+    return categories.filter((category) =>
+      selectedCategoryIdsSet.has(category.id),
+    );
   }, [categories, selectedCategoryIdsSet, validSelectedCategoryIds.length]);
   const visibleCategories = useMemo(() => {
     if (!shouldApplyFilter) {
       return selectedCategories;
     }
 
-    return selectedCategories.filter((category) => category.name.toLowerCase().includes(normalizedAppliedFilter));
+    return selectedCategories.filter((category) =>
+      category.name.toLowerCase().includes(normalizedAppliedFilter),
+    );
   }, [normalizedAppliedFilter, selectedCategories, shouldApplyFilter]);
-  useTvAutoFocus(
-    visibleCategories.length ? "[data-guide-category-filter='true']" : "[data-guide-category-toggle='true']",
-    [visibleCategories.length, openCategories.join("|")],
-  );
 
   useEffect(() => {
-    if (!preferencesQuery.data || !categories.length || savePreferencesMutation.isPending) {
+    if (
+      !preferencesQuery.data ||
+      !categories.length ||
+      savePreferencesMutation.isPending
+    ) {
       return;
     }
 
     if (!areCategoryIdsEqual(savedCategoryIds, validSelectedCategoryIds)) {
-      savePreferencesMutation.mutate({ includedCategoryIds: validSelectedCategoryIds });
+      savePreferencesMutation.mutate({
+        includedCategoryIds: validSelectedCategoryIds,
+      });
     }
   }, [
     categories.length,
@@ -165,7 +232,9 @@ export function GuidePage() {
 
   function toggleIncludedCategory(categoryId: string) {
     if (selectedCategoryIdsSet.has(categoryId)) {
-      updateIncludedCategoryIds(validSelectedCategoryIds.filter((id) => id !== categoryId));
+      updateIncludedCategoryIds(
+        validSelectedCategoryIds.filter((id) => id !== categoryId),
+      );
       return;
     }
 
@@ -216,7 +285,10 @@ export function GuidePage() {
         <Card className="rounded-none border-0 bg-transparent shadow-none sm:rounded-xl sm:border sm:bg-card sm:shadow-sm">
           <CardContent className="flex flex-col gap-3 px-0 pt-0 pb-0 sm:p-5 sm:pt-5">
             {Array.from({ length: 5 }).map((_, index) => (
-              <div key={index} className="rounded-2xl border border-border/70 p-4 sm:p-5">
+              <div
+                key={index}
+                className="rounded-2xl border border-border/70 p-4 sm:p-5"
+              >
                 <Skeleton className="h-5 w-40" />
                 <Skeleton className="mt-3 h-4 w-24" />
               </div>
@@ -252,7 +324,9 @@ export function GuidePage() {
                     open={openCategories.includes(category.id)}
                     favoritePending={favoriteMutation.isPending}
                     activeFavoriteChannelId={favoriteMutation.variables?.id}
-                    onToggle={(nextOpen) => toggleCategory(category.id, nextOpen)}
+                    onToggle={(nextOpen) =>
+                      toggleCategory(category.id, nextOpen)
+                    }
                     onFavorite={(channel) => favoriteMutation.mutate(channel)}
                     onPlay={(channelId) => playMutation.mutate(channelId)}
                   />
@@ -264,7 +338,11 @@ export function GuidePage() {
                   <EmptyMedia variant="icon">
                     <SlidersHorizontal aria-hidden="true" />
                   </EmptyMedia>
-                  <EmptyTitle>{shouldApplyFilter ? "No categories match this filter" : "No categories selected"}</EmptyTitle>
+                  <EmptyTitle>
+                    {shouldApplyFilter
+                      ? "No categories match this filter"
+                      : "No categories selected"}
+                  </EmptyTitle>
                 </EmptyHeader>
               </Empty>
             )}
@@ -288,7 +366,10 @@ function GuideCategoryFilterCard({
   onToggleCategory,
 }: GuideCategoryFilterCardProps) {
   const [open, setOpen] = useState(false);
-  const selectedCategoryIdSet = useMemo(() => new Set(selectedCategoryIds), [selectedCategoryIds]);
+  const selectedCategoryIdSet = useMemo(
+    () => new Set(selectedCategoryIds),
+    [selectedCategoryIds],
+  );
   const ToggleIcon = open ? ChevronDown : ChevronRight;
   const showAppliedFilter = appliedFilter.trim().length >= 2;
 
@@ -311,16 +392,29 @@ function GuideCategoryFilterCard({
                 <SlidersHorizontal aria-hidden="true" />
               </div>
               <div className="flex h-10 min-w-0 items-center">
-                <CardTitle className="min-w-0 leading-none">Included categories</CardTitle>
+                <CardTitle className="min-w-0 leading-none">
+                  Included categories
+                </CardTitle>
               </div>
             </div>
             <div className="flex flex-wrap items-center gap-2 sm:justify-self-end">
-              <Badge variant={selectedCategoryIds.length ? "accent" : "outline"}>
-                {selectedCategoryIds.length ? `${selectedCategoryIds.length} selected` : "All categories"}
+              <Badge
+                variant={selectedCategoryIds.length ? "accent" : "outline"}
+              >
+                {selectedCategoryIds.length
+                  ? `${selectedCategoryIds.length} selected`
+                  : "All categories"}
               </Badge>
-              {showAppliedFilter ? <Badge variant="outline">Filter: {appliedFilter.trim()}</Badge> : null}
+              {showAppliedFilter ? (
+                <Badge variant="outline">Filter: {appliedFilter.trim()}</Badge>
+              ) : null}
               {open ? (
-                <Button variant="ghost" size="sm" onClick={onReset} disabled={!selectedCategoryIds.length || saving}>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={onReset}
+                  disabled={!selectedCategoryIds.length || saving}
+                >
                   <X data-icon="inline-start" />
                   Show all
                 </Button>
@@ -338,7 +432,10 @@ function GuideCategoryFilterCard({
         <CollapsibleContent className="overflow-hidden data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down">
           <CardContent className="flex flex-col gap-4 px-0 pb-0 sm:p-5">
             <div className="relative">
-              <SearchIcon className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
+              <SearchIcon
+                className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground"
+                aria-hidden="true"
+              />
               <Input
                 className="pl-10"
                 placeholder="Filter categories"
@@ -363,38 +460,52 @@ function GuideCategoryFilterCard({
                       <button
                         key={category.id}
                         type="button"
-                        data-tv-focusable="true"
                         data-guide-category-filter="true"
-                        data-tv-autofocus={selected ? "true" : undefined}
                         aria-pressed={selected}
                         disabled={!preferencesReady || saving}
                         onClick={() => onToggleCategory(category.id)}
                         className={cn(
                           "flex items-center justify-between gap-3 rounded-xl px-3 py-3 text-left transition-colors",
-                          selected ? "bg-primary/10 text-foreground" : "text-muted-foreground hover:bg-accent hover:text-foreground",
+                          selected
+                            ? "bg-primary/10 text-foreground"
+                            : "text-muted-foreground hover:bg-accent hover:text-foreground",
                         )}
                       >
                         <div className="flex min-w-0 items-center gap-3">
                           <div
                             className={cn(
                               "flex size-6 shrink-0 items-center justify-center rounded-full border",
-                              selected ? "border-primary bg-primary text-primary-foreground" : "border-border bg-background",
+                              selected
+                                ? "border-primary bg-primary text-primary-foreground"
+                                : "border-border bg-background",
                             )}
                           >
-                            {selected ? <Check className="size-3.5" aria-hidden="true" /> : null}
+                            {selected ? (
+                              <Check className="size-3.5" aria-hidden="true" />
+                            ) : null}
                           </div>
-                          <span className="truncate font-medium">{category.name}</span>
+                          <span className="truncate font-medium">
+                            {category.name}
+                          </span>
                         </div>
                         <div className="flex shrink-0 flex-col items-end gap-1 sm:flex-row sm:items-center sm:gap-2">
-                          <Badge variant="outline">{category.channelCount}</Badge>
-                          <Badge variant={category.liveNowCount ? "live" : "outline"}>{category.liveNowCount}</Badge>
+                          <Badge variant="outline">
+                            {category.channelCount}
+                          </Badge>
+                          <Badge
+                            variant={category.liveNowCount ? "live" : "outline"}
+                          >
+                            {category.liveNowCount}
+                          </Badge>
                         </div>
                       </button>
                     );
                   })
                 ) : (
                   <div className="px-4 py-8 text-center text-sm text-muted-foreground">
-                    {showAppliedFilter ? "No matching categories" : "No categories"}
+                    {showAppliedFilter
+                      ? "No matching categories"
+                      : "No categories"}
                   </div>
                 )}
               </div>
@@ -417,12 +528,14 @@ function GuideCategorySection({
 }: GuideCategorySectionProps) {
   const categoryQuery = useInfiniteQuery({
     queryKey: ["guide", "category", category.id],
-    queryFn: ({ pageParam }) => getGuideCategory(category.id, pageParam, GUIDE_PAGE_SIZE),
+    queryFn: ({ pageParam }) =>
+      getGuideCategory(category.id, pageParam, GUIDE_PAGE_SIZE),
     initialPageParam: 0,
     getNextPageParam: (lastPage) => lastPage.nextOffset ?? undefined,
     enabled: open,
   });
-  const entries = categoryQuery.data?.pages.flatMap((page) => page.entries) ?? [];
+  const entries =
+    categoryQuery.data?.pages.flatMap((page) => page.entries) ?? [];
   const hasEntries = entries.length > 0;
   const isInitialLoading = open && categoryQuery.isLoading && !hasEntries;
   const Icon = open ? ChevronDown : ChevronRight;
@@ -433,10 +546,16 @@ function GuideCategorySection({
         <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
           <div className="flex min-w-0 flex-1 flex-col gap-3">
             <div className="flex min-w-0 flex-col gap-2">
-              <h2 className="min-w-0 text-lg font-semibold break-words">{category.name}</h2>
+              <h2 className="min-w-0 text-lg font-semibold break-words">
+                {category.name}
+              </h2>
               <div className="flex flex-wrap items-center gap-2">
-                <Badge variant="outline">{category.channelCount} channels</Badge>
-                <Badge variant={category.liveNowCount ? "live" : "outline"}>{category.liveNowCount} live now</Badge>
+                <Badge variant="outline">
+                  {category.channelCount} channels
+                </Badge>
+                <Badge variant={category.liveNowCount ? "live" : "outline"}>
+                  {category.liveNowCount} live now
+                </Badge>
               </div>
             </div>
           </div>
@@ -446,7 +565,6 @@ function GuideCategorySection({
               className="self-start"
               aria-expanded={open}
               data-guide-category-toggle="true"
-              data-tv-autofocus={open ? "true" : undefined}
             >
               <Icon data-icon="inline-start" />
               {open ? "Hide channels" : "Show channels"}
@@ -461,7 +579,10 @@ function GuideCategorySection({
           {isInitialLoading ? (
             <div className="flex flex-col gap-3 px-0 py-4 sm:p-5">
               {Array.from({ length: 3 }).map((_, index) => (
-                <div key={index} className="flex items-center gap-4 rounded-2xl border border-border/70 p-4">
+                <div
+                  key={index}
+                  className="flex items-center gap-4 rounded-2xl border border-border/70 p-4"
+                >
                   <Skeleton className="size-11 rounded-2xl" />
                   <div className="flex flex-1 flex-col gap-2">
                     <Skeleton className="h-5 w-40" />
@@ -472,39 +593,78 @@ function GuideCategorySection({
             </div>
           ) : null}
 
-          {categoryQuery.isError ? <div className="p-5 text-sm text-destructive">Unable to load this category right now.</div> : null}
+          {categoryQuery.isError ? (
+            <div className="p-5 text-sm text-destructive">
+              Unable to load this category right now.
+            </div>
+          ) : null}
 
           {hasEntries
             ? entries.map(({ channel, program }, index) => {
-                const programIsLive = program ? isProgramLive(program.startAt, program.endAt) : false;
+                const programIsLive = program
+                  ? isProgramLive(program.startAt, program.endAt)
+                  : false;
 
                 return (
                   <div key={channel.id}>
                     {index > 0 ? <Separator /> : null}
                     <div className="flex flex-col gap-4 p-4 sm:p-5 lg:flex-row lg:items-center lg:justify-between">
                       <div className="flex min-w-0 items-start gap-3 sm:gap-4">
-                        <ChannelAvatar name={channel.name} logoUrl={channel.logoUrl} className="shrink-0" />
+                        <ChannelAvatar
+                          name={channel.name}
+                          logoUrl={channel.logoUrl}
+                          className="shrink-0"
+                        />
                         <div className="flex min-w-0 flex-1 flex-col gap-3">
                           <div className="flex min-w-0 flex-col gap-2">
-                            <h3 className="min-w-0 text-base font-semibold break-words">{channel.name}</h3>
+                            <h3 className="min-w-0 text-base font-semibold break-words">
+                              {channel.name}
+                            </h3>
                             <div className="flex flex-wrap items-center gap-2">
-                              {channel.hasCatchup ? <Badge variant="live">Catch-up</Badge> : null}
-                              {channel.archiveDurationHours ? (
-                                <Badge variant="outline">{formatArchiveDuration(channel.archiveDurationHours)}</Badge>
+                              {channel.hasCatchup ? (
+                                <Badge variant="live">Catch-up</Badge>
                               ) : null}
-                              {program && programIsLive ? <Badge variant="accent">Live now</Badge> : null}
+                              {channel.archiveDurationHours ? (
+                                <Badge variant="outline">
+                                  {formatArchiveDuration(
+                                    channel.archiveDurationHours,
+                                  )}
+                                </Badge>
+                              ) : null}
+                              {program && programIsLive ? (
+                                <Badge variant="accent">Live now</Badge>
+                              ) : null}
                             </div>
                           </div>
 
                           <div className="flex min-w-0 flex-col gap-2">
-                            <p className="min-w-0 break-words text-sm font-medium">{program?.title ?? "No program"}</p>
+                            <p className="min-w-0 break-words text-sm font-medium">
+                              {program?.title ?? "No program"}
+                            </p>
                             {program ? (
                               <>
                                 <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-                                  <span>{formatTimeRange(program.startAt, program.endAt)}</span>
-                                  {program.canCatchup ? <Badge variant="outline">Catch-up window</Badge> : null}
+                                  <span>
+                                    {formatTimeRange(
+                                      program.startAt,
+                                      program.endAt,
+                                    )}
+                                  </span>
+                                  {program.canCatchup ? (
+                                    <Badge variant="outline">
+                                      Catch-up window
+                                    </Badge>
+                                  ) : null}
                                 </div>
-                                {programIsLive ? <Progress value={getTimeProgress(program.startAt, program.endAt)} className="h-2" /> : null}
+                                {programIsLive ? (
+                                  <Progress
+                                    value={getTimeProgress(
+                                      program.startAt,
+                                      program.endAt,
+                                    )}
+                                    className="h-2"
+                                  />
+                                ) : null}
                               </>
                             ) : null}
                           </div>
@@ -517,12 +677,19 @@ function GuideCategorySection({
                           size="sm"
                           className="w-full justify-center sm:w-auto"
                           onClick={() => onFavorite(channel)}
-                          disabled={favoritePending && activeFavoriteChannelId === channel.id}
+                          disabled={
+                            favoritePending &&
+                            activeFavoriteChannelId === channel.id
+                          }
                         >
                           <Heart data-icon="inline-start" />
                           {channel.isFavorite ? "Unfavorite" : "Favorite"}
                         </Button>
-                        <Button size="sm" className="w-full justify-center sm:w-auto" onClick={() => onPlay(channel.id)}>
+                        <Button
+                          size="sm"
+                          className="w-full justify-center sm:w-auto"
+                          onClick={() => onPlay(channel.id)}
+                        >
                           <Play data-icon="inline-start" />
                           Play
                         </Button>
@@ -542,13 +709,18 @@ function GuideCategorySection({
                   onClick={() => categoryQuery.fetchNextPage()}
                   disabled={categoryQuery.isFetchingNextPage}
                 >
-                  {categoryQuery.isFetchingNextPage ? "Loading more..." : "Load more"}
+                  {categoryQuery.isFetchingNextPage
+                    ? "Loading more..."
+                    : "Load more"}
                 </Button>
               </div>
             </>
           ) : null}
 
-          {!isInitialLoading && open && !hasEntries && !categoryQuery.isError ? (
+          {!isInitialLoading &&
+          open &&
+          !hasEntries &&
+          !categoryQuery.isError ? (
             <Empty className="border-0">
               <EmptyHeader>
                 <EmptyTitle>No channels available in this category</EmptyTitle>

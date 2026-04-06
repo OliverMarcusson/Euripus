@@ -29,5 +29,5 @@ That script will:
 
 ## Notes
 
-- Android TV navigation depends on the web app's `TV mode`; the wrapper does not provide a separate TV UI.
+- Android TV now launches directly into the `/receiver` experience so pairing is the supported TV flow.
 - Keep the launcher origin and package name aligned with the deployed app and Digital Asset Links file.

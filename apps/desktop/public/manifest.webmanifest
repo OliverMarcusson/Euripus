@@ -6,7 +6,7 @@
   "display": "standalone",
   "background_color": "#140B2B",
   "theme_color": "#8226d4",
-  "description": "Live TV, search, sync, and Android TV remote-friendly browsing.",
+  "description": "Live TV, search, sync, and paired receiver playback.",
   "icons": [
     {
       "src": "/icon-192.png",

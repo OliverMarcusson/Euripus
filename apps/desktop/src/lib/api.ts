@@ -10,14 +10,12 @@ import type {
   LoginPayload,
   PlaybackSource,
   Program,
+  ProgramSearchResults,
+  PairReceiverPayload,
   ProviderProfile,
   RecentChannel,
   RegisterPayload,
   SaveProviderPayload,
-  ProgramSearchResults,
-  PlaybackDevice,
-  PlaybackDeviceRegistration,
-  PairReceiverPayload,
   Session,
   ReceiverDevice,
   ReceiverPairingCode,
@@ -32,12 +30,18 @@ import type {
   User,
   ValidateProviderResponse,
 } from "@euripus/shared";
-import { clearRefreshToken, isTauriRuntime, loadRefreshToken, saveRefreshToken } from "@/lib/tauri";
+import {
+  clearRefreshToken,
+  isTauriRuntime,
+  loadRefreshToken,
+  saveRefreshToken,
+} from "@/lib/tauri";
 import { useAuthStore } from "@/store/auth-store";
 
 const DESKTOP_RUNTIME = isTauriRuntime();
 export const API_BASE_URL =
-  import.meta.env.VITE_API_BASE_URL ?? (DESKTOP_RUNTIME ? "http://127.0.0.1:8080" : "/api");
+  import.meta.env.VITE_API_BASE_URL ??
+  (DESKTOP_RUNTIME ? "http://127.0.0.1:8080" : "/api");
 const CSRF_COOKIE_NAME = "euripus.csrf";
 
 type RequestOptions = {
@@ -298,7 +302,9 @@ export function getGuideCategory(categoryId: string, offset = 0, limit = 40) {
     offset: offset.toString(),
     limit: limit.toString(),
   });
-  return request<GuideCategoryResponse>(`/guide/category/${encodeURIComponent(categoryId)}?${params.toString()}`);
+  return request<GuideCategoryResponse>(
+    `/guide/category/${encodeURIComponent(categoryId)}?${params.toString()}`,
+  );
 }
 
 export function searchChannels(query: string, offset = 0, limit = 30) {
@@ -336,15 +342,15 @@ export function getRecents() {
 }
 
 export function startChannelPlayback(channelId: string) {
-  return request<PlaybackSource>(`/playback/channel/${channelId}`, { method: "POST" });
+  return request<PlaybackSource>(`/playback/channel/${channelId}`, {
+    method: "POST",
+  });
 }
 
 export function startProgramPlayback(programId: string) {
-  return request<PlaybackSource>(`/playback/program/${programId}`, { method: "POST" });
-}
-
-export function getRemoteDevices() {
-  return request<PlaybackDevice[]>("/remote/devices");
+  return request<PlaybackSource>(`/playback/program/${programId}`, {
+    method: "POST",
+  });
 }
 
 export function getRemoteReceivers() {
@@ -361,39 +367,6 @@ export function pairReceiver(payload: PairReceiverPayload) {
 export function unpairReceiver(deviceId: string) {
   return request<void>(`/remote/receivers/${deviceId}`, {
     method: "DELETE",
-  });
-}
-
-export function registerPlaybackDevice(payload: PlaybackDeviceRegistration) {
-  return request<PlaybackDevice>("/remote/devices", {
-    method: "POST",
-    body: JSON.stringify(payload),
-  });
-}
-
-export function heartbeatPlaybackDevice(deviceId: string) {
-  return request<void>(`/remote/devices/${deviceId}/heartbeat`, { method: "POST" });
-}
-
-export function updateRemotePlaybackDeviceState(
-  deviceId: string,
-  payload: {
-    title: string | null;
-    sourceKind?: string | null;
-    live?: boolean | null;
-    catchup?: boolean | null;
-  },
-) {
-  return request<void>(`/remote/devices/${deviceId}/playback-state`, {
-    method: "POST",
-    body: JSON.stringify(payload),
-  });
-}
-
-export function acknowledgeRemoteCommand(deviceId: string, commandId: string, payload: RemoteCommandAck) {
-  return request<void>(`/remote/devices/${deviceId}/commands/${commandId}/ack`, {
-    method: "POST",
-    body: JSON.stringify(payload),
   });
 }
 
@@ -415,23 +388,33 @@ export function clearRemoteControllerTarget() {
 }
 
 export function startRemoteChannelPlayback(channelId: string) {
-  return request<RemotePlaybackCommand>(`/remote/play/channel/${channelId}`, { method: "POST" });
+  return request<RemotePlaybackCommand>(`/remote/play/channel/${channelId}`, {
+    method: "POST",
+  });
 }
 
 export function startRemoteProgramPlayback(programId: string) {
-  return request<RemotePlaybackCommand>(`/remote/play/program/${programId}`, { method: "POST" });
+  return request<RemotePlaybackCommand>(`/remote/play/program/${programId}`, {
+    method: "POST",
+  });
 }
 
 export function pauseRemotePlayback() {
-  return request<RemotePlaybackCommand>("/remote/command/pause", { method: "POST" });
+  return request<RemotePlaybackCommand>("/remote/command/pause", {
+    method: "POST",
+  });
 }
 
 export function resumeRemotePlayback() {
-  return request<RemotePlaybackCommand>("/remote/command/play", { method: "POST" });
+  return request<RemotePlaybackCommand>("/remote/command/play", {
+    method: "POST",
+  });
 }
 
 export function stopRemotePlayback() {
-  return request<RemotePlaybackCommand>("/remote/command/stop", { method: "POST" });
+  return request<RemotePlaybackCommand>("/remote/command/stop", {
+    method: "POST",
+  });
 }
 
 export function seekRemotePlayback(positionSeconds: number) {
@@ -454,7 +437,11 @@ export async function createReceiverSession(payload: ReceiverSessionPayload) {
   return (await response.json()) as ReceiverSession;
 }
 
-async function receiverRequest<T>(path: string, sessionToken: string, init: RequestInit = {}): Promise<T> {
+async function receiverRequest<T>(
+  path: string,
+  sessionToken: string,
+  init: RequestInit = {},
+): Promise<T> {
   const headers = new Headers(init.headers);
   withJsonHeaders(headers);
   headers.set("Authorization", `Bearer ${sessionToken}`);
@@ -478,23 +465,40 @@ async function receiverRequest<T>(path: string, sessionToken: string, init: Requ
 }
 
 export function issueReceiverPairingCode(sessionToken: string) {
-  return receiverRequest<ReceiverPairingCode>("/receiver/pairing-code", sessionToken, { method: "POST" });
+  return receiverRequest<ReceiverPairingCode>(
+    "/receiver/pairing-code",
+    sessionToken,
+    { method: "POST" },
+  );
 }
 
 export function heartbeatReceiver(sessionToken: string) {
-  return receiverRequest<void>("/receiver/heartbeat", sessionToken, { method: "POST" });
+  return receiverRequest<void>("/receiver/heartbeat", sessionToken, {
+    method: "POST",
+  });
 }
 
-export function updateReceiverPlaybackState(sessionToken: string, payload: ReceiverPlaybackStatePayload) {
+export function updateReceiverPlaybackState(
+  sessionToken: string,
+  payload: ReceiverPlaybackStatePayload,
+) {
   return receiverRequest<void>("/receiver/playback-state", sessionToken, {
     method: "POST",
     body: JSON.stringify(payload),
   });
 }
 
-export function acknowledgeReceiverCommand(sessionToken: string, commandId: string, payload: RemoteCommandAck) {
-  return receiverRequest<void>(`/receiver/commands/${commandId}/ack`, sessionToken, {
-    method: "POST",
-    body: JSON.stringify(payload),
-  });
+export function acknowledgeReceiverCommand(
+  sessionToken: string,
+  commandId: string,
+  payload: RemoteCommandAck,
+) {
+  return receiverRequest<void>(
+    `/receiver/commands/${commandId}/ack`,
+    sessionToken,
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+    },
+  );
 }

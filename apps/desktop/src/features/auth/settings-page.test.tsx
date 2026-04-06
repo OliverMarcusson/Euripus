@@ -6,17 +6,15 @@ import {
   getRecents,
   getRemoteReceivers,
   getServerNetworkStatus,
-  pairReceiver,
   getSyncStatus,
+  pairReceiver,
   saveProvider,
   startChannelPlayback,
   startRemoteChannelPlayback,
   triggerProviderSync,
   unpairReceiver,
 } from "@/lib/api";
-import { usePlaybackDeviceStore } from "@/store/playback-device-store";
 import { useThemeStore } from "@/store/theme-store";
-import { useTvModeStore } from "@/store/tv-mode-store";
 
 vi.mock("@/lib/api", () => ({
   addFavorite: vi.fn(),
@@ -137,15 +135,6 @@ describe("SettingsPage", () => {
       createdAt: "2026-04-05T10:00:00.000Z",
     });
     useThemeStore.getState().setPreference("system");
-    useTvModeStore.getState().setPreference("auto");
-    usePlaybackDeviceStore.setState({
-      activeDeviceId: null,
-      deviceKey: "device-1",
-      name: "Browser device",
-      remoteTargetEnabled: false,
-      platform: "web",
-      formFactorHint: "desktop",
-    });
   });
 
   it("updates the theme when a toggle is selected", async () => {
@@ -161,22 +150,18 @@ describe("SettingsPage", () => {
     expect(document.documentElement.dataset.theme).toBe("light");
   });
 
-  it("lets the user enable remote playback target mode locally", async () => {
+  it("does not render deprecated remote ui controls", async () => {
     render(
       <QueryClientProvider client={new QueryClient()}>
         <SettingsPage />
       </QueryClientProvider>,
     );
 
-    fireEvent.change(screen.getByLabelText(/device name/i), {
-      target: { value: "Living room TV" },
-    });
-    fireEvent.click(
-      screen.getByRole("button", { name: /use this device as a playback target/i }),
-    );
-
-    expect(usePlaybackDeviceStore.getState().name).toBe("Living room TV");
-    expect(usePlaybackDeviceStore.getState().remoteTargetEnabled).toBe(true);
+    expect(screen.queryByText(/remote-friendly ui/i)).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/remote playback target/i),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/device name/i)).not.toBeInTheDocument();
   });
 
   it("shows provider controls inside settings and removes the sessions card", async () => {
@@ -270,7 +255,9 @@ describe("SettingsPage", () => {
       </QueryClientProvider>,
     );
 
-    expect(await screen.findByDisplayValue("https://provider.example.com")).toBeInTheDocument();
+    expect(
+      await screen.findByDisplayValue("https://provider.example.com"),
+    ).toBeInTheDocument();
     fireEvent.click(await screen.findByRole("button", { name: /add source/i }));
     fireEvent.change(screen.getByPlaceholderText(/guide\.xml\.gz/i), {
       target: { value: "https://www.open-epg.com/files/sweden4.xml.gz" },
@@ -317,7 +304,9 @@ describe("SettingsPage", () => {
       </QueryClientProvider>,
     );
 
-    const syncButton = await screen.findByRole("button", { name: /trigger full sync/i });
+    const syncButton = await screen.findByRole("button", {
+      name: /trigger full sync/i,
+    });
     await waitFor(() => expect(syncButton).toBeEnabled());
     fireEvent.click(syncButton);
     await waitFor(() => expect(mockedTriggerProviderSync).toHaveBeenCalled());
