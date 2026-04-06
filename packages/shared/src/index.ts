@@ -141,6 +141,8 @@ export type ChannelSearchResults = SearchResultPage<Channel>;
 
 export type ProgramSearchResults = SearchResultPage<Program>;
 
+export type FavoriteEntry = GuideChannelEntry;
+
 export type RecentChannel = {
   channel: Channel;
   lastPlayedAt: string;

@@ -606,88 +606,129 @@ function GuideCategorySection({
                   : false;
 
                 return (
-                  <div key={channel.id}>
+                  <div key={channel.id} className="group">
                     {index > 0 ? <Separator /> : null}
-                    <div className="flex flex-col gap-4 p-4 sm:p-5 lg:flex-row lg:items-center lg:justify-between">
-                      <div className="flex min-w-0 items-start gap-3 sm:gap-4">
-                        <ChannelAvatar
-                          name={channel.name}
-                          logoUrl={channel.logoUrl}
-                          className="shrink-0"
-                        />
-                        <div className="flex min-w-0 flex-1 flex-col gap-3">
-                          <div className="flex min-w-0 flex-col gap-2">
-                            <h3 className="min-w-0 text-base font-semibold break-words">
-                              {channel.name}
-                            </h3>
-                            <div className="flex flex-wrap items-center gap-2">
+                    <div className="flex flex-col gap-4 p-4 sm:gap-5 sm:p-5 transition-colors hover:bg-muted/30">
+                      <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
+                        <div className="flex min-w-0 items-start gap-3 sm:gap-4">
+                          <ChannelAvatar
+                            name={channel.name}
+                            logoUrl={channel.logoUrl}
+                            className="size-12 shrink-0 rounded-xl ring-1 ring-border/10 sm:size-14 sm:rounded-2xl"
+                            fallbackClassName="rounded-xl sm:rounded-2xl"
+                          />
+                          <div className="flex min-w-0 flex-col gap-1.5 pt-0.5">
+                            <div className="flex min-w-0 flex-wrap items-center gap-2">
+                              <h3 className="min-w-0 break-words text-base font-semibold tracking-tight sm:text-lg">
+                                {channel.name}
+                              </h3>
+                              {channel.streamExtension ? (
+                                <Badge variant="outline" className="bg-background/50 text-[10px] border-transparent uppercase">
+                                  {channel.streamExtension}
+                                </Badge>
+                              ) : null}
+                            </div>
+                            <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
+                              {channel.categoryName ? (
+                                <Badge variant="outline" className="bg-secondary/40 border-transparent text-[11px] font-normal hover:bg-secondary/40 px-1.5 py-0 h-5">
+                                  {channel.categoryName}
+                                </Badge>
+                              ) : null}
                               {channel.hasCatchup ? (
-                                <Badge variant="live">Catch-up</Badge>
+                                <Badge variant="live" className="text-[10px] font-medium h-5 tracking-wide px-1.5 py-0">
+                                  Catch-up
+                                </Badge>
                               ) : null}
                               {channel.archiveDurationHours ? (
-                                <Badge variant="outline">
+                                <Badge className="text-[10px] font-medium h-5 bg-primary/10 text-primary hover:bg-primary/20 hover:text-primary px-1.5 py-0">
                                   {formatArchiveDuration(
                                     channel.archiveDurationHours,
                                   )}
                                 </Badge>
                               ) : null}
-                              {program && programIsLive ? (
-                                <Badge variant="accent">Live now</Badge>
-                              ) : null}
                             </div>
                           </div>
+                        </div>
 
-                          <div className="flex min-w-0 flex-col gap-2">
-                            <p className="min-w-0 break-words text-sm font-medium">
-                              {program?.title ?? "No program"}
-                            </p>
-                            {program ? (
-                              <>
-                                <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-                                  <span>
-                                    {formatTimeRange(
-                                      program.startAt,
-                                      program.endAt,
-                                    )}
-                                  </span>
-                                  {program.canCatchup ? (
-                                    <Badge variant="outline">
-                                      Catch-up window
-                                    </Badge>
-                                  ) : null}
-                                </div>
-                                {programIsLive ? (
-                                  <Progress
-                                    value={getTimeProgress(
-                                      program.startAt,
-                                      program.endAt,
-                                    )}
-                                    className="h-2"
-                                  />
-                                ) : null}
-                              </>
-                            ) : null}
-                          </div>
+                        <div className="hidden shrink-0 items-center gap-2 pt-1 sm:flex">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="text-muted-foreground hover:bg-secondary/60 hover:text-foreground"
+                            onClick={() => onFavorite(channel)}
+                            disabled={
+                              favoritePending &&
+                              activeFavoriteChannelId === channel.id
+                            }
+                          >
+                            <Heart data-icon="inline-start" className={channel.isFavorite ? "fill-current opacity-70" : "opacity-70"} />
+                            {channel.isFavorite ? "Unfavorite" : "Favorite"}
+                          </Button>
+                          <Button
+                            size="sm"
+                            className="min-w-24 shadow-sm"
+                            onClick={() => onPlay(channel.id)}
+                          >
+                            <Play data-icon="inline-start" />
+                            Play
+                          </Button>
                         </div>
                       </div>
 
-                      <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:items-center">
+                      <div className="rounded-xl border border-border/40 bg-secondary/20 p-3.5 sm:p-4">
+                        {program ? (
+                          <div className="flex min-w-0 flex-col gap-2">
+                            <div className="flex flex-wrap items-start gap-x-2 gap-y-1">
+                              <p className="min-w-0 break-words text-sm font-semibold leading-6">
+                                {program.title || "No program"}
+                              </p>
+                              {programIsLive ? (
+                                <Badge variant="accent">Live now</Badge>
+                              ) : null}
+                            </div>
+                            <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+                              <span className="font-medium text-foreground/80">
+                                {formatTimeRange(
+                                  program.startAt,
+                                  program.endAt,
+                                )}
+                              </span>
+                              {program.canCatchup ? (
+                                <Badge variant="outline" className="text-[10px] h-5 px-1.5 py-0 uppercase tracking-widest font-medium opacity-80">
+                                  Catch-up window
+                                </Badge>
+                              ) : null}
+                            </div>
+                            {programIsLive ? (
+                              <Progress
+                                value={getTimeProgress(
+                                  program.startAt,
+                                  program.endAt,
+                                )}
+                                className="mt-2 h-1.5 bg-border/50"
+                              />
+                            ) : null}
+                          </div>
+                        ) : (
+                          <p className="text-sm font-medium text-muted-foreground">No program data</p>
+                        )}
+                      </div>
+
+                      <div className="flex items-center gap-2 pt-1 sm:hidden">
                         <Button
                           variant="secondary"
-                          size="sm"
-                          className="w-full justify-center sm:w-auto"
+                          className="flex-1 bg-secondary/50"
                           onClick={() => onFavorite(channel)}
                           disabled={
                             favoritePending &&
                             activeFavoriteChannelId === channel.id
                           }
                         >
-                          <Heart data-icon="inline-start" />
+                          <Heart data-icon="inline-start" className={channel.isFavorite ? "fill-current opacity-70" : "opacity-70"} />
                           {channel.isFavorite ? "Unfavorite" : "Favorite"}
                         </Button>
                         <Button
-                          size="sm"
-                          className="w-full justify-center sm:w-auto"
+                          className="flex-1 shadow-sm"
                           onClick={() => onPlay(channel.id)}
                         >
                           <Play data-icon="inline-start" />
