@@ -5,8 +5,8 @@ set -euo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
 runtime_dir="$repo_root/.runtime"
-state_path="$runtime_dir/user-test-stack.json"
-bootstrap_state_path="$runtime_dir/user-test-bootstrap.json"
+state_path="$runtime_dir/dev-stack.json"
+bootstrap_state_path="$runtime_dir/dev-bootstrap.json"
 
 is_pid_running() {
     local pid="$1"
@@ -34,7 +34,7 @@ extract_pids() {
 if [[ -f "$bootstrap_state_path" ]]; then
     bootstrap_pid="$(extract_pids "$bootstrap_state_path" | head -n1)"
     if [[ -n "$bootstrap_pid" ]] && is_pid_running "$bootstrap_pid"; then
-        echo "Stopping user-test bootstrap (PID $bootstrap_pid)..."
+        echo "Stopping dev bootstrap (PID $bootstrap_pid)..."
         stop_pid_tree "$bootstrap_pid"
     fi
     rm -f "$bootstrap_state_path"
@@ -55,4 +55,4 @@ if command -v docker >/dev/null 2>&1; then
     docker compose down
 fi
 
-echo "User-test stack stopped."
+echo "Dev stack stopped."

@@ -271,7 +271,9 @@ printf '%s' "$GHCR_TOKEN" | "$container_cli" login ghcr.io --username "$GHCR_USE
 
 server_image_ref="${EURIPUS_SERVER_IMAGE}:${EURIPUS_IMAGE_TAG}"
 
-info "Pulling homelab images"
+info "Stopping existing Euripus stack"
+"${compose_cmd[@]}" "${compose_files[@]}" down
+info "Pulling Euripus images"
 "${compose_cmd[@]}" "${compose_files[@]}" pull postgres meilisearch server web
 info "Starting PostgreSQL"
 "${compose_cmd[@]}" "${compose_files[@]}" up -d postgres
@@ -279,13 +281,13 @@ info "Waiting for PostgreSQL health"
 wait_for_service_health postgres 180 || exit 1
 info "Repairing SQLx migration checksums if needed"
 repair_sqlx_migration_checksums
-info "Starting remaining homelab services"
+info "Starting remaining Euripus services"
 "${compose_cmd[@]}" "${compose_files[@]}" up -d meilisearch server web
 info "Waiting for server health"
 wait_for_server_health 180 || exit 1
 
 echo
-echo "Homelab deploy complete."
+echo "Euripus deploy complete."
 echo "Container CLI: ${container_cli}"
 echo "Server image: ${server_image_ref}"
 echo "Web image: ${EURIPUS_WEB_IMAGE}:${EURIPUS_IMAGE_TAG}"

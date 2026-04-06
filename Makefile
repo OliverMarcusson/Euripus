@@ -3,7 +3,7 @@
 EURIPUS_ENABLE_NORDVPN ?= true
 
 homelab-up:
-	EURIPUS_ENABLE_NORDVPN=$(EURIPUS_ENABLE_NORDVPN) ./scripts/deploy-homelab-images.sh
+	EURIPUS_ENABLE_NORDVPN=$(EURIPUS_ENABLE_NORDVPN) ./scripts/deploy.sh
 
 homelab-down:
 	@if [ "$(EURIPUS_ENABLE_NORDVPN)" = "true" ]; then \

@@ -112,7 +112,7 @@ publish_image "$server_image" "apps/server/Dockerfile" "$sha_tag" "$moving_tag"
 publish_image "$web_image" "apps/web/Dockerfile" "$sha_tag" "$moving_tag"
 
 echo
-echo "Published homelab images."
+echo "Published Euripus images."
 echo "Server: ${server_image}:${sha_tag}"
 echo "Server: ${server_image}:${moving_tag}"
 echo "Web: ${web_image}:${sha_tag}"

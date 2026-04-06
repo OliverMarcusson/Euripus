@@ -8,8 +8,8 @@ $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $runtimeDir = Join-Path $repoRoot ".runtime"
 $logsDir = Join-Path $runtimeDir "logs"
-$statePath = Join-Path $runtimeDir "user-test-stack.json"
-$bootstrapStatePath = Join-Path $runtimeDir "user-test-bootstrap.json"
+$statePath = Join-Path $runtimeDir "dev-stack.json"
+$bootstrapStatePath = Join-Path $runtimeDir "dev-bootstrap.json"
 
 function Assert-CommandAvailable {
     param([string]$CommandName)
@@ -97,7 +97,7 @@ function Wait-ForApiHealth {
                 $logs = Get-ServerLogs
                 if ((-not $resetAttempted) -and $logs -match "migration .* previously applied but has been modified") {
                     $resetAttempted = $true
-                    Write-Host "Detected local migration checksum drift in the user-test database. Recreating the local user-test database volume..." -ForegroundColor Yellow
+                    Write-Host "Detected local migration checksum drift in the dev database. Recreating the local database volume..." -ForegroundColor Yellow
                     & docker compose down -v | Out-Host
                     & docker compose up --build -d postgres server | Out-Host
                     Start-Sleep -Seconds 2
@@ -162,15 +162,15 @@ try {
     Assert-CommandAvailable "bun"
 
     if (-not (Test-Path (Join-Path $repoRoot "apps/server/.env"))) {
-        throw "Missing apps/server/.env. Copy apps/server/.env.example before starting the user-test stack."
+        throw "Missing apps/server/.env. Copy apps/server/.env.example before starting the dev stack."
     }
 
     if (Test-Path $statePath) {
         $existingState = Get-Content $statePath | ConvertFrom-Json
         $clientProcess = $existingState.processes | Where-Object { $_.name -eq "client" -or $_.name -eq "web" } | Select-Object -First 1
         if (Test-TrackedProcessRunning $clientProcess) {
-            Write-Host "User-test stack is already running." -ForegroundColor Yellow
-            Write-Host "Stop it first with: bun run user-test:stop"
+            Write-Host "Dev stack is already running." -ForegroundColor Yellow
+            Write-Host "Stop it first with: bun run dev:stop"
             exit 0
         }
     }
@@ -216,7 +216,7 @@ try {
     $state | ConvertTo-Json -Depth 4 | Set-Content -Path $statePath
 
     Write-Host ""
-    Write-Host "User-test stack is ready." -ForegroundColor Green
+    Write-Host "Dev stack is ready." -ForegroundColor Green
     Write-Host "API: http://127.0.0.1:8080"
     Write-Host "Web: http://127.0.0.1:5173"
     Write-Host "Logs:"
@@ -224,7 +224,7 @@ try {
         Write-Host "  $($processInfo.name): $($processInfo.stdout)"
         Write-Host "  $($processInfo.name): $($processInfo.stderr)"
     }
-    Write-Host "Stop everything with: bun run user-test:stop"
+    Write-Host "Stop everything with: bun run dev:stop"
     exit 0
 }
 finally {

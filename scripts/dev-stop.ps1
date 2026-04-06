@@ -2,14 +2,14 @@ $ErrorActionPreference = "Stop"
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $runtimeDir = Join-Path $repoRoot ".runtime"
-$statePath = Join-Path $runtimeDir "user-test-stack.json"
-$bootstrapStatePath = Join-Path $runtimeDir "user-test-bootstrap.json"
+$statePath = Join-Path $runtimeDir "dev-stack.json"
+$bootstrapStatePath = Join-Path $runtimeDir "dev-bootstrap.json"
 
 if (Test-Path $bootstrapStatePath) {
     $bootstrapState = Get-Content $bootstrapStatePath | ConvertFrom-Json
     $bootstrapProcess = Get-Process -Id $bootstrapState.pid -ErrorAction SilentlyContinue
     if ($bootstrapProcess) {
-        Write-Host "Stopping user-test bootstrap (PID $($bootstrapState.pid))..." -ForegroundColor Cyan
+        Write-Host "Stopping dev bootstrap (PID $($bootstrapState.pid))..." -ForegroundColor Cyan
         & taskkill /PID $bootstrapState.pid /T /F | Out-Null
     }
 
@@ -34,5 +34,5 @@ if (Get-Command docker -ErrorAction SilentlyContinue) {
     & docker compose down | Out-Host
 }
 
-Write-Host "User-test stack stopped." -ForegroundColor Green
+Write-Host "Dev stack stopped." -ForegroundColor Green
 exit 0
