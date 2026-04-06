@@ -220,38 +220,6 @@ export type ReceiverPlaybackStatePayload = {
   durationSeconds?: number | null;
 };
 
-export type PlaybackDeviceRegistration = {
-  deviceKey: string;
-  name: string;
-  platform: string;
-  formFactorHint: string | null;
-  remoteTargetEnabled: boolean;
-};
-
-export type PlaybackDeviceCurrentPlayback = {
-  title: string;
-  sourceKind: PlaybackSource["kind"];
-  live: boolean;
-  catchup: boolean;
-  updatedAt: string;
-};
-
-export type PlaybackDevice = {
-  id: string;
-  deviceKey: string;
-  name: string;
-  platform: string;
-  formFactorHint: string | null;
-  remoteTargetEnabled: boolean;
-  online: boolean;
-  controllable: boolean;
-  currentController: boolean;
-  current: boolean;
-  lastSeenAt: string;
-  updatedAt: string;
-  currentPlayback: PlaybackDeviceCurrentPlayback | null;
-};
-
 export type RemoteControllerTarget = {
   device: ReceiverDevice;
   selectedAt: string;

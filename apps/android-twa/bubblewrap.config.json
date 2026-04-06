@@ -10,7 +10,7 @@
   "navigationColorDark": "#140b2b",
   "backgroundColor": "#140b2b",
   "orientation": "landscape",
-  "startUrl": "/",
+  "startUrl": "/receiver",
   "iconUrl": "https://tv.olivermarcusson.se/icon-512.png",
   "maskableIconUrl": "https://tv.olivermarcusson.se/icon-512.png",
   "appVersionName": "0.1.0",

@@ -5,32 +5,44 @@ import { ChannelAvatar } from "@/components/ui/channel-avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Empty, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
+import {
+  Empty,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useChannelFavoriteMutation } from "@/hooks/use-channel-favorite";
 import { useChannelPlaybackMutation } from "@/hooks/use-playback-actions";
-import { useTvAutoFocus } from "@/hooks/use-tv-auto-focus";
 import { getFavorites } from "@/lib/api";
 import { formatArchiveDuration } from "@/lib/utils";
 
 export function FavoritesPage() {
-  const favoritesQuery = useQuery({ queryKey: ["favorites"], queryFn: getFavorites });
+  const favoritesQuery = useQuery({
+    queryKey: ["favorites"],
+    queryFn: getFavorites,
+  });
   const favoriteMutation = useChannelFavoriteMutation();
   const playMutation = useChannelPlaybackMutation();
 
   const favorites = favoritesQuery.data ?? [];
-  useTvAutoFocus(favorites.length ? "[data-favorite-play='true']" : null, [favorites.length]);
 
   return (
     <div className="flex flex-col gap-5 sm:gap-6">
-      <PageHeader title="Favorites" meta={<Badge variant="accent">{favorites.length} saved</Badge>} />
+      <PageHeader
+        title="Favorites"
+        meta={<Badge variant="accent">{favorites.length} saved</Badge>}
+      />
 
       {favoritesQuery.isPending ? (
         <Card className="rounded-none border-0 bg-transparent shadow-none sm:rounded-xl sm:border sm:bg-card sm:shadow-sm">
           <CardContent className="flex flex-col gap-3 px-0 pt-0 pb-0 sm:p-5 sm:pt-5">
             {Array.from({ length: 4 }).map((_, index) => (
-              <div key={index} className="flex items-center gap-4 rounded-xl border border-border/70 p-4">
+              <div
+                key={index}
+                className="flex items-center gap-4 rounded-xl border border-border/70 p-4"
+              >
                 <Skeleton className="size-11 rounded-2xl" />
                 <div className="flex flex-1 flex-col gap-2">
                   <Skeleton className="h-4 w-40" />
@@ -69,18 +81,35 @@ export function FavoritesPage() {
                 {index > 0 ? <Separator /> : null}
                 <div className="flex flex-col gap-4 p-5 lg:flex-row lg:items-center lg:justify-between">
                   <div className="flex min-w-0 items-start gap-4">
-                    <ChannelAvatar name={channel.name} logoUrl={channel.logoUrl} />
+                    <ChannelAvatar
+                      name={channel.name}
+                      logoUrl={channel.logoUrl}
+                    />
                     <div className="flex min-w-0 flex-1 flex-col gap-2">
                       <div className="flex flex-wrap items-center gap-2">
-                        <h2 className="truncate text-base font-semibold">{channel.name}</h2>
-                        {channel.categoryName ? <Badge variant="outline">{channel.categoryName}</Badge> : null}
-                        {channel.hasCatchup ? <Badge variant="live">Catch-up</Badge> : null}
+                        <h2 className="truncate text-base font-semibold">
+                          {channel.name}
+                        </h2>
+                        {channel.categoryName ? (
+                          <Badge variant="outline">
+                            {channel.categoryName}
+                          </Badge>
+                        ) : null}
+                        {channel.hasCatchup ? (
+                          <Badge variant="live">Catch-up</Badge>
+                        ) : null}
                         {channel.archiveDurationHours ? (
-                          <Badge>{formatArchiveDuration(channel.archiveDurationHours)}</Badge>
+                          <Badge>
+                            {formatArchiveDuration(
+                              channel.archiveDurationHours,
+                            )}
+                          </Badge>
                         ) : null}
                       </div>
                       {channel.streamExtension ? (
-                        <p className="text-sm text-muted-foreground">{channel.streamExtension.toUpperCase()}</p>
+                        <p className="text-sm text-muted-foreground">
+                          {channel.streamExtension.toUpperCase()}
+                        </p>
                       ) : null}
                     </div>
                   </div>
@@ -89,14 +118,15 @@ export function FavoritesPage() {
                       variant="secondary"
                       size="sm"
                       onClick={() => favoriteMutation.mutate(channel)}
-                      disabled={favoriteMutation.isPending && favoriteMutation.variables?.id === channel.id}
+                      disabled={
+                        favoriteMutation.isPending &&
+                        favoriteMutation.variables?.id === channel.id
+                      }
                     >
                       <Heart data-icon="inline-start" />
                       Unfavorite
                     </Button>
                     <Button
-                      data-favorite-play="true"
-                      data-tv-autofocus={index === 0 ? "true" : undefined}
                       size="sm"
                       onClick={() => playMutation.mutate(channel.id)}
                       disabled={playMutation.isPending}
