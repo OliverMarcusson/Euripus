@@ -15,6 +15,7 @@
     "deploy": "bun ./scripts/run-script.mjs deploy",
     "build:shared": "bun --cwd packages/shared build",
     "build:client": "bun --cwd apps/client build",
+    "build:apk": "bun ./scripts/run-script.mjs build:apk",
     "check:client": "bun --cwd apps/client typecheck",
     "test:client": "bun --cwd apps/client test",
     "test:server": "cargo test --manifest-path apps/server/Cargo.toml"

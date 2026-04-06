@@ -4,6 +4,8 @@ node_modules
 target
 dist
 build
+.gradle
+.kotlin
 coverage
 .runtime
 *.log
@@ -17,3 +19,4 @@ bun.lock
 .claude/
 SKILL.md
 test-results/
+apps/android-tv-native/local.properties
