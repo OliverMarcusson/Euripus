@@ -3732,7 +3732,16 @@ async fn fetch_guide_category_rows(
             AND p.channel_id = c.id
             AND p.end_at > NOW() - INTERVAL '2 hours'
             AND p.start_at < NOW() + INTERVAL '6 hours'
-          ORDER BY is_live DESC, p.start_at ASC, p.title ASC
+          ORDER BY
+            CASE
+              WHEN p.start_at <= NOW() AND p.end_at > NOW() THEN 0
+              WHEN p.start_at > NOW() THEN 1
+              ELSE 2
+            END ASC,
+            CASE WHEN p.start_at > NOW() THEN p.start_at END ASC NULLS LAST,
+            CASE WHEN p.start_at <= NOW() AND p.end_at > NOW() THEN p.start_at END DESC NULLS LAST,
+            CASE WHEN p.end_at <= NOW() THEN p.end_at END DESC NULLS LAST,
+            p.title ASC
           LIMIT 1
         ) p ON TRUE
         WHERE c.user_id = $1
@@ -3743,10 +3752,12 @@ async fn fetch_guide_category_rows(
         ORDER BY
           CASE
             WHEN p.start_at <= NOW() AND p.end_at > NOW() THEN 0
-            WHEN p.start_at IS NOT NULL THEN 1
-            ELSE 2
+            WHEN p.start_at > NOW() THEN 1
+            WHEN p.start_at IS NOT NULL THEN 2
+            ELSE 3
           END ASC,
-          p.start_at ASC NULLS LAST,
+          CASE WHEN p.start_at > NOW() THEN p.start_at END ASC NULLS LAST,
+          CASE WHEN p.end_at <= NOW() THEN p.end_at END DESC NULLS LAST,
           c.name ASC
         OFFSET $3
         LIMIT $4

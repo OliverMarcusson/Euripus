@@ -579,18 +579,21 @@ fn programme_is_within_retention_window(
 }
 
 fn parse_xmltv_timestamp(value: &str) -> Result<DateTime<Utc>> {
-    if value.len() < 14 {
-        return Err(anyhow!("invalid XMLTV timestamp {value}"));
-    }
-
-    let normalized = if value.contains(' ') {
-        value.to_string()
-    } else {
-        format!("{} +0000", &value[..14])
-    };
-
-    let parsed = DateTime::parse_from_str(&normalized, "%Y%m%d%H%M%S %z")
-        .or_else(|_| DateTime::parse_from_str(&normalized, "%Y%m%d%H%M %z"))?;
+    let trimmed = value.trim();
+    let parsed = DateTime::parse_from_str(trimmed, "%Y%m%d%H%M%S %z")
+        .or_else(|_| DateTime::parse_from_str(trimmed, "%Y%m%d%H%M %z"))
+        .or_else(|_| DateTime::parse_from_str(trimmed, "%Y%m%d%H%M%S%z"))
+        .or_else(|_| DateTime::parse_from_str(trimmed, "%Y%m%d%H%M%z"))
+        .or_else(|_| {
+            if trimmed.len() == 14 {
+                DateTime::parse_from_str(&format!("{trimmed} +0000"), "%Y%m%d%H%M%S %z")
+            } else if trimmed.len() == 12 {
+                DateTime::parse_from_str(&format!("{trimmed} +0000"), "%Y%m%d%H%M %z")
+            } else {
+                DateTime::parse_from_str(trimmed, "%Y%m%d%H%M%S %z")
+            }
+        })
+        .map_err(|_| anyhow!("invalid XMLTV timestamp {value}"))?;
     Ok(parsed.with_timezone(&Utc))
 }
 
@@ -726,6 +729,18 @@ mod tests {
             finalize_programme(upcoming_programme, now),
             FinalizeProgrammeOutcome::Accepted(_)
         ));
+    }
+
+    #[test]
+    fn parses_compact_xmltv_timestamps_with_timezone_offsets() {
+        let parsed = parse_xmltv_timestamp("20260405120000+0200").expect("compact timestamp");
+
+        assert_eq!(
+            parsed,
+            DateTime::parse_from_rfc3339("2026-04-05T10:00:00Z")
+                .expect("expected utc")
+                .with_timezone(&Utc)
+        );
     }
 
     #[test]
