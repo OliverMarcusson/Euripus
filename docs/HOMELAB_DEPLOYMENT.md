@@ -58,7 +58,7 @@ The deploy script prefers `docker` and automatically falls back to `podman` if `
 Deploy the latest published images with:
 
 ```bash
-bun run deploy
+bun run prod:start
 ```
 
 The deploy script now waits for PostgreSQL and the server health check, and it automatically repairs SQLx migration checksum drift before the new server starts.
@@ -77,7 +77,7 @@ By default, the `web` service is published on host port `8088`. Override it with
 If you want Euripus server-side traffic to leave through NordVPN, enable it in `.env.homelab-images`:
 
 ```bash
-EURIPUS_ENABLE_NORDVPN=true ./scripts/deploy.sh
+EURIPUS_ENABLE_NORDVPN=true bun run prod:start
 ```
 
 This override adds a `gluetun` container configured for NordVPN and places the Rust server inside Gluetun's network namespace.

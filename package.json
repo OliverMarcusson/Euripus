@@ -9,6 +9,8 @@
   "scripts": {
     "dev:start": "bun ./scripts/run-script.mjs dev:start",
     "dev:stop": "bun ./scripts/run-script.mjs dev:stop",
+    "prod:start": "bun ./scripts/run-script.mjs prod:start",
+    "prod:stop": "bun ./scripts/run-script.mjs prod:stop",
     "publish": "bun ./scripts/run-script.mjs publish",
     "deploy": "bun ./scripts/run-script.mjs deploy",
     "build:shared": "bun --cwd packages/shared build",

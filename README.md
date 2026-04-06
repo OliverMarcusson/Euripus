@@ -30,7 +30,8 @@ Use `docker-compose.homelab.yml` for the self-hosted web deployment. The homelab
 3. Set `APP_PUBLIC_ORIGIN` to the HTTPS URL exposed by your reverse proxy.
 4. Set `APP_ALLOWED_ORIGINS` to include your public browser origin and any local development origins you still need.
 5. Publish fresh images with `bun run publish`.
-6. On the production host, deploy them with `bun run deploy` or `./scripts/deploy.sh`.
+6. On the production host, start or refresh the stack with `bun run prod:start`.
+   Stop it with `bun run prod:stop`.
 7. Point your reverse proxy at the host port `8088` by default, or override `EURIPUS_WEB_PORT`.
 
 The `web` service is the only public upstream. It serves the SPA, forwards `/api/*` to the Rust backend, and keeps PostgreSQL private inside the Compose network.
@@ -51,7 +52,7 @@ To route Euripus server-side traffic through NordVPN, add the override file:
 
 ```bash
 cp apps/server/.env.nordvpn.example apps/server/.env.nordvpn
-EURIPUS_ENABLE_NORDVPN=true ./scripts/deploy.sh
+EURIPUS_ENABLE_NORDVPN=true bun run prod:start
 ```
 
 That only affects server-originated traffic such as provider validation, sync jobs, and EPG fetches. Browser playback still goes directly from the client device to the IPTV provider.
