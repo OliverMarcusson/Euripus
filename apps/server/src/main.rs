@@ -3149,17 +3149,34 @@ async fn stream_receiver_events(
     let receiver =
         require_receiver_auth_with_optional_query_token(&state, &headers, query.session_token)
             .await?;
+    let device = load_receiver_device(&state.pool, receiver.receiver_device_id)
+        .await?
+        .ok_or_else(|| AppError::NotFound("Receiver not found".to_string()))?;
     let sender = receiver_sender(&state, receiver.receiver_device_id);
-    let stream = BroadcastStream::new(sender.subscribe()).filter_map(|message| match message {
-        Ok(payload) => {
-            let event = Event::default()
-                .event(payload.event_type.clone())
-                .json_data(payload)
-                .expect("receiver event should serialize");
-            Some(Ok(event))
-        }
+    let initial_events = if device.owner_user_id.is_some() && device.revoked_at.is_none() {
+        vec![receiver_event_to_sse(ReceiverEventPayload {
+            event_type: "pairing_complete".to_string(),
+            command: RemotePlaybackCommandResponse {
+                id: Uuid::new_v4(),
+                target_device_id: device.id,
+                target_device_name: device.device_name.clone(),
+                command_type: "pairing".to_string(),
+                status: "delivered".to_string(),
+                source_title: device.device_name.clone(),
+                created_at: Utc::now(),
+            },
+            source: None,
+            position_seconds: None,
+            receiver_credential: None,
+        })]
+    } else {
+        Vec::new()
+    };
+    let live_events = BroadcastStream::new(sender.subscribe()).filter_map(|message| match message {
+        Ok(payload) => Some(receiver_event_to_sse(payload)),
         Err(_) => None,
     });
+    let stream = futures_util::stream::iter(initial_events).chain(live_events);
     Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
 }
 
@@ -4511,6 +4528,15 @@ fn receiver_sender(state: &AppState, device_id: Uuid) -> broadcast::Sender<Recei
         .entry(device_id)
         .or_insert_with(|| broadcast::channel(RECEIVER_CHANNEL_CAPACITY).0)
         .clone()
+}
+
+fn receiver_event_to_sse(
+    payload: ReceiverEventPayload,
+) -> Result<Event, std::convert::Infallible> {
+    Ok(Event::default()
+        .event(payload.event_type.clone())
+        .json_data(payload)
+        .expect("receiver event should serialize"))
 }
 
 fn is_receiver_online(state: &AppState, device: &ReceiverDeviceRecord) -> bool {

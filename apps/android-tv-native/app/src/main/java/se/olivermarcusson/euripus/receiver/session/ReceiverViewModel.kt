@@ -6,6 +6,7 @@ import android.view.KeyEvent
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlin.math.min
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -56,6 +57,7 @@ class ReceiverViewModel(application: Application) : AndroidViewModel(application
     private var endpointConfig: ReceiverEndpointConfig? = null
     private var sessionToken: String? = null
     private var isForeground = false
+    private var bootstrapJob: Job? = null
     private var heartbeatJob: Job? = null
     private var eventJob: Job? = null
     private var playbackSyncJob: Job? = null
@@ -63,6 +65,7 @@ class ReceiverViewModel(application: Application) : AndroidViewModel(application
     init {
         viewModelScope.launch {
             preferencesRepository.preferences.collectLatest { prefs ->
+                val serverOriginChanged = prefs.serverOrigin != currentPreferences.serverOrigin
                 currentPreferences = prefs
                 mutableUiState.update { state ->
                     state.copy(
@@ -74,8 +77,8 @@ class ReceiverViewModel(application: Application) : AndroidViewModel(application
                         },
                     )
                 }
-                if (isForeground) {
-                    bootstrapReceiver(force = true)
+                if (isForeground && serverOriginChanged) {
+                    requestBootstrap(force = true)
                 }
             }
         }
@@ -87,6 +90,7 @@ class ReceiverViewModel(application: Application) : AndroidViewModel(application
                         source = source,
                         status = when {
                             state.status == ReceiverStatus.NEEDS_SERVER_CONFIG -> state.status
+                            state.status == ReceiverStatus.STARTING_SESSION -> state.status
                             state.pairingCode != null -> ReceiverStatus.PAIRING
                             source == null -> ReceiverStatus.IDLE
                             source.kind == "unsupported" -> ReceiverStatus.ERROR
@@ -101,8 +105,10 @@ class ReceiverViewModel(application: Application) : AndroidViewModel(application
     fun onForegroundChanged(isForeground: Boolean) {
         this.isForeground = isForeground
         if (isForeground) {
-            viewModelScope.launch { bootstrapReceiver(force = false) }
+            requestBootstrap(force = false)
         } else {
+            bootstrapJob?.cancel()
+            bootstrapJob = null
             cancelSessionLoops()
             playerController.pause()
         }
@@ -153,7 +159,26 @@ class ReceiverViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun retry() {
-        viewModelScope.launch { bootstrapReceiver(force = true) }
+        requestBootstrap(force = true)
+    }
+
+    private fun requestBootstrap(force: Boolean) {
+        val existingJob = bootstrapJob
+        if (force) {
+            existingJob?.cancel()
+        } else if (existingJob?.isActive == true) {
+            return
+        }
+
+        val job = viewModelScope.launch {
+            bootstrapReceiver(force)
+        }
+        bootstrapJob = job
+        job.invokeOnCompletion {
+            if (bootstrapJob === job) {
+                bootstrapJob = null
+            }
+        }
     }
 
     fun refreshPairingCode() {
@@ -296,8 +321,11 @@ class ReceiverViewModel(application: Application) : AndroidViewModel(application
                 )
             }
             startSessionLoops()
-            syncPlaybackStateOnce()
+            syncPlaybackStateOnce(session.sessionToken)
         }.onFailure { error ->
+            if (error is CancellationException) {
+                throw error
+            }
             mutableUiState.update {
                 it.copy(
                     status = ReceiverStatus.ERROR,
@@ -318,8 +346,10 @@ class ReceiverViewModel(application: Application) : AndroidViewModel(application
             while (true) {
                 try {
                     apiService.heartbeat(config, token)
+                } catch (error: CancellationException) {
+                    throw error
                 } catch (error: Throwable) {
-                    if (handleLoopFailure(error)) {
+                    if (handleLoopFailure(token, error)) {
                         break
                     }
                 }
@@ -333,10 +363,12 @@ class ReceiverViewModel(application: Application) : AndroidViewModel(application
                 try {
                     eventStream.open(config, token).collectLatest { event ->
                         backoffMs = 1_000L
-                        handleEvent(event)
+                        handleEvent(token, event)
                     }
+                } catch (error: CancellationException) {
+                    throw error
                 } catch (error: Throwable) {
-                    if (handleLoopFailure(error)) {
+                    if (handleLoopFailure(token, error)) {
                         break
                     }
                 }
@@ -347,15 +379,20 @@ class ReceiverViewModel(application: Application) : AndroidViewModel(application
 
         playbackSyncJob = viewModelScope.launch {
             while (true) {
-                syncPlaybackStateOnce()
+                syncPlaybackStateOnce(token)
                 delay(PLAYBACK_SYNC_INTERVAL_MS)
             }
         }
     }
 
-    private suspend fun handleEvent(event: ReceiverEventPayloadDto) {
+    private suspend fun handleEvent(
+        token: String,
+        event: ReceiverEventPayloadDto,
+    ) {
+        if (sessionToken != token) {
+            return
+        }
         val config = endpointConfig ?: return
-        val token = sessionToken ?: return
 
         when (event.eventType) {
             "playback_command" -> {
@@ -384,8 +421,10 @@ class ReceiverViewModel(application: Application) : AndroidViewModel(application
             }
 
             "pairing_complete" -> {
-                currentPreferences = currentPreferences.copy(receiverCredential = event.receiverCredential)
-                preferencesRepository.saveReceiverCredential(event.receiverCredential)
+                event.receiverCredential?.let { credential ->
+                    currentPreferences = currentPreferences.copy(receiverCredential = credential)
+                    preferencesRepository.saveReceiverCredential(credential)
+                }
                 mutableUiState.update {
                     it.copy(
                         pairingCode = null,
@@ -430,9 +469,11 @@ class ReceiverViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    private suspend fun syncPlaybackStateOnce() {
+    private suspend fun syncPlaybackStateOnce(token: String) {
+        if (sessionToken != token) {
+            return
+        }
         val config = endpointConfig ?: return
-        val token = sessionToken ?: return
         val source = playerController.currentSource.value
         val snapshot = playerController.snapshot.value
 
@@ -451,11 +492,17 @@ class ReceiverViewModel(application: Application) : AndroidViewModel(application
                 ),
             )
         }.onFailure { error ->
-            handleLoopFailure(error)
+            if (error is CancellationException) {
+                throw error
+            }
+            handleLoopFailure(token, error)
         }
     }
 
-    private suspend fun handleSessionExpired() {
+    private suspend fun handleSessionExpired(token: String) {
+        if (sessionToken != token) {
+            return
+        }
         cancelSessionLoops()
         sessionToken = null
         currentPreferences = currentPreferences.copy(receiverCredential = null)
@@ -470,20 +517,26 @@ class ReceiverViewModel(application: Application) : AndroidViewModel(application
                 detailMessage = "Receiver authorization expired. Starting a new pairing session.",
             )
         }
-        bootstrapReceiver(force = true)
+        requestBootstrap(force = true)
     }
 
-    private suspend fun handleLoopFailure(error: Throwable): Boolean {
+    private suspend fun handleLoopFailure(
+        token: String,
+        error: Throwable,
+    ): Boolean {
+        if (sessionToken != token) {
+            return true
+        }
         Log.w(TAG, "Receiver loop failure", error)
         return when (error) {
             is ReceiverAuthExpiredException -> {
-                handleSessionExpired()
+                handleSessionExpired(token)
                 true
             }
 
             is ReceiverApiException -> {
                 if (error.statusCode == 401 || error.statusCode == 403) {
-                    handleSessionExpired()
+                    handleSessionExpired(token)
                     true
                 } else {
                     mutableUiState.update {
@@ -512,6 +565,7 @@ class ReceiverViewModel(application: Application) : AndroidViewModel(application
     }
 
     override fun onCleared() {
+        bootstrapJob?.cancel()
         cancelSessionLoops()
         playerController.release()
         super.onCleared()
