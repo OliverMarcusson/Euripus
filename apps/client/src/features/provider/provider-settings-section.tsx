@@ -212,9 +212,9 @@ export function ProviderSettingsSection() {
 
   return (
     <div className="grid gap-6 xl:grid-cols-[minmax(0,1.2fr)_360px]">
-      <Card className="overflow-hidden rounded-none border-0 bg-transparent shadow-none sm:rounded-xl sm:border sm:border-border/80 sm:bg-gradient-to-br sm:from-card sm:via-card sm:to-primary/5 sm:shadow-sm">
-        <CardHeader className="flex flex-row items-start justify-between gap-4 px-0 pt-0 pb-4 sm:p-5 sm:pb-0">
-          <CardTitle>Provider</CardTitle>
+      <Card className="self-start overflow-hidden rounded-none border-0 bg-transparent shadow-none sm:rounded-3xl sm:border sm:border-border/50 sm:bg-card/40 sm:backdrop-blur-xl sm:shadow-2xl">
+        <CardHeader className="flex flex-row items-start justify-between gap-4 px-0 pt-0 pb-4 sm:p-6 sm:pb-0">
+          <CardTitle className="text-xl font-medium tracking-tight">Provider</CardTitle>
           <div className="flex flex-wrap items-center gap-2">
             <Badge
               variant={
@@ -230,7 +230,7 @@ export function ProviderSettingsSection() {
             <Badge variant="outline">{latestJob?.status ?? "idle"}</Badge>
           </div>
         </CardHeader>
-        <CardContent className="px-0 pb-0 sm:p-5">
+        <CardContent className="px-0 pb-0 sm:p-6">
           <form
             className="flex flex-col gap-6"
             onSubmit={form.handleSubmit((values) => {
@@ -366,8 +366,8 @@ export function ProviderSettingsSection() {
                 <FieldError errors={[form.formState.errors.playbackMode]} />
               </Field>
 
-              <div className="py-2 sm:rounded-2xl sm:border sm:border-border/70 sm:bg-muted/30 sm:p-4">
-                <div className="mb-4 flex items-center justify-between gap-3">
+              <div className="py-2 sm:rounded-[1.5rem] sm:border sm:border-border/40 sm:bg-black/10 sm:p-5 sm:shadow-inner">
+                <div className="mb-5 flex items-center justify-between gap-3">
                   <div className="space-y-1">
                     <FieldLabel>External EPG sources</FieldLabel>
                   </div>
@@ -398,7 +398,7 @@ export function ProviderSettingsSection() {
                       return (
                         <div
                           key={field.fieldId}
-                          className="border-t border-border/60 py-4 first:border-t-0 first:pt-0 sm:rounded-2xl sm:border sm:border-border/70 sm:bg-background/60 sm:p-4"
+                          className="border-t border-border/60 py-4 first:border-t-0 first:pt-0 sm:rounded-2xl sm:border sm:border-border/30 sm:bg-background/40 sm:p-5 shadow-sm backdrop-blur-md transition-all hover:bg-secondary/40"
                         >
                           <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                             <div className="flex items-center gap-2 text-sm font-medium">
@@ -592,11 +592,11 @@ export function ProviderSettingsSection() {
       <Separator className="sm:hidden" />
 
       <div className="flex flex-col gap-6">
-        <Card className="rounded-none border-0 bg-transparent shadow-none sm:rounded-xl sm:border sm:bg-card sm:shadow-sm">
-          <CardHeader className="px-0 pt-0 pb-4 sm:p-5 sm:pb-0">
-            <CardTitle>Profile health</CardTitle>
+        <Card className="rounded-none border-0 bg-transparent shadow-none sm:rounded-3xl sm:border sm:border-border/50 sm:bg-card/40 sm:backdrop-blur-xl sm:shadow-2xl">
+          <CardHeader className="px-0 pt-0 pb-4 sm:p-6 sm:pb-0">
+            <CardTitle className="text-xl font-medium tracking-tight">Profile health</CardTitle>
           </CardHeader>
-          <CardContent className="flex flex-col gap-4 px-0 pb-0 sm:p-5">
+          <CardContent className="flex flex-col gap-4 px-0 pb-0 sm:p-6">
             <StatusRow
               label="Provider status"
               value={provider?.status ?? "missing"}
@@ -651,11 +651,11 @@ export function ProviderSettingsSection() {
 
         <Separator className="sm:hidden" />
 
-        <Card className="rounded-none border-0 bg-transparent shadow-none sm:rounded-xl sm:border sm:bg-card sm:shadow-sm">
-          <CardHeader className="px-0 pt-0 pb-4 sm:p-5 sm:pb-0">
-            <CardTitle>Sync activity</CardTitle>
+        <Card className="rounded-none border-0 bg-transparent shadow-none sm:rounded-3xl sm:border sm:border-border/50 sm:bg-card/40 sm:backdrop-blur-xl sm:shadow-2xl">
+          <CardHeader className="px-0 pt-0 pb-4 sm:p-6 sm:pb-0">
+            <CardTitle className="text-xl font-medium tracking-tight">Sync activity</CardTitle>
           </CardHeader>
-          <CardContent className="flex flex-col gap-4 px-0 pb-0 sm:p-5">
+          <CardContent className="flex flex-col gap-4 px-0 pb-0 sm:p-6">
             {latestJob ? (
               <div className="py-2 sm:rounded-2xl sm:border sm:border-border/70 sm:bg-muted/40 sm:p-4">
                 <div className="flex items-center justify-between gap-3">
@@ -739,10 +739,14 @@ function StatusRow({
   detail?: string;
 }) {
   return (
-    <div className="flex flex-col gap-1">
-      <span className="text-sm text-muted-foreground">{label}</span>
-      <span className="text-base font-semibold capitalize">{value}</span>
-      {detail ? <span className="text-sm text-muted-foreground">{detail}</span> : null}
+    <div className="flex items-center justify-between gap-4">
+      <div className="flex flex-col gap-1">
+        <span className="text-sm text-muted-foreground">{label}</span>
+        {detail ? <span className="text-xs text-muted-foreground/70">{detail}</span> : null}
+      </div>
+      <span className="text-sm font-semibold capitalize tracking-tight text-right whitespace-nowrap bg-black/20 px-3 py-1.5 rounded-lg border border-white/5 shadow-inner">
+        {value}
+      </span>
     </div>
   );
 }
