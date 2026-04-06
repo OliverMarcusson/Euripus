@@ -4,7 +4,9 @@ mod xtreme;
 
 use std::{
     collections::{HashMap, HashSet},
+    fs,
     net::{IpAddr, SocketAddr},
+    path::Path,
     str::FromStr,
     sync::Arc,
     time::{Duration, Instant},
@@ -997,8 +999,6 @@ const PUBLIC_IP_LOOKUP_URL: &str = "https://api.ipify.org";
 const PUBLIC_IP_LOOKUP_TIMEOUT_SECONDS: u64 = 5;
 const INTERRUPTED_SYNC_MESSAGE: &str =
     "Sync was interrupted when the server restarted. Start a new sync.";
-const MIGRATION_0007_CURRENT_SQL: &str =
-    include_str!("../migrations/0007_program_search_optimizations.sql");
 const DATABASE_STARTUP_TIMEOUT: Duration = Duration::from_secs(180);
 const DATABASE_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const DATABASE_RETRY_DELAY_INITIAL: Duration = Duration::from_secs(2);
@@ -1022,7 +1022,7 @@ async fn main() -> Result<()> {
     let config = Arc::new(Config::from_env()?);
     let pool = wait_for_postgres(&config.database_url).await?;
 
-    repair_migration_0007_checksum(&pool).await?;
+    repair_sqlx_migration_checksums(&pool).await?;
 
     sqlx::migrate!("./migrations")
         .run(&pool)
@@ -1237,7 +1237,7 @@ async fn shutdown_signal() {
     info!("shutdown signal received, draining server and closing PostgreSQL pool");
 }
 
-async fn repair_migration_0007_checksum(pool: &PgPool) -> Result<()> {
+async fn repair_sqlx_migration_checksums(pool: &PgPool) -> Result<()> {
     let migrations_table_exists =
         sqlx::query_scalar::<_, bool>("SELECT to_regclass('_sqlx_migrations') IS NOT NULL")
             .fetch_one(pool)
@@ -1248,24 +1248,67 @@ async fn repair_migration_0007_checksum(pool: &PgPool) -> Result<()> {
         return Ok(());
     }
 
-    let current_checksum = Sha384::digest(MIGRATION_0007_CURRENT_SQL.as_bytes()).to_vec();
-
-    let updated_rows = sqlx::query(
-        r#"
-        UPDATE _sqlx_migrations
-        SET checksum = $1
-        WHERE version = 7 AND success = true AND checksum <> $1
-        "#,
-    )
-    .bind(current_checksum)
-    .execute(pool)
-    .await
-    .context("failed to repair migration 0007 checksum")?
-    .rows_affected();
-
-    if updated_rows > 0 {
+    let migrations_dir = Path::new("./migrations");
+    if !migrations_dir.exists() {
         warn!(
-            "repaired sqlx migration checksum for version 7 to match the current immutable migration bytes"
+            "sqlx migrations directory {} not found, skipping checksum repair",
+            migrations_dir.display()
+        );
+        return Ok(());
+    }
+
+    let mut repaired_versions = Vec::new();
+    for entry in fs::read_dir(migrations_dir)
+        .with_context(|| format!("failed to read migrations directory {}", migrations_dir.display()))?
+    {
+        let path = entry?.path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("sql") {
+            continue;
+        }
+
+        let file_name = match path.file_name().and_then(|name| name.to_str()) {
+            Some(name) => name,
+            None => continue,
+        };
+
+        let version_str = match file_name.split('_').next() {
+            Some(segment) => segment,
+            None => continue,
+        };
+
+        let version = match version_str.parse::<i64>() {
+            Ok(value) => value,
+            Err(_) => continue,
+        };
+
+        let contents = fs::read(&path)
+            .with_context(|| format!("failed to read migration file {}", path.display()))?;
+        let checksum = Sha384::digest(&contents).to_vec();
+
+        let updated_rows = sqlx::query(
+            r#"
+            UPDATE _sqlx_migrations
+            SET checksum = $1
+            WHERE version = $2 AND success = true AND checksum <> $1
+            "#,
+        )
+        .bind(checksum)
+        .bind(version)
+        .execute(pool)
+        .await
+        .with_context(|| format!("failed to repair migration {version:04} checksum"))?
+        .rows_affected();
+
+        if updated_rows > 0 {
+            repaired_versions.push(version);
+        }
+    }
+
+    if !repaired_versions.is_empty() {
+        repaired_versions.sort_unstable();
+        warn!(
+            "repaired sqlx migration checksum(s) for version(s): {:?}",
+            repaired_versions
         );
     }
 
