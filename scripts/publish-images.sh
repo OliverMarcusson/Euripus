@@ -2,10 +2,10 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-env_file="${EURIPUS_PUBLISH_ENV_FILE:-$repo_root/.env.homelab-images}"
+env_file="${EURIPUS_PUBLISH_ENV_FILE:-$repo_root/.env.selfhosted-images}"
 
 platform="${EURIPUS_PUBLISH_PLATFORM:-linux/amd64}"
-moving_tag="${EURIPUS_IMAGE_TAG:-homelab-latest}"
+moving_tag="${EURIPUS_IMAGE_TAG:-selfhosted-latest}"
 server_image="${EURIPUS_SERVER_IMAGE:-ghcr.io/olivermarcusson/euripus-server}"
 web_image="${EURIPUS_WEB_IMAGE:-ghcr.io/olivermarcusson/euripus-web}"
 

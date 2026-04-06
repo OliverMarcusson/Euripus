@@ -1,6 +1,6 @@
 param(
     [string]$Platform = "linux/amd64",
-    [string]$MovingTag = $(if ($env:EURIPUS_IMAGE_TAG) { $env:EURIPUS_IMAGE_TAG } else { "homelab-latest" }),
+    [string]$MovingTag = $(if ($env:EURIPUS_IMAGE_TAG) { $env:EURIPUS_IMAGE_TAG } else { "selfhosted-latest" }),
     [string]$ServerImage = $(if ($env:EURIPUS_SERVER_IMAGE) { $env:EURIPUS_SERVER_IMAGE } else { "ghcr.io/olivermarcusson/euripus-server" }),
     [string]$WebImage = $(if ($env:EURIPUS_WEB_IMAGE) { $env:EURIPUS_WEB_IMAGE } else { "ghcr.io/olivermarcusson/euripus-web" })
 )
@@ -8,7 +8,7 @@ param(
 $ErrorActionPreference = "Stop"
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
-$envFilePath = if ($env:EURIPUS_PUBLISH_ENV_FILE) { $env:EURIPUS_PUBLISH_ENV_FILE } else { Join-Path $repoRoot ".env.homelab-images" }
+$envFilePath = if ($env:EURIPUS_PUBLISH_ENV_FILE) { $env:EURIPUS_PUBLISH_ENV_FILE } else { Join-Path $repoRoot ".env.selfhosted-images" }
 
 function Assert-CommandAvailable {
     param([string]$CommandName)

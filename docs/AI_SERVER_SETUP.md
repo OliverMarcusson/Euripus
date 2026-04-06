@@ -18,11 +18,11 @@ Bring up the Euripus server and PostgreSQL using Docker Compose so the desktop a
 ## Files To Know
 
 - Local/dev Compose file: `docker-compose.yml`
-- Homelab Compose file: `docker-compose.homelab.yml`
-- NordVPN homelab override: `docker-compose.homelab.nordvpn.yml`
+- Self-hosted Compose file: `docker-compose.selfhosted.yml`
+- NordVPN self-hosted override: `docker-compose.selfhosted.nordvpn.yml`
 - Server env template: `apps/server/.env.example`
 - NordVPN env template: `apps/server/.env.nordvpn.example`
-- Homelab image env template: `.env.homelab-images.example`
+- Self-hosted image env template: `.env.selfhosted-images.example`
 - Publish script: `scripts/publish-images.ps1`
 - Deploy script: `scripts/deploy.sh`
 - Database migration: `apps/server/migrations/0001_init.sql`
@@ -90,7 +90,7 @@ Create `apps/server/.env` from `apps/server/.env.example` and replace the placeh
 
 ## Reverse Proxy Guidance
 
-If exposing Euripus as a browser service, put a reverse proxy in front of the `web` service from `docker-compose.homelab.yml`.
+If exposing Euripus as a browser service, put a reverse proxy in front of the `web` service from `docker-compose.selfhosted.yml`.
 
 - Terminate TLS at the proxy.
 - Route a dedicated host to the `web` service upstream.
@@ -107,15 +107,15 @@ If you want the Euripus server to perform provider validation, sync jobs, and EP
 
 That override runs a Gluetun container with NordVPN settings from `apps/server/.env.nordvpn` and shares its network namespace with the Rust server. The browser-facing `web` service then proxies `/api` traffic to the Gluetun container.
 
-## GHCR Homelab Workflow
+## GHCR Self-Hosted Workflow
 
-For the browser-first homelab deployment, the target Fedora host should pull prebuilt images instead of building them locally.
+For the browser-first self-hosted deployment, the target Fedora host should pull prebuilt images instead of building them locally.
 
 1. On the Windows workstation, publish fresh `linux/amd64` images with:
    `bun run publish`
-2. On the Fedora host, copy `.env.homelab-images.example` to `.env.homelab-images`.
+2. On the Fedora host, copy `.env.selfhosted-images.example` to `.env.selfhosted-images`.
 3. Set `GHCR_USERNAME` and `GHCR_TOKEN` to a GitHub account and a package token. Use package write access on the Windows publisher and package read access on the Fedora deploy host.
-4. Optionally pin `EURIPUS_IMAGE_TAG` to a published git SHA instead of `homelab-latest`.
+4. Optionally pin `EURIPUS_IMAGE_TAG` to a published git SHA instead of `selfhosted-latest`.
 5. Deploy with:
    `bun run prod:start`
 
