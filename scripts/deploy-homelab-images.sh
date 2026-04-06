@@ -11,6 +11,10 @@ require_command() {
   fi
 }
 
+warn() {
+  echo "Warning: $*" >&2
+}
+
 get_compose_service_container_id() {
   "${compose_cmd[@]}" "${compose_files[@]}" ps -q "$1" 2>/dev/null | head -n1 | tr -d '\r'
 }
@@ -54,7 +58,10 @@ run_psql_scalar() {
 
 repair_sqlx_migration_checksums() {
   local migrations_table_exists
-  migrations_table_exists="$(run_psql_scalar "SELECT to_regclass('_sqlx_migrations') IS NOT NULL;")"
+  if ! migrations_table_exists="$(run_psql_scalar "SELECT to_regclass('_sqlx_migrations') IS NOT NULL;")"; then
+    warn "failed to inspect _sqlx_migrations; continuing without checksum repair"
+    return 0
+  fi
   migrations_table_exists="${migrations_table_exists//$'\n'/}"
   migrations_table_exists="${migrations_table_exists//$'\r'/}"
 
@@ -68,8 +75,18 @@ repair_sqlx_migration_checksums() {
   local temp_container_id=""
   local repaired_versions=()
 
-  temp_container_id=$("$container_cli" create "$server_image_ref")
-  "$container_cli" cp "$temp_container_id:/app/migrations/." "$temp_dir/"
+  if ! temp_container_id=$("$container_cli" create "$server_image_ref"); then
+    warn "failed to create temporary container for $server_image_ref; continuing without checksum repair"
+    rm -rf "$temp_dir"
+    return 0
+  fi
+
+  if ! "$container_cli" cp "$temp_container_id:/app/migrations/." "$temp_dir/"; then
+    warn "failed to copy migrations from $server_image_ref; continuing without checksum repair"
+    "$container_cli" rm -f "$temp_container_id" >/dev/null 2>&1 || true
+    rm -rf "$temp_dir"
+    return 0
+  fi
 
   shopt -s nullglob
   for migration_path in "$temp_dir"/*.sql; do
@@ -83,7 +100,10 @@ repair_sqlx_migration_checksums() {
     local checksum_hex
     checksum_hex="$(sha384sum "$migration_path" | awk '{print $1}')"
     local update_result
-    update_result="$(run_psql_scalar "WITH updated AS (UPDATE _sqlx_migrations SET checksum = decode('$checksum_hex', 'hex') WHERE version = $version AND success = TRUE AND checksum <> decode('$checksum_hex', 'hex') RETURNING version) SELECT COALESCE(string_agg(version::text, ','), '') FROM updated;")"
+    if ! update_result="$(run_psql_scalar "WITH updated AS (UPDATE _sqlx_migrations SET checksum = decode('$checksum_hex', 'hex') WHERE version = $version AND success = TRUE AND checksum <> decode('$checksum_hex', 'hex') RETURNING version) SELECT COALESCE(string_agg(version::text, ','), '') FROM updated;")"; then
+      warn "failed to repair checksum for migration version $version; continuing"
+      continue
+    fi
     update_result="${update_result//$'\n'/}"
     update_result="${update_result//$'\r'/}"
 
