@@ -3,6 +3,7 @@ import type {
   AuthSession,
   ChannelSearchResults,
   Channel,
+  FavoriteEntry,
   GuidePreferences,
   GuideCategoryResponse,
   GuideResponse,
@@ -250,7 +251,7 @@ export function searchPrograms(query: string, offset = 0, limit = 30) {
 }
 
 export function getFavorites() {
-  return request<Channel[]>("/favorites");
+  return request<FavoriteEntry[]>("/favorites");
 }
 
 export function addFavorite(channelId: string) {

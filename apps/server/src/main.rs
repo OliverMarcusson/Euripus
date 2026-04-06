@@ -2478,14 +2478,15 @@ async fn search_programs(
 async fn list_favorites(
     State(state): State<AppState>,
     headers: HeaderMap,
-) -> ApiResult<Vec<ChannelResponse>> {
+) -> ApiResult<Vec<GuideChannelEntryResponse>> {
     let auth = require_auth(&state, &headers).await?;
-    let mut favorites = sqlx::query_as::<_, ChannelResponse>(
+    let request_base_url = request_base_url(&state.config, &headers)?;
+    let favorites = sqlx::query_as::<_, GuideCategoryEntryRow>(
         r#"
         SELECT
-          c.id,
+          c.id AS channel_id,
           c.profile_id,
-          c.name,
+          c.name AS channel_name,
           c.logo_url,
           cc.name AS category_name,
           c.remote_stream_id,
@@ -2493,20 +2494,70 @@ async fn list_favorites(
           c.has_catchup,
           c.archive_duration_hours,
           c.stream_extension,
-          TRUE AS is_favorite
+          TRUE AS is_favorite,
+          p.id AS program_id,
+          p.channel_id AS program_channel_id,
+          p.channel_name AS program_channel_name,
+          p.title AS program_title,
+          p.description AS program_description,
+          p.start_at AS program_start_at,
+          p.end_at AS program_end_at,
+          p.can_catchup AS program_can_catchup
         FROM favorites f
         JOIN channels c ON c.id = f.channel_id
         LEFT JOIN channel_categories cc ON cc.id = c.category_id
+        LEFT JOIN LATERAL (
+          SELECT
+            p.id,
+            p.channel_id,
+            p.channel_name,
+            p.title,
+            p.description,
+            p.start_at,
+            p.end_at,
+            p.can_catchup,
+            (p.start_at <= NOW() AND p.end_at > NOW()) AS is_live
+          FROM programs p
+          WHERE p.user_id = c.user_id
+            AND p.channel_id = c.id
+            AND p.end_at > NOW() - INTERVAL '2 hours'
+            AND p.start_at < NOW() + INTERVAL '6 hours'
+          ORDER BY
+            CASE
+              WHEN p.start_at <= NOW() AND p.end_at > NOW() THEN 0
+              WHEN p.start_at > NOW() THEN 1
+              ELSE 2
+            END ASC,
+            CASE WHEN p.start_at > NOW() THEN p.start_at END ASC NULLS LAST,
+            CASE WHEN p.start_at <= NOW() AND p.end_at > NOW() THEN p.start_at END DESC NULLS LAST,
+            CASE WHEN p.end_at <= NOW() THEN p.end_at END DESC NULLS LAST,
+            p.title ASC
+          LIMIT 1
+        ) p ON TRUE
         WHERE f.user_id = $1
-        ORDER BY f.created_at DESC
+        ORDER BY
+          f.created_at DESC,
+          CASE
+            WHEN p.start_at <= NOW() AND p.end_at > NOW() THEN 0
+            WHEN p.start_at > NOW() THEN 1
+            WHEN p.start_at IS NOT NULL THEN 2
+            ELSE 3
+          END ASC,
+          CASE WHEN p.start_at > NOW() THEN p.start_at END ASC NULLS LAST,
+          CASE WHEN p.end_at <= NOW() THEN p.end_at END DESC NULLS LAST,
+          c.name ASC
         "#,
     )
     .bind(auth.user_id)
     .fetch_all(&state.pool)
     .await?;
-    rewrite_channel_logo_urls(&state, &headers, auth.user_id, &mut favorites)?;
 
-    Ok(Json(favorites))
+    Ok(Json(
+        favorites
+            .into_iter()
+            .map(|row| map_guide_category_entry(&state, &request_base_url, auth.user_id, row))
+            .collect::<Result<Vec<_>, _>>()?,
+    ))
 }
 
 async fn add_favorite(
