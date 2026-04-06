@@ -14,6 +14,7 @@ export function formatDateTime(value: string | null) {
   return new Intl.DateTimeFormat(undefined, {
     dateStyle: "medium",
     timeStyle: "short",
+    hour12: false,
   }).format(new Date(value));
 }
 
@@ -46,6 +47,7 @@ export function formatTime(value: string) {
   return new Intl.DateTimeFormat(undefined, {
     hour: "numeric",
     minute: "2-digit",
+    hour12: false,
   }).format(new Date(value));
 }
 
