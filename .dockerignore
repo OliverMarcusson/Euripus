@@ -5,6 +5,5 @@ node_modules
 target
 test-results
 apps/server/target
-apps/desktop/dist
-apps/desktop/src-tauri/target
+apps/client/dist
 **/*.log

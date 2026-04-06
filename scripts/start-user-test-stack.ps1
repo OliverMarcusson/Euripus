@@ -1,5 +1,4 @@
 param(
-    [switch]$WebOnly,
     [switch]$NoBuild,
     [switch]$OpenBrowser
 )
@@ -168,8 +167,8 @@ try {
 
     if (Test-Path $statePath) {
         $existingState = Get-Content $statePath | ConvertFrom-Json
-        $desktopProcess = $existingState.processes | Where-Object { $_.name -eq "desktop" -or $_.name -eq "web" } | Select-Object -First 1
-        if (Test-TrackedProcessRunning $desktopProcess) {
+        $clientProcess = $existingState.processes | Where-Object { $_.name -eq "client" -or $_.name -eq "web" } | Select-Object -First 1
+        if (Test-TrackedProcessRunning $clientProcess) {
             Write-Host "User-test stack is already running." -ForegroundColor Yellow
             Write-Host "Stop it first with: bun run user-test:stop"
             exit 0
@@ -188,35 +187,17 @@ try {
     Write-Host "Waiting for API health..." -ForegroundColor Cyan
     Wait-ForApiHealth -TimeoutSeconds 180
 
-    Write-Host "Starting desktop web client..." -ForegroundColor Cyan
-    $webProcess = Start-TrackedProcess `
-        -Name "web" `
+    Write-Host "Starting web client..." -ForegroundColor Cyan
+    $clientProcess = Start-TrackedProcess `
+        -Name "client" `
         -FilePath "bun" `
-        -ArgumentList @("--cwd", "apps/desktop", "dev", "--host", "127.0.0.1") `
+        -ArgumentList @("--cwd", "apps/client", "dev", "--host", "127.0.0.1") `
         -WorkingDirectory $repoRoot
 
     Write-Host "Waiting for frontend dev server..." -ForegroundColor Cyan
     Wait-ForHttpEndpoint -Name "Frontend" -Url "http://127.0.0.1:5173" -TimeoutSeconds 180
 
-    if ($WebOnly) {
-        $processes = @($webProcess)
-    } else {
-        Write-Host "Starting Tauri desktop shell..." -ForegroundColor Cyan
-        $desktopProcess = Start-TrackedProcess `
-            -Name "desktop" `
-            -FilePath "bun" `
-            -ArgumentList @(
-                "--cwd",
-                "apps/desktop",
-                "tauri",
-                "dev",
-                "--no-watch",
-                "-c",
-                "src-tauri/tauri.user-test.conf.json"
-            ) `
-            -WorkingDirectory $repoRoot
-        $processes = @($webProcess, $desktopProcess)
-    }
+    $processes = @($clientProcess)
 
     if ($OpenBrowser) {
         Start-Process "http://127.0.0.1:5173"
@@ -224,7 +205,7 @@ try {
 
     $state = [pscustomobject]@{
         startedAt = (Get-Date).ToString("o")
-        mode = if ($WebOnly) { "web" } else { "desktop" }
+        mode = "web"
         processes = $processes
         urls = [pscustomobject]@{
             api = "http://127.0.0.1:8080"
@@ -238,9 +219,6 @@ try {
     Write-Host "User-test stack is ready." -ForegroundColor Green
     Write-Host "API: http://127.0.0.1:8080"
     Write-Host "Web: http://127.0.0.1:5173"
-    if (-not $WebOnly) {
-        Write-Host "The Euripus desktop window should appear automatically."
-    }
     Write-Host "Logs:"
     foreach ($processInfo in $processes) {
         Write-Host "  $($processInfo.name): $($processInfo.stdout)"

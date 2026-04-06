@@ -7,7 +7,7 @@
     "packages/*"
   ],
   "scripts": {
-    "dev:desktop": "bun --cwd apps/desktop dev",
+    "dev:client": "bun --cwd apps/client dev",
     "dev:server": "docker compose up --build server",
     "dev:db": "docker compose up -d postgres",
     "user-test:start": "bun ./scripts/run-dev-script.mjs user-test:start",
@@ -18,13 +18,10 @@
     "homelab:publish": "powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ./scripts/publish-homelab-images.ps1",
     "homelab:publish:sh": "bash ./scripts/publish-homelab-images.sh",
     "build:shared": "bun --cwd packages/shared build",
-    "build:desktop": "bun --cwd apps/desktop build",
-    "build:android-tv": "powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ./scripts/build-android-tv.ps1",
-    "check:desktop": "bun --cwd apps/desktop typecheck",
-    "test:desktop": "bun --cwd apps/desktop test",
-    "test:server": "cargo test --manifest-path apps/server/Cargo.toml",
-    "tauri:dev": "bun --cwd apps/desktop tauri dev",
-    "tauri:build": "bun --cwd apps/desktop tauri build"
+    "build:client": "bun --cwd apps/client build",
+    "check:client": "bun --cwd apps/client typecheck",
+    "test:client": "bun --cwd apps/client test",
+    "test:server": "cargo test --manifest-path apps/server/Cargo.toml"
   },
   "devDependencies": {
     "@playwright/test": "^1.59.1"

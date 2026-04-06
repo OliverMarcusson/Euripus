@@ -18,7 +18,7 @@ const scriptMap = {
   "user-test:start:web": {
     ps1: "start-user-test-stack.ps1",
     sh: "start-user-test-stack.sh",
-    args: ["--web-only", "--open-browser"],
+    args: ["--open-browser"],
   },
   "user-test:start:dev": {
     ps1: "start-user-test-stack.ps1",
@@ -28,7 +28,7 @@ const scriptMap = {
   "user-test:start:dev:web": {
     ps1: "start-user-test-stack.ps1",
     sh: "start-user-test-stack.sh",
-    args: ["--web-only", "--open-browser"],
+    args: ["--open-browser"],
   },
   "user-test:stop": {
     ps1: "stop-user-test-stack.ps1",

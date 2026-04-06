@@ -2,16 +2,16 @@ FROM docker.io/oven/bun:1.3.11 AS build
 WORKDIR /app
 
 COPY package.json tsconfig.base.json ./
-COPY apps/desktop ./apps/desktop
+COPY apps/client ./apps/client
 COPY packages/shared ./packages/shared
 
 RUN bun install
-RUN bun run build:shared && bun run build:desktop
+RUN bun run build:shared && bun run build:client
 
 FROM docker.io/library/nginx:1.27-alpine
 
 COPY apps/web/nginx.conf /etc/nginx/templates/default.conf.template
-COPY --from=build /app/apps/desktop/dist /usr/share/nginx/html
+COPY --from=build /app/apps/client/dist /usr/share/nginx/html
 
 EXPOSE 80
 
