@@ -37,6 +37,11 @@ const scriptMap = {
     sh: "deploy.sh",
     args: [],
   },
+  "build:apk": {
+    ps1: "build-apk.ps1",
+    sh: "build-apk.sh",
+    args: [],
+  },
 };
 
 if (!command || !(command in scriptMap)) {
