@@ -1,12 +1,13 @@
 # Euripus
 
-Euripus is a self-hostable IPTV application with a Rust API, a React web client, and a Tauri desktop shell. It can now be deployed behind a reverse proxy as a browser-first homelab service while keeping the desktop client path intact.
+Euripus is a self-hostable IPTV application with a Rust API, a React web client, and a planned native Android TV receiver. It is now a full web deployment with the receiver path kept separate from the browser app.
 
 ## Workspace
 
-- `apps/desktop`: React client used by both the browser build and the Tauri desktop shell.
+- `apps/client`: React web client and PWA.
 - `apps/server`: Axum + PostgreSQL API with Xtreme Codes sync, auth, favorites, search, and playback contracts.
 - `apps/web`: Nginx-based production web service that serves the SPA and proxies `/api` to the Rust server.
+- `apps/android-tv-native`: Native Android TV receiver scaffold.
 - `packages/shared`: Shared TypeScript contracts for the frontend.
 
 ## Local Development
@@ -15,37 +16,36 @@ Euripus is a self-hostable IPTV application with a Rust API, a React web client,
 2. Run `bun install`.
 3. Start backend dependencies with `bun run dev:db`.
 4. Run the Rust API with `bun run dev:server`.
-5. Run the React client with `bun run dev:desktop`.
-6. Run the Tauri shell with `bun run tauri:dev`.
+5. Run the React client with `bun run dev:client`.
 
 The Vite dev server proxies `/api` and `/health` to `http://127.0.0.1:8080`, so the browser client uses the same same-origin API shape in development and production.
 
 ## User Testing
 
-Use one command to bring up the full local stack for real user testing:
+Use one command to bring up the full local web stack for real user testing:
 
 - `bun run user-test:start`
 
 That command will:
 
 - build and start PostgreSQL + the API in Docker
-- launch the desktop frontend and Tauri shell
+- launch the web client dev server
 - wait for the API and frontend to become ready before returning
 
 Useful variants:
 
 - `bun run user-test:start:web`
-  Starts the API + web client only and opens the browser at `http://127.0.0.1:5173`.
+  Starts the same API + web client stack and opens the browser at `http://127.0.0.1:5173`.
 - `bun run user-test:start:dev`
   Starts the same user-test stack through the dynamic foreground launcher.
 - `bun run user-test:start:dev:web`
-  Starts the dynamic foreground launcher in web-only mode and opens the browser.
+  Starts the dynamic foreground launcher and opens the browser.
 - `bun run user-test:stop`
-  Stops the launched desktop/web process and shuts down the Docker services.
+  Stops the launched web process and shuts down the Docker services.
 
 ## Homelab Deployment
 
-Use `docker-compose.homelab.yml` for the browser-first self-hosted deployment. The homelab host now pulls prebuilt Linux images from GHCR instead of building them locally.
+Use `docker-compose.homelab.yml` for the self-hosted web deployment. The homelab host now pulls prebuilt Linux images from GHCR instead of building them locally.
 
 1. Copy `apps/server/.env.example` to `apps/server/.env` and replace the placeholder secrets.
 2. Copy `.env.homelab-images.example` to `.env.homelab-images`.
@@ -77,7 +77,7 @@ cp apps/server/.env.nordvpn.example apps/server/.env.nordvpn
 EURIPUS_ENABLE_NORDVPN=true ./scripts/deploy-homelab-images.sh
 ```
 
-That only affects server-originated traffic such as provider validation, sync jobs, and EPG fetches. Playback still goes directly from the client device to the IPTV provider.
+That only affects server-originated traffic such as provider validation, sync jobs, and EPG fetches. Browser playback still goes directly from the client device to the IPTV provider.
 
 ## Operational Docs
 

@@ -1,6 +1,6 @@
 # Euripus Android TV Receiver
 
-This module is the starting point for the dedicated native Android TV receiver app.
+This module is the active starting point for the dedicated native Android TV receiver app.
 
 Scope for v1:
 

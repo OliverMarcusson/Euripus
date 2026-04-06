@@ -17,5 +17,3 @@ bun.lock
 .claude/
 SKILL.md
 test-results/
-apps/android-twa/.generated/
-apps/android-twa/android/

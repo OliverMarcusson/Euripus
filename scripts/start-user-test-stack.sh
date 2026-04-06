@@ -2,13 +2,11 @@
 
 set -euo pipefail
 
-web_only=0
 no_build=0
 open_browser=0
 
 for arg in "$@"; do
     case "$arg" in
-        --web-only) web_only=1 ;;
         --no-build) no_build=1 ;;
         --open-browser) open_browser=1 ;;
         *)
@@ -198,32 +196,22 @@ docker "${compose_args[@]}"
 echo "Waiting for API health..."
 wait_for_api_health 180
 
-echo "Starting desktop web client..."
-web_process="$(start_tracked_process web "$repo_root" bun --cwd apps/desktop dev --host 127.0.0.1)"
+echo "Starting web client..."
+client_process="$(start_tracked_process client "$repo_root" bun --cwd apps/client dev --host 127.0.0.1)"
 
 echo "Waiting for frontend dev server..."
 wait_for_http_endpoint "Frontend" "http://127.0.0.1:5173" 180
 
-processes=("$web_process")
-if [[ $web_only -eq 0 ]]; then
-    echo "Starting Tauri desktop shell..."
-    desktop_process="$(start_tracked_process desktop "$repo_root" bun --cwd apps/desktop tauri dev --no-watch -c src-tauri/tauri.user-test.conf.json)"
-    processes+=("$desktop_process")
-fi
+processes=("$client_process")
 
 if [[ $open_browser -eq 1 ]]; then
     open_browser_url "http://127.0.0.1:5173"
 fi
 
-mode="desktop"
-if [[ $web_only -eq 1 ]]; then
-    mode="web"
-fi
-
 {
     printf '{\n'
     printf '  "startedAt": "%s",\n' "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-    printf '  "mode": "%s",\n' "$mode"
+    printf '  "mode": "web",\n'
     printf '  "processes": [\n'
     for i in "${!processes[@]}"; do
         if [[ "$i" -gt 0 ]]; then
@@ -243,9 +231,6 @@ echo
 echo "User-test stack is ready."
 echo "API: http://127.0.0.1:8080"
 echo "Web: http://127.0.0.1:5173"
-if [[ $web_only -eq 0 ]]; then
-    echo "The Euripus desktop window should appear automatically."
-fi
 echo "Logs:"
 for process_json in "${processes[@]}"; do
     name="$(printf '%s' "$process_json" | sed -n 's/.*"name":"\([^"]*\)".*/\1/p')"

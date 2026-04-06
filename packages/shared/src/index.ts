@@ -25,10 +25,6 @@ export type AuthSession = {
   expiresAt: string;
 };
 
-export type DesktopAuthSession = AuthSession & {
-  refreshToken: string;
-};
-
 export type ProviderStatus = "missing" | "valid" | "error" | "syncing";
 
 export type EpgSource = {

@@ -42,7 +42,7 @@ impl Config {
             .transpose()?;
         let mut allowed_origins = parse_allowed_origins(&read_env_or_default(
             "APP_ALLOWED_ORIGINS",
-            "http://127.0.0.1:5173,http://localhost:5173,tauri://localhost",
+            "http://127.0.0.1:5173,http://localhost:5173",
         )?);
         if let Some(origin) = &public_origin {
             let origin = normalize_origin(origin.as_str());

@@ -93,7 +93,7 @@ Use NordVPN service credentials for OpenVPN, not your regular Nord Account email
 Important limitation:
 
 - This only routes server-originated traffic through NordVPN.
-- Browser and Tauri playback still connect directly to the IPTV provider.
+- Browser playback still connects directly to the IPTV provider.
 - If you need stream playback itself to use NordVPN, the client device must also be on VPN.
 
 ## Reverse Proxy Expectations
@@ -108,7 +108,6 @@ Route your dedicated Euripus host to the single upstream `http://YOUR-HOST:8088`
 
 - Browser auth uses an HTTP-only refresh cookie plus a readable CSRF cookie.
 - The SPA uses `/api/*` for all browser traffic.
-- Desktop auth remains available on the legacy unprefixed API routes for the Tauri shell.
 - `/health` is exposed by the public `web` service and proxied through to the Rust backend.
 - With the NordVPN override enabled, the `web` service proxies `/api` and `/health` to the `gluetun` container, which exposes the Rust server on port `8080` inside the VPN network namespace.
 

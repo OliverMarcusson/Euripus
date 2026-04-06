@@ -154,14 +154,6 @@ struct AuthSessionResponse {
     expires_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct DesktopAuthSessionResponse {
-    #[serde(flatten)]
-    session: AuthSessionResponse,
-    refresh_token: String,
-}
-
 #[derive(Debug)]
 struct IssuedSession {
     session: AuthSessionResponse,
@@ -409,12 +401,6 @@ struct ReceiverEventPayload {
 struct CredentialsPayload {
     username: String,
     password: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct RefreshPayload {
-    refresh_token: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -959,8 +945,6 @@ async fn main() -> Result<()> {
     }
     let app = Router::new()
         .route("/health", get(health))
-        .merge(legacy_auth_router())
-        .merge(shared_api_router())
         .nest("/api", browser_api_router())
         .with_state(router_state)
         .layer(cors)
@@ -1303,21 +1287,13 @@ fn shared_api_router() -> Router<AppState> {
         .route("/receiver/pair", post(pair_receiver))
 }
 
-fn legacy_auth_router() -> Router<AppState> {
+fn browser_api_router() -> Router<AppState> {
     Router::new()
+        .route("/health", get(health))
         .route("/auth/register", post(register))
         .route("/auth/login", post(login))
         .route("/auth/refresh", post(refresh_session))
         .route("/auth/logout", post(logout))
-}
-
-fn browser_api_router() -> Router<AppState> {
-    Router::new()
-        .route("/health", get(health))
-        .route("/auth/register", post(browser_register))
-        .route("/auth/login", post(browser_login))
-        .route("/auth/refresh", post(browser_refresh_session))
-        .route("/auth/logout", post(browser_logout))
         .route("/receiver/session", post(create_receiver_session))
         .route("/receiver/pairing-code", post(issue_receiver_pairing_code))
         .route("/receiver/events", get(stream_receiver_events))
@@ -1372,8 +1348,9 @@ fn build_cors_layer(config: &Config) -> Result<CorsLayer> {
 async fn register(
     State(state): State<AppState>,
     headers: HeaderMap,
+    jar: CookieJar,
     Json(payload): Json<CredentialsPayload>,
-) -> ApiResult<DesktopAuthSessionResponse> {
+) -> Result<(CookieJar, Json<AuthSessionResponse>), AppError> {
     let username = payload.username.trim().to_lowercase();
     if username.len() < 3 {
         return Err(AppError::BadRequest(
@@ -1401,14 +1378,15 @@ async fn register(
     })?;
 
     let session = create_session(&state, &headers, &user).await?;
-    Ok(Json(desktop_auth_session_response(session)))
+    Ok(browser_auth_response(&state, jar, session))
 }
 
 async fn login(
     State(state): State<AppState>,
     headers: HeaderMap,
+    jar: CookieJar,
     Json(payload): Json<CredentialsPayload>,
-) -> ApiResult<DesktopAuthSessionResponse> {
+) -> Result<(CookieJar, Json<AuthSessionResponse>), AppError> {
     let username = payload.username.trim().to_lowercase();
     let user = sqlx::query_as::<_, UserRecord>(
         r#"SELECT id, username, password_hash, created_at FROM users WHERE username = $1"#,
@@ -1420,83 +1398,10 @@ async fn login(
 
     verify_password(&user.password_hash, &payload.password)?;
     let session = create_session(&state, &headers, &user).await?;
-    Ok(Json(desktop_auth_session_response(session)))
+    Ok(browser_auth_response(&state, jar, session))
 }
 
 async fn refresh_session(
-    State(state): State<AppState>,
-    Json(payload): Json<RefreshPayload>,
-) -> ApiResult<DesktopAuthSessionResponse> {
-    let session = refresh_session_from_token(&state, &payload.refresh_token).await?;
-    Ok(Json(desktop_auth_session_response(session)))
-}
-
-async fn logout(
-    State(state): State<AppState>,
-    Json(payload): Json<RefreshPayload>,
-) -> Result<StatusCode, AppError> {
-    revoke_session_by_refresh_token(&state, &payload.refresh_token).await?;
-
-    Ok(StatusCode::NO_CONTENT)
-}
-
-async fn browser_register(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    jar: CookieJar,
-    Json(payload): Json<CredentialsPayload>,
-) -> Result<(CookieJar, Json<AuthSessionResponse>), AppError> {
-    let username = payload.username.trim().to_lowercase();
-    if username.len() < 3 {
-        return Err(AppError::BadRequest(
-            "Username must be at least 3 characters".to_string(),
-        ));
-    }
-
-    let password_hash = hash_password(&payload.password)?;
-    let user = sqlx::query_as::<_, UserRecord>(
-        r#"
-        INSERT INTO users (username, password_hash)
-        VALUES ($1, $2)
-        RETURNING id, username, password_hash, created_at
-        "#,
-    )
-    .bind(&username)
-    .bind(password_hash)
-    .fetch_one(&state.pool)
-    .await
-    .map_err(|error| match error {
-        sqlx::Error::Database(database_error) if database_error.is_unique_violation() => {
-            AppError::BadRequest("That username is already taken".to_string())
-        }
-        other => AppError::Internal(anyhow!(other)),
-    })?;
-
-    let session = create_session(&state, &headers, &user).await?;
-    Ok(browser_auth_response(&state, jar, session))
-}
-
-async fn browser_login(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    jar: CookieJar,
-    Json(payload): Json<CredentialsPayload>,
-) -> Result<(CookieJar, Json<AuthSessionResponse>), AppError> {
-    let username = payload.username.trim().to_lowercase();
-    let user = sqlx::query_as::<_, UserRecord>(
-        r#"SELECT id, username, password_hash, created_at FROM users WHERE username = $1"#,
-    )
-    .bind(&username)
-    .fetch_optional(&state.pool)
-    .await?
-    .ok_or_else(|| AppError::BadRequest("Invalid username or password".to_string()))?;
-
-    verify_password(&user.password_hash, &payload.password)?;
-    let session = create_session(&state, &headers, &user).await?;
-    Ok(browser_auth_response(&state, jar, session))
-}
-
-async fn browser_refresh_session(
     State(state): State<AppState>,
     jar: CookieJar,
     headers: HeaderMap,
@@ -1507,7 +1412,7 @@ async fn browser_refresh_session(
     Ok(browser_auth_response(&state, jar, session))
 }
 
-async fn browser_logout(
+async fn logout(
     State(state): State<AppState>,
     jar: CookieJar,
     headers: HeaderMap,
@@ -5088,13 +4993,6 @@ fn issue_session(
         },
         refresh_token,
     })
-}
-
-fn desktop_auth_session_response(session: IssuedSession) -> DesktopAuthSessionResponse {
-    DesktopAuthSessionResponse {
-        session: session.session,
-        refresh_token: session.refresh_token,
-    }
 }
 
 fn browser_auth_response(
