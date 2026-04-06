@@ -12,6 +12,7 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@/components/ui/empty";
+import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
@@ -96,11 +97,11 @@ export function SettingsPage() {
       />
 
       <div className="grid gap-6 xl:grid-cols-[320px_minmax(0,1fr)]">
-        <Card className="self-start rounded-none border-0 bg-transparent shadow-none sm:rounded-xl sm:border sm:bg-card sm:shadow-sm">
-          <CardHeader className="px-0 pb-4 pt-0 sm:p-5 sm:pb-0">
-            <CardTitle>Appearance</CardTitle>
+        <Card className="self-start rounded-none border-0 bg-transparent shadow-none sm:rounded-3xl sm:border sm:border-border/50 sm:bg-card/40 sm:backdrop-blur-xl sm:shadow-2xl">
+          <CardHeader className="px-0 pb-4 pt-0 sm:p-6 sm:pb-0">
+            <CardTitle className="text-xl font-medium tracking-tight">Appearance</CardTitle>
           </CardHeader>
-          <CardContent className="flex flex-col gap-4 px-0 pb-0 sm:p-5">
+          <CardContent className="flex flex-col gap-6 px-0 pb-0 sm:p-6">
             <ToggleGroup
               type="single"
               value={preference}
@@ -109,7 +110,7 @@ export function SettingsPage() {
                   setPreference(value as ThemePreference);
                 }
               }}
-              className="grid w-full grid-cols-1 gap-2 rounded-2xl bg-secondary/60 p-2"
+              className="grid w-full grid-cols-1 gap-1.5 rounded-2xl bg-black/20 p-1.5 shadow-inner"
             >
               {themeOptions.map((option) => {
                 const Icon = option.icon;
@@ -118,7 +119,7 @@ export function SettingsPage() {
                   <ToggleGroupItem
                     key={option.value}
                     value={option.value}
-                    className="justify-start rounded-xl px-3 py-2.5"
+                    className="justify-start rounded-xl px-4 py-3 data-[state=on]:bg-secondary/80 data-[state=on]:shadow-sm transition-all"
                   >
                     <Icon data-icon="inline-start" />
                     {option.label}
@@ -129,29 +130,41 @@ export function SettingsPage() {
 
             <Separator />
 
-            <div className="flex flex-col gap-3">
+            <div className="flex flex-col gap-5">
               <div className="flex items-center justify-between gap-3">
-                <span className="text-sm font-medium">Pair screen</span>
-                <Badge variant="outline">{remoteDevices.length} paired</Badge>
+                <span className="text-base font-medium tracking-tight">Pair screen</span>
+                <Badge variant="outline" className="bg-background/50">{remoteDevices.length} paired</Badge>
               </div>
-              <p className="text-sm text-muted-foreground">
+              <p className="text-sm text-muted-foreground leading-relaxed">
                 Enter the 4-character code shown on the receiver screen.
               </p>
-              <Input
-                aria-label="Pairing code"
-                value={pairCode}
-                onChange={(event) =>
-                  setPairCode(event.target.value.toUpperCase().slice(0, 4))
-                }
-                placeholder="XT8P"
-              />
-              <Input
-                aria-label="Receiver name"
-                value={pairName}
-                onChange={(event) => setPairName(event.target.value)}
-                placeholder="Living room TV"
-              />
-              <div className="flex items-center justify-between gap-3 rounded-lg border border-border/70 bg-muted/20 px-4 py-3">
+              
+              <FieldGroup className="gap-4">
+                <Field>
+                  <FieldLabel className="sr-only">Pairing code</FieldLabel>
+                  <Input
+                    aria-label="Pairing code"
+                    value={pairCode}
+                    onChange={(event) =>
+                      setPairCode(event.target.value.toUpperCase().slice(0, 4))
+                    }
+                    placeholder="XT8P"
+                    className="bg-background/50 font-mono text-center text-lg tracking-[0.2em]"
+                  />
+                </Field>
+                <Field>
+                  <FieldLabel className="sr-only">Receiver name</FieldLabel>
+                  <Input
+                    aria-label="Receiver name"
+                    value={pairName}
+                    onChange={(event) => setPairName(event.target.value)}
+                    placeholder="Living room TV"
+                    className="bg-background/50"
+                  />
+                </Field>
+              </FieldGroup>
+              
+              <div className="flex items-center justify-between gap-3 rounded-2xl border border-border/40 bg-black/10 px-4 py-3 shadow-inner">
                 <label
                   htmlFor="remember-device-toggle"
                   className="text-sm font-medium"
@@ -165,21 +178,20 @@ export function SettingsPage() {
                   aria-checked={rememberDevice}
                   aria-label="Remember this device"
                   onClick={() => setRememberDevice((value) => !value)}
-                  className="relative inline-flex h-8 w-14 shrink-0 items-center rounded-full border border-white/10 bg-muted transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+                  className="relative inline-flex h-8 w-14 shrink-0 items-center rounded-full border border-white/10 bg-muted/50 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background data-[state=checked]:bg-primary"
                   data-state={rememberDevice ? "checked" : "unchecked"}
                 >
-                  <span
-                    className="absolute inset-0 rounded-full bg-gradient-to-r from-violet-500 to-fuchsia-400 opacity-0 transition-opacity data-[state=checked]:opacity-100"
-                    data-state={rememberDevice ? "checked" : "unchecked"}
-                  />
                   <span
                     className="relative z-10 mx-1 block size-6 rounded-full bg-white shadow-sm transition-transform data-[state=checked]:translate-x-6"
                     data-state={rememberDevice ? "checked" : "unchecked"}
                   />
                 </button>
               </div>
+              
               <Button
                 type="button"
+                size="lg"
+                className="mt-1 rounded-xl shadow-lg shadow-primary/20"
                 onClick={() =>
                   pairMutation.mutate({
                     code: pairCode,
@@ -197,22 +209,21 @@ export function SettingsPage() {
 
         <Separator className="sm:hidden" />
 
-        <Card className="overflow-hidden rounded-none border-0 bg-transparent shadow-none sm:rounded-xl sm:border sm:bg-card sm:shadow-sm">
-          <CardHeader className="flex flex-row items-center justify-between gap-4 px-0 pb-4 pt-0 sm:p-5 sm:pb-0">
-            <CardTitle>Recent channels</CardTitle>
-            <Badge variant="outline">{recents.length}</Badge>
+        <Card className="flex flex-col overflow-hidden rounded-none border-0 bg-transparent shadow-none sm:rounded-3xl sm:border sm:border-border/50 sm:bg-card/40 sm:backdrop-blur-xl sm:shadow-2xl">
+          <CardHeader className="flex shrink-0 flex-row items-center justify-between gap-4 px-0 pb-4 pt-0 sm:p-6 sm:pb-0">
+            <CardTitle className="text-xl font-medium tracking-tight">Recent channels</CardTitle>
+            <Badge variant="outline" className="bg-background/60 backdrop-blur-md">{recents.length}</Badge>
           </CardHeader>
-          <CardContent className="p-0">
+          <CardContent className="flex flex-col p-0 pb-2 sm:px-4 sm:pb-4">
             {recents.length ? (
               <ScrollArea
-                className="h-[24rem] sm:h-[26rem]"
+                className="h-[22rem] sm:h-[26rem] xl:h-[33rem] pr-3"
                 data-testid="recent-channels-scroll-area"
               >
-                <div className="flex flex-col">
+                <div className="flex flex-col gap-1.5 py-2">
                   {recents.map((recent, index) => (
-                    <div key={recent.channel.id}>
-                      {index > 0 ? <Separator /> : null}
-                      <div className="flex flex-col gap-4 p-5 lg:flex-row lg:items-center lg:justify-between">
+                    <div key={recent.channel.id} className="group">
+                      <div className="flex flex-col gap-4 p-4 rounded-2xl transition-all duration-300 hover:bg-secondary/40 hover:shadow-md lg:flex-row lg:items-center lg:justify-between">
                         <div className="flex min-w-0 items-center gap-4">
                           <ChannelAvatar
                             name={recent.channel.name}
@@ -240,7 +251,7 @@ export function SettingsPage() {
                             </p>
                           </div>
                         </div>
-                        <div className="flex shrink-0 items-center gap-2">
+                        <div className="flex shrink-0 items-center gap-2 opacity-100 transition-opacity duration-300 lg:opacity-0 lg:group-hover:opacity-100">
                           <Button
                             variant="secondary"
                             size="sm"
@@ -292,15 +303,15 @@ export function SettingsPage() {
       <ProviderSettingsSection />
 
       {remoteDevices.length ? (
-        <Card className="rounded-none border-0 bg-transparent shadow-none sm:rounded-xl sm:border sm:bg-card sm:shadow-sm">
-          <CardHeader className="px-0 pb-4 pt-0 sm:p-5 sm:pb-0">
-            <CardTitle>Paired receivers</CardTitle>
+        <Card className="rounded-none border-0 bg-transparent shadow-none sm:rounded-3xl sm:border sm:border-border/50 sm:bg-card/40 sm:backdrop-blur-xl sm:shadow-2xl">
+          <CardHeader className="px-0 pb-4 pt-0 sm:p-6 sm:pb-0">
+            <CardTitle className="text-xl font-medium tracking-tight">Paired receivers</CardTitle>
           </CardHeader>
-          <CardContent className="flex flex-col gap-3 px-0 pb-0 sm:p-5">
+          <CardContent className="flex flex-col gap-3 px-0 pb-0 sm:p-6">
             {remoteDevices.map((device) => (
               <div
                 key={device.id}
-                className="flex items-center justify-between gap-3 rounded-xl border border-border/70 p-4"
+                className="flex items-center justify-between gap-3 rounded-2xl border border-border/40 bg-background/30 p-5 shadow-sm backdrop-blur-md transition-colors hover:bg-secondary/40"
               >
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-2">
