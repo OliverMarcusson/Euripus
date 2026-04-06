@@ -86,6 +86,7 @@ export type Channel = {
   categoryName: string | null;
   remoteStreamId: number;
   epgChannelId: string | null;
+  hasEpg: boolean;
   hasCatchup: boolean;
   archiveDurationHours: number | null;
   streamExtension: string | null;

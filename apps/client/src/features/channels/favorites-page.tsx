@@ -89,37 +89,37 @@ export function FavoritesPage() {
                 {index > 0 ? <Separator /> : null}
                 <div className="flex flex-col gap-4 p-4 sm:gap-5 sm:p-5 transition-colors hover:bg-muted/30">
                   <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
-                    <div className="flex min-w-0 items-start gap-3 sm:gap-4">
+                    <div className="flex min-w-0 flex-1 items-start gap-3 sm:gap-4">
                       <ChannelAvatar
                         name={channel.name}
                         logoUrl={channel.logoUrl}
-                        className="size-12 shrink-0 rounded-xl ring-1 ring-border/10 sm:size-14 sm:rounded-2xl"
+                        className="h-12 w-12 shrink-0 rounded-xl ring-1 ring-border/10 sm:h-14 sm:w-14 sm:rounded-2xl"
                         fallbackClassName="rounded-xl sm:rounded-2xl"
                       />
-                      <div className="flex min-w-0 flex-col gap-1.5 pt-0.5">
+                      <div className="flex min-w-0 flex-1 flex-col gap-1.5 pt-0.5">
                         <div className="flex min-w-0 flex-wrap items-center gap-2">
                           <h2 className="min-w-0 break-words text-base font-semibold tracking-tight sm:text-lg">
                             {channel.name}
                           </h2>
                           {channel.streamExtension ? (
-                            <Badge variant="outline" className="bg-background/50 text-[10px] uppercase">
+                            <Badge variant="outline" className="bg-background/50 border-transparent text-[10px] uppercase">
                               {channel.streamExtension}
                             </Badge>
                           ) : null}
                         </div>
                         <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
                           {channel.categoryName ? (
-                            <Badge variant="outline" className="bg-secondary/40 border-transparent text-[11px] font-normal hover:bg-secondary/40 px-1.5 py-0 h-5">
+                            <Badge variant="outline" className="h-5 border-transparent bg-secondary/40 px-1.5 py-0 text-[11px] font-normal hover:bg-secondary/40">
                               {channel.categoryName}
                             </Badge>
                           ) : null}
                           {channel.hasCatchup ? (
-                            <Badge variant="live" className="text-[10px] font-medium h-5 tracking-wide px-1.5 py-0">
+                            <Badge variant="live" className="h-5 px-1.5 py-0 text-[10px] font-medium tracking-wide">
                               Catch-up
                             </Badge>
                           ) : null}
                           {channel.archiveDurationHours ? (
-                            <Badge className="text-[10px] font-medium h-5 bg-primary/10 text-primary hover:bg-primary/20 hover:text-primary px-1.5 py-0">
+                            <Badge className="h-5 bg-primary/10 px-1.5 py-0 text-[10px] font-medium text-primary hover:bg-primary/20 hover:text-primary">
                               {formatArchiveDuration(channel.archiveDurationHours)}
                             </Badge>
                           ) : null}
@@ -151,15 +151,10 @@ export function FavoritesPage() {
                       </Button>
                     </div>
                   </div>
-                  {program ? (
-                    <div className="rounded-xl border border-border/40 bg-secondary/20 p-3.5 sm:p-4">
-                      <FavoriteProgramDetails program={program} />
-                    </div>
-                  ) : null}
-                  <div className="flex items-center gap-2 pt-1 sm:hidden">
+                  <div className="flex w-full items-center gap-2 sm:hidden">
                     <Button
                       variant="secondary"
-                      className="flex-1 bg-secondary/50"
+                      className="flex-1 bg-secondary/50 shadow-sm"
                       onClick={() => favoriteMutation.mutate(channel)}
                       disabled={
                         favoriteMutation.isPending &&
@@ -178,6 +173,11 @@ export function FavoritesPage() {
                       Play
                     </Button>
                   </div>
+                  {program ? (
+                    <div className="rounded-xl border border-border/40 bg-secondary/20 p-3.5 sm:p-4">
+                      <FavoriteProgramDetails program={program} />
+                    </div>
+                  ) : null}
                 </div>
               </div>
             ))}

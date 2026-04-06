@@ -138,7 +138,8 @@ describe("SearchPage", () => {
           logoUrl: null,
           categoryName: "Sports",
           remoteStreamId: 1,
-          epgChannelId: null,
+          epgChannelId: "arena-1",
+          hasEpg: true,
           hasCatchup: true,
           archiveDurationHours: 24,
           streamExtension: "m3u8",
@@ -163,6 +164,47 @@ describe("SearchPage", () => {
     await waitFor(() => expect(mockedSearchChannels).toHaveBeenCalledWith("arena", 0, 30));
     expect(await screen.findByRole("button", { name: /favorite/i })).toBeInTheDocument();
     expect(screen.getByText("Channel matches")).toBeInTheDocument();
+    expect(screen.getByText("EPG")).toBeInTheDocument();
+  });
+
+  it("does not render the EPG badge when a channel only has an epg mapping id", async () => {
+    mockedSearchChannels.mockResolvedValue({
+      query: "film",
+      items: [
+        {
+          id: "channel-film",
+          name: "TV4 Film",
+          logoUrl: null,
+          categoryName: "Movies",
+          remoteStreamId: 2,
+          epgChannelId: "tv4-film",
+          hasEpg: false,
+          hasCatchup: false,
+          archiveDurationHours: null,
+          streamExtension: "m3u8",
+          isFavorite: false,
+        },
+      ],
+      totalCount: 1,
+      nextOffset: null,
+    });
+    mockedSearchPrograms.mockResolvedValue({
+      query: "film",
+      items: [],
+      totalCount: 0,
+      nextOffset: null,
+    });
+
+    renderSearchPage();
+    fireEvent.change(screen.getByPlaceholderText(/^search$/i), {
+      target: { value: "film" },
+    });
+
+    await waitFor(() =>
+      expect(mockedSearchChannels).toHaveBeenCalledWith("film", 0, 30),
+    );
+    expect(await screen.findByText("TV4 Film")).toBeInTheDocument();
+    expect(screen.queryByText("EPG")).not.toBeInTheDocument();
   });
 
   it("redirects play actions to the selected remote target", async () => {
@@ -192,6 +234,7 @@ describe("SearchPage", () => {
           categoryName: "Sports",
           remoteStreamId: 1,
           epgChannelId: null,
+          hasEpg: false,
           hasCatchup: true,
           archiveDurationHours: 24,
           streamExtension: "m3u8",

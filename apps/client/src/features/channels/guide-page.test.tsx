@@ -77,6 +77,7 @@ describe("GuidePage", () => {
             categoryName: "Sports",
             remoteStreamId: 1,
             epgChannelId: null,
+            hasEpg: true,
             hasCatchup: true,
             archiveDurationHours: 24,
             streamExtension: "m3u8",
@@ -123,6 +124,7 @@ describe("GuidePage", () => {
               categoryName: "Sports",
               remoteStreamId: 1,
               epgChannelId: null,
+              hasEpg: true,
               hasCatchup: true,
               archiveDurationHours: 24,
               streamExtension: "m3u8",
@@ -159,6 +161,7 @@ describe("GuidePage", () => {
               categoryName: "Sports",
               remoteStreamId: 2,
               epgChannelId: null,
+              hasEpg: true,
               hasCatchup: false,
               archiveDurationHours: null,
               streamExtension: "m3u8",
@@ -208,6 +211,7 @@ describe("GuidePage", () => {
             categoryName: "Sports",
             remoteStreamId: 3,
             epgChannelId: null,
+            hasEpg: false,
             hasCatchup: false,
             archiveDurationHours: null,
             streamExtension: "m3u8",
@@ -224,7 +228,7 @@ describe("GuidePage", () => {
     fireEvent.click((await screen.findAllByRole("button", { name: /show channels/i }))[0]);
 
     expect(await screen.findByText("Arena 3")).toBeInTheDocument();
-    expect(screen.getByText("No program")).toBeInTheDocument();
+    expect(screen.getByText("No program data")).toBeInTheDocument();
   });
 
   it("shows only saved included categories", async () => {
