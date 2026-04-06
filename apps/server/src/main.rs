@@ -3407,7 +3407,7 @@ async fn relay_hls_playlist(
         &state.relay_http_client,
         relay.upstream_url.clone(),
         &headers,
-        &["user-agent"],
+        &[],
     )
         .send()
         .await
@@ -3480,7 +3480,7 @@ async fn relay_stream_response(
         &state.relay_http_client,
         upstream_url,
         headers,
-        &["range", "if-range", "user-agent"],
+        &["range", "if-range"],
     )
         .send()
         .await
@@ -7178,13 +7178,12 @@ mod tests {
             HeaderName::from_static("if-range"),
             HeaderValue::from_static("\"etag-1\""),
         );
-        headers.insert(header::USER_AGENT, HeaderValue::from_static("EuripusTest/1.0"));
 
         let request = relay_upstream_request(
             &client,
             Url::parse("https://provider.example.com/video.ts").expect("upstream url"),
             &headers,
-            &["range", "if-range", "user-agent"],
+            &["range", "if-range"],
         )
         .build()
         .expect("relay request");
@@ -7203,13 +7202,7 @@ mod tests {
                 .and_then(|value| value.to_str().ok()),
             Some("\"etag-1\"")
         );
-        assert_eq!(
-            request
-                .headers()
-                .get(header::USER_AGENT)
-                .and_then(|value| value.to_str().ok()),
-            Some("EuripusTest/1.0")
-        );
+        assert!(request.headers().get(header::USER_AGENT).is_none());
     }
 
     #[tokio::test]
@@ -7228,14 +7221,7 @@ mod tests {
                     let if_range = headers
                         .get("if-range")
                         .and_then(|value| value.to_str().ok());
-                    let user_agent = headers
-                        .get(header::USER_AGENT)
-                        .and_then(|value| value.to_str().ok());
-
-                    if range == Some("bytes=1-4")
-                        && if_range == Some("\"etag-1\"")
-                        && user_agent == Some("EuripusTest/1.0")
-                    {
+                    if range == Some("bytes=1-4") && if_range == Some("\"etag-1\"") {
                         Response::builder()
                             .status(StatusCode::PARTIAL_CONTENT)
                             .header(header::CONTENT_TYPE, "video/mp2t")
@@ -7266,7 +7252,6 @@ mod tests {
             HeaderName::from_static("if-range"),
             HeaderValue::from_static("\"etag-1\""),
         );
-        headers.insert(header::USER_AGENT, HeaderValue::from_static("EuripusTest/1.0"));
 
         let response = relay_stream_response(
             &state,
