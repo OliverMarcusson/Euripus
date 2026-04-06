@@ -108,7 +108,7 @@ Publish-Image -ImageName $ServerImage -DockerfilePath "apps/server/Dockerfile" -
 Publish-Image -ImageName $WebImage -DockerfilePath "apps/web/Dockerfile" -ShaTag $shaTag -MovingTagValue $MovingTag
 
 Write-Host ""
-Write-Host "Published homelab images." -ForegroundColor Green
+Write-Host "Published Euripus images." -ForegroundColor Green
 Write-Host "Server: ${ServerImage}:${shaTag}"
 Write-Host "Server: ${ServerImage}:${MovingTag}"
 Write-Host "Web: ${WebImage}:${shaTag}"

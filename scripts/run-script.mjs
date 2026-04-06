@@ -10,35 +10,29 @@ const scriptsDir = path.join(repoRoot, "scripts");
 const command = process.argv[2];
 
 const scriptMap = {
-  "user-test:start": {
-    ps1: "start-user-test-stack.ps1",
-    sh: "start-user-test-stack.sh",
+  "dev:start": {
+    ps1: "dev-start.ps1",
+    sh: "dev-start.sh",
     args: [],
   },
-  "user-test:start:web": {
-    ps1: "start-user-test-stack.ps1",
-    sh: "start-user-test-stack.sh",
-    args: ["--open-browser"],
-  },
-  "user-test:start:dev": {
-    ps1: "start-user-test-stack.ps1",
-    sh: "start-user-test-stack.sh",
+  "dev:stop": {
+    ps1: "dev-stop.ps1",
+    sh: "dev-stop.sh",
     args: [],
   },
-  "user-test:start:dev:web": {
-    ps1: "start-user-test-stack.ps1",
-    sh: "start-user-test-stack.sh",
-    args: ["--open-browser"],
+  publish: {
+    ps1: "publish-images.ps1",
+    sh: "publish-images.sh",
+    args: [],
   },
-  "user-test:stop": {
-    ps1: "stop-user-test-stack.ps1",
-    sh: "stop-user-test-stack.sh",
+  deploy: {
+    sh: "deploy.sh",
     args: [],
   },
 };
 
 if (!command || !(command in scriptMap)) {
-  console.error(`Unknown dev script target: ${command ?? "<missing>"}`);
+  console.error(`Unknown script target: ${command ?? "<missing>"}`);
   process.exit(1);
 }
 
@@ -67,7 +61,7 @@ function runWith(executable, args) {
 
 const target = scriptMap[command];
 
-if (binaryExists("pwsh")) {
+if (target.ps1 && binaryExists("pwsh")) {
   runWith("pwsh", [
     "-NoLogo",
     "-NoProfile",
@@ -88,7 +82,7 @@ if (binaryExists("pwsh")) {
   ]);
 }
 
-if (binaryExists("powershell")) {
+if (target.ps1 && binaryExists("powershell")) {
   runWith("powershell", [
     "-NoLogo",
     "-NoProfile",
@@ -109,7 +103,7 @@ if (binaryExists("powershell")) {
   ]);
 }
 
-if (binaryExists("bash")) {
+if (target.sh && binaryExists("bash")) {
   const scriptPath = path.join(scriptsDir, target.sh);
   if (!existsSync(scriptPath)) {
     console.error(`Missing bash script: ${scriptPath}`);
@@ -118,5 +112,9 @@ if (binaryExists("bash")) {
   runWith("bash", [scriptPath, ...target.args]);
 }
 
-console.error("No supported script runtime found. Install PowerShell or bash.");
+console.error(
+  target.ps1
+    ? "No supported script runtime found. Install PowerShell or bash."
+    : "No supported script runtime found. Install bash.",
+);
 process.exit(1);

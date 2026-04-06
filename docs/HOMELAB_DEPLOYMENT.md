@@ -23,13 +23,13 @@ This guide describes the browser-first self-hosted deployment for Euripus behind
 Run image builds on the Windows workstation with Docker Desktop and push them to private GHCR packages:
 
 ```powershell
-bun run homelab:publish
+bun run publish
 ```
 
 On Linux or macOS with bash available, run the equivalent publisher with:
 
 ```bash
-bun run homelab:publish:sh
+bun run publish
 ```
 
 The publish script builds `linux/amd64` images for:
@@ -58,7 +58,7 @@ The deploy script prefers `docker` and automatically falls back to `podman` if `
 Deploy the latest published images with:
 
 ```bash
-./scripts/deploy-homelab-images.sh
+bun run deploy
 ```
 
 The deploy script now waits for PostgreSQL and the server health check, and it automatically repairs SQLx migration checksum drift before the new server starts.
@@ -77,7 +77,7 @@ By default, the `web` service is published on host port `8088`. Override it with
 If you want Euripus server-side traffic to leave through NordVPN, enable it in `.env.homelab-images`:
 
 ```bash
-EURIPUS_ENABLE_NORDVPN=true ./scripts/deploy-homelab-images.sh
+EURIPUS_ENABLE_NORDVPN=true ./scripts/deploy.sh
 ```
 
 This override adds a `gluetun` container configured for NordVPN and places the Rust server inside Gluetun's network namespace.

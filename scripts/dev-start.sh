@@ -20,8 +20,8 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
 runtime_dir="$repo_root/.runtime"
 logs_dir="$runtime_dir/logs"
-state_path="$runtime_dir/user-test-stack.json"
-bootstrap_state_path="$runtime_dir/user-test-bootstrap.json"
+state_path="$runtime_dir/dev-stack.json"
+bootstrap_state_path="$runtime_dir/dev-bootstrap.json"
 
 assert_command_available() {
     if ! command -v "$1" >/dev/null 2>&1; then
@@ -84,7 +84,7 @@ wait_for_api_health() {
             logs="$(get_server_logs)"
             if [[ $reset_attempted -eq 0 && "$logs" == *"migration "* && "$logs" == *"previously applied but has been modified"* ]]; then
                 reset_attempted=1
-                echo "Detected local migration checksum drift in the user-test database. Recreating the local user-test database volume..."
+                echo "Detected local migration checksum drift in the dev database. Recreating the local database volume..."
                 docker compose down -v
                 docker compose up --build -d postgres server
                 sleep 2
@@ -169,7 +169,7 @@ assert_command_available bun
 assert_command_available curl
 
 if [[ ! -f "$repo_root/apps/server/.env" ]]; then
-    echo "Missing apps/server/.env. Copy apps/server/.env.example before starting the user-test stack." >&2
+    echo "Missing apps/server/.env. Copy apps/server/.env.example before starting the dev stack." >&2
     exit 1
 fi
 
@@ -177,8 +177,8 @@ if [[ -f "$state_path" ]]; then
     mapfile -t existing_pids < <(grep -o '"pid":[[:space:]]*[0-9]\+' "$state_path" | grep -o '[0-9]\+' || true)
     for pid in "${existing_pids[@]}"; do
         if is_pid_running "$pid"; then
-            echo "User-test stack is already running."
-            echo "Stop it first with: bun run user-test:stop"
+            echo "Dev stack is already running."
+            echo "Stop it first with: bun run dev:stop"
             exit 0
         fi
     done
@@ -228,7 +228,7 @@ fi
 } >"$state_path"
 
 echo
-echo "User-test stack is ready."
+echo "Dev stack is ready."
 echo "API: http://127.0.0.1:8080"
 echo "Web: http://127.0.0.1:5173"
 echo "Logs:"
@@ -239,4 +239,4 @@ for process_json in "${processes[@]}"; do
     echo "  $name: $stdout_path"
     echo "  $name: $stderr_path"
 done
-echo "Stop everything with: bun run user-test:stop"
+echo "Stop everything with: bun run dev:stop"
