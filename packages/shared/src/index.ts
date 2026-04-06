@@ -161,6 +161,65 @@ export type PlaybackSource = {
   title: string;
 };
 
+export type ReceiverPlaybackState = {
+  title: string;
+  sourceKind: PlaybackSource["kind"];
+  live: boolean;
+  catchup: boolean;
+  updatedAt: string;
+  paused: boolean;
+  positionSeconds: number | null;
+  durationSeconds: number | null;
+};
+
+export type ReceiverDevice = {
+  id: string;
+  name: string;
+  platform: string;
+  formFactorHint: string | null;
+  appKind: string;
+  remembered: boolean;
+  online: boolean;
+  currentController: boolean;
+  lastSeenAt: string;
+  updatedAt: string;
+  currentPlayback: ReceiverPlaybackState | null;
+};
+
+export type ReceiverSession = {
+  sessionToken: string;
+  expiresAt: string;
+  receiverCredential: string | null;
+  device: ReceiverDevice;
+  pairingCode: string | null;
+  paired: boolean;
+};
+
+export type PairReceiverPayload = {
+  code: string;
+  rememberDevice: boolean;
+  name?: string;
+};
+
+export type ReceiverSessionPayload = {
+  deviceKey: string;
+  name: string;
+  platform: string;
+  formFactorHint: string | null;
+  appKind: string;
+  receiverCredential?: string | null;
+};
+
+export type ReceiverPlaybackStatePayload = {
+  title: string | null;
+  sourceKind?: PlaybackSource["kind"] | null;
+  live?: boolean | null;
+  catchup?: boolean | null;
+  paused?: boolean | null;
+  positionSeconds?: number | null;
+  durationSeconds?: number | null;
+};
+
 export type PlaybackDeviceRegistration = {
   deviceKey: string;
   name: string;
@@ -194,7 +253,7 @@ export type PlaybackDevice = {
 };
 
 export type RemoteControllerTarget = {
-  device: PlaybackDevice;
+  device: ReceiverDevice;
   selectedAt: string;
 } | null;
 
@@ -202,6 +261,7 @@ export type RemotePlaybackCommand = {
   id: string;
   targetDeviceId: string;
   targetDeviceName: string;
+  commandType: string;
   status: "queued" | "delivered" | "acknowledged" | "failed";
   sourceTitle: string;
   createdAt: string;
@@ -213,6 +273,12 @@ export type RemotePlaybackCommandAck = {
 };
 
 export type RemoteCommandAck = RemotePlaybackCommandAck;
+
+export type ReceiverPairingCode = {
+  code: string;
+  expiresAt: string;
+  device: ReceiverDevice;
+};
 
 export type RegisterPayload = {
   username: string;

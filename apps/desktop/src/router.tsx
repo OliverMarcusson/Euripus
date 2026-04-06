@@ -6,6 +6,7 @@ import { FavoritesPage } from "@/features/channels/favorites-page";
 import { GuidePage } from "@/features/channels/guide-page";
 import { SearchPage } from "@/features/search/search-page";
 import { SettingsPage } from "@/features/auth/settings-page";
+import { ReceiverPage } from "@/features/receiver/receiver-page";
 import { useAuthStore } from "@/store/auth-store";
 
 export function SessionBootstrapFallback() {
@@ -69,6 +70,12 @@ const authRoute = createRoute({
   component: AuthEntry,
 });
 
+const receiverRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/receiver",
+  component: ReceiverPage,
+});
+
 const guideRoute = createRoute({
   getParentRoute: () => authenticatedRoute,
   path: "/guide",
@@ -102,6 +109,7 @@ const indexRoute = createRoute({
 const routeTree = rootRoute.addChildren([
   indexRoute,
   authRoute,
+  receiverRoute,
   authenticatedRoute.addChildren([guideRoute, searchRoute, favoritesRoute, settingsRoute]),
 ]);
 

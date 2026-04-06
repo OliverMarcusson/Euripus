@@ -1,8 +1,8 @@
-import type { PlaybackDevice, RemoteControllerTarget } from "@euripus/shared";
+import type { ReceiverDevice, RemoteControllerTarget } from "@euripus/shared";
 import { create } from "zustand";
 
 type RemoteControllerState = {
-  target: PlaybackDevice | null;
+  target: ReceiverDevice | null;
   selectedAt: string | null;
   setTargetSelection: (selection: RemoteControllerTarget) => void;
   clearTarget: () => void;
