@@ -204,6 +204,9 @@ export function SearchPage() {
                                     {channel.categoryName}
                                   </Badge>
                                 ) : null}
+                                {channel.hasEpg ? (
+                                  <Badge variant="outline">EPG</Badge>
+                                ) : null}
                                 {channel.hasCatchup ? (
                                   <Badge variant="live">Catch-up</Badge>
                                 ) : null}

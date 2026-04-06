@@ -218,6 +218,7 @@ struct ChannelResponse {
     category_name: Option<String>,
     remote_stream_id: i32,
     epg_channel_id: Option<String>,
+    has_epg: bool,
     has_catchup: bool,
     archive_duration_hours: Option<i32>,
     stream_extension: Option<String>,
@@ -768,6 +769,7 @@ struct ChannelSearchRow {
     category_name: Option<String>,
     remote_stream_id: i32,
     epg_channel_id: Option<String>,
+    has_epg: bool,
     has_catchup: bool,
     archive_duration_hours: Option<i32>,
     stream_extension: Option<String>,
@@ -2152,6 +2154,14 @@ async fn get_channel(
           cc.name AS category_name,
           c.remote_stream_id,
           c.epg_channel_id,
+          EXISTS(
+            SELECT 1
+            FROM programs p
+            WHERE p.user_id = c.user_id
+              AND p.channel_id = c.id
+              AND p.end_at > NOW() - INTERVAL '2 hours'
+              AND p.start_at < NOW() + INTERVAL '6 hours'
+          ) AS has_epg,
           c.has_catchup,
           c.archive_duration_hours,
           c.stream_extension,
@@ -2337,6 +2347,14 @@ async fn search_channels(
           cc.name AS category_name,
           c.remote_stream_id,
           c.epg_channel_id,
+          EXISTS(
+            SELECT 1
+            FROM programs p
+            WHERE p.user_id = c.user_id
+              AND p.channel_id = c.id
+              AND p.end_at > NOW() - INTERVAL '2 hours'
+              AND p.start_at < NOW() + INTERVAL '6 hours'
+          ) AS has_epg,
           c.has_catchup,
           c.archive_duration_hours,
           c.stream_extension,
@@ -2367,6 +2385,7 @@ async fn search_channels(
             category_name: row.category_name,
             remote_stream_id: row.remote_stream_id,
             epg_channel_id: row.epg_channel_id,
+            has_epg: row.has_epg,
             has_catchup: row.has_catchup,
             archive_duration_hours: row.archive_duration_hours,
             stream_extension: row.stream_extension,
@@ -2609,6 +2628,14 @@ async fn list_recents(
           cc.name AS category_name,
           c.remote_stream_id,
           c.epg_channel_id,
+          EXISTS(
+            SELECT 1
+            FROM programs p
+            WHERE p.user_id = c.user_id
+              AND p.channel_id = c.id
+              AND p.end_at > NOW() - INTERVAL '2 hours'
+              AND p.start_at < NOW() + INTERVAL '6 hours'
+          ) AS has_epg,
           c.has_catchup,
           c.archive_duration_hours,
           c.stream_extension,
@@ -2648,6 +2675,7 @@ async fn list_recents(
                     category_name: row.category_name,
                     remote_stream_id: row.remote_stream_id,
                     epg_channel_id: row.epg_channel_id,
+                    has_epg: row.has_epg,
                     has_catchup: row.has_catchup,
                     archive_duration_hours: row.archive_duration_hours,
                     stream_extension: row.stream_extension,
@@ -3835,6 +3863,14 @@ async fn fetch_channels(pool: &PgPool, user_id: Uuid) -> Result<Vec<ChannelRespo
           cc.name AS category_name,
           c.remote_stream_id,
           c.epg_channel_id,
+          EXISTS(
+            SELECT 1
+            FROM programs p
+            WHERE p.user_id = c.user_id
+              AND p.channel_id = c.id
+              AND p.end_at > NOW() - INTERVAL '2 hours'
+              AND p.start_at < NOW() + INTERVAL '6 hours'
+          ) AS has_epg,
           c.has_catchup,
           c.archive_duration_hours,
           c.stream_extension,
@@ -4033,6 +4069,7 @@ fn map_guide_category_entry(
             category_name: row.category_name,
             remote_stream_id: row.remote_stream_id,
             epg_channel_id: row.epg_channel_id,
+            has_epg: row.program_id.is_some(),
             has_catchup: row.has_catchup,
             archive_duration_hours: row.archive_duration_hours,
             stream_extension: row.stream_extension,
@@ -6780,6 +6817,14 @@ async fn load_channels_by_ids(
           cc.name AS category_name,
           c.remote_stream_id,
           c.epg_channel_id,
+          EXISTS(
+            SELECT 1
+            FROM programs p
+            WHERE p.user_id = c.user_id
+              AND p.channel_id = c.id
+              AND p.end_at > NOW() - INTERVAL '2 hours'
+              AND p.start_at < NOW() + INTERVAL '6 hours'
+          ) AS has_epg,
           c.has_catchup,
           c.archive_duration_hours,
           c.stream_extension,
@@ -6857,6 +6902,7 @@ struct RecentChannelRow {
     category_name: Option<String>,
     remote_stream_id: i32,
     epg_channel_id: Option<String>,
+    has_epg: bool,
     has_catchup: bool,
     archive_duration_hours: Option<i32>,
     stream_extension: Option<String>,

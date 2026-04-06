@@ -174,6 +174,7 @@ describe("SettingsPage", () => {
           categoryName: "Sports",
           remoteStreamId: 1,
           epgChannelId: null,
+          hasEpg: false,
           hasCatchup: true,
           archiveDurationHours: 24,
           streamExtension: "m3u8",
