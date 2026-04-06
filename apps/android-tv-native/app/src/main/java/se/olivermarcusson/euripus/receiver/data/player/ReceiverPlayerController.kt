@@ -10,6 +10,7 @@ import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.hls.HlsMediaSource
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -22,12 +23,29 @@ class ReceiverPlayerController(
 ) {
     companion object {
         private const val TAG = "ReceiverPlayer"
+        private const val MIN_BUFFER_MS = 1_500
+        private const val MAX_BUFFER_MS = 10_000
+        private const val BUFFER_FOR_PLAYBACK_MS = 500
+        private const val BUFFER_FOR_REBUFFER_MS = 1_000
+        private const val CONNECT_TIMEOUT_MS = 8_000
+        private const val READ_TIMEOUT_MS = 15_000
     }
 
     private val mutableSnapshot = MutableStateFlow(PlaybackSnapshot())
     private val mutableCurrentSource = MutableStateFlow<PlaybackSourceDto?>(null)
 
-    val player: ExoPlayer = ExoPlayer.Builder(context).build().apply {
+    val player: ExoPlayer = ExoPlayer.Builder(context)
+        .setLoadControl(
+            DefaultLoadControl.Builder()
+                .setBufferDurationsMs(
+                    MIN_BUFFER_MS,
+                    MAX_BUFFER_MS,
+                    BUFFER_FOR_PLAYBACK_MS,
+                    BUFFER_FOR_REBUFFER_MS,
+                )
+                .build(),
+        )
+        .build().apply {
         repeatMode = Player.REPEAT_MODE_OFF
         playWhenReady = true
         addListener(
@@ -133,6 +151,8 @@ class ReceiverPlayerController(
     private fun createDataSourceFactory(source: PlaybackSourceDto): DataSource.Factory {
         val httpFactory = DefaultHttpDataSource.Factory()
             .setAllowCrossProtocolRedirects(true)
+            .setConnectTimeoutMs(CONNECT_TIMEOUT_MS)
+            .setReadTimeoutMs(READ_TIMEOUT_MS)
             .setDefaultRequestProperties(source.headers)
         return DefaultDataSource.Factory(context, httpFactory)
     }

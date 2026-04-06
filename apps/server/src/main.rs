@@ -66,7 +66,8 @@ use xtreme::{XtreamCategory, XtreamChannel, XtreamCredentials};
 struct AppState {
     pool: PgPool,
     config: Arc<Config>,
-    http_client: reqwest::Client,
+    provider_http_client: reqwest::Client,
+    relay_http_client: reqwest::Client,
     meili: Option<Arc<MeilisearchClient>>,
     session_cache: Arc<DashMap<(Uuid, Uuid), Instant>>,
     receiver_channels: Arc<DashMap<Uuid, broadcast::Sender<ReceiverEventPayload>>>,
@@ -838,6 +839,18 @@ enum PlaybackMode {
     Relay,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PlaybackTarget {
+    Browser,
+    Receiver,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PlaybackStreamFormat {
+    Hls,
+    Ts,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 enum RelayAssetKind {
@@ -926,8 +939,11 @@ async fn main() -> Result<()> {
     let state = AppState {
         pool,
         config,
-        http_client: reqwest::Client::builder()
+        provider_http_client: reqwest::Client::builder()
             .timeout(Duration::from_secs(30))
+            .build()?,
+        relay_http_client: reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(10))
             .build()?,
         meili,
         session_cache: Arc::new(DashMap::new()),
@@ -1464,7 +1480,7 @@ async fn get_server_network_status(
     State(state): State<AppState>,
 ) -> ApiResult<ServerNetworkStatusResponse> {
     let public_ip_checked_at = Utc::now();
-    let (public_ip, public_ip_error) = match lookup_public_ip(&state.http_client).await {
+    let (public_ip, public_ip_error) = match lookup_public_ip(&state.provider_http_client).await {
         Ok(public_ip) => (Some(public_ip), None),
         Err(error) => {
             warn!("public IP lookup failed: {error:?}");
@@ -1612,6 +1628,23 @@ fn playback_mode_as_str(mode: PlaybackMode) -> &'static str {
     }
 }
 
+fn normalize_output_format(raw: &str) -> Result<PlaybackStreamFormat, AppError> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "m3u8" => Ok(PlaybackStreamFormat::Hls),
+        "ts" => Ok(PlaybackStreamFormat::Ts),
+        _ => Err(AppError::BadRequest(
+            "Output format must be either 'm3u8' or 'ts'.".to_string(),
+        )),
+    }
+}
+
+fn output_format_as_str(format: PlaybackStreamFormat) -> &'static str {
+    match format {
+        PlaybackStreamFormat::Hls => "m3u8",
+        PlaybackStreamFormat::Ts => "ts",
+    }
+}
+
 fn normalize_epg_source_payloads(
     payloads: Vec<SaveEpgSourcePayload>,
 ) -> Result<Vec<SaveEpgSourcePayload>, AppError> {
@@ -1724,6 +1757,7 @@ async fn validate_provider(
     Json(payload): Json<SaveProviderPayload>,
 ) -> ApiResult<ValidateProviderResponse> {
     let auth = require_auth(&state, &headers).await?;
+    let output_format = normalize_output_format(&payload.output_format)?;
     let existing_profile = sqlx::query_as::<_, ProviderProfileRecord>(
         r#"
         SELECT
@@ -1756,9 +1790,9 @@ async fn validate_provider(
         base_url: payload.base_url,
         username: payload.username,
         password: effective_password,
-        output_format: payload.output_format,
+        output_format: output_format_as_str(output_format).to_string(),
     };
-    let result = xtreme::validate_profile(&state.http_client, &credentials).await?;
+    let result = xtreme::validate_profile(&state.provider_http_client, &credentials).await?;
 
     Ok(Json(ValidateProviderResponse {
         valid: result.valid,
@@ -1773,6 +1807,7 @@ async fn save_provider(
     Json(payload): Json<SaveProviderPayload>,
 ) -> ApiResult<ProviderProfileResponse> {
     let auth = require_auth(&state, &headers).await?;
+    let output_format = normalize_output_format(&payload.output_format)?;
     let epg_sources = normalize_epg_source_payloads(payload.epg_sources)?;
     let existing_profile = sqlx::query_as::<_, ProviderProfileRecord>(
         r#"
@@ -1806,10 +1841,10 @@ async fn save_provider(
         base_url: payload.base_url.clone(),
         username: payload.username.clone(),
         password: effective_password.clone(),
-        output_format: payload.output_format.clone(),
+        output_format: output_format_as_str(output_format).to_string(),
     };
 
-    let validation = xtreme::validate_profile(&state.http_client, &credentials).await?;
+    let validation = xtreme::validate_profile(&state.provider_http_client, &credentials).await?;
     if !validation.valid {
         return Err(AppError::BadRequest(validation.message));
     }
@@ -1841,7 +1876,7 @@ async fn save_provider(
     .bind(payload.base_url)
     .bind(payload.username)
     .bind(encrypted_password)
-    .bind(payload.output_format)
+    .bind(output_format_as_str(output_format))
     .bind(playback_mode_as_str(normalize_playback_mode(&payload.playback_mode)?))
     .fetch_one(&state.pool)
     .await?;
@@ -2600,6 +2635,17 @@ async fn resolve_channel_playback_source(
     user_id: Uuid,
     id: Uuid,
 ) -> Result<PlaybackSourceResponse, AppError> {
+    resolve_channel_playback_source_for_target(state, headers, user_id, id, PlaybackTarget::Browser)
+        .await
+}
+
+async fn resolve_channel_playback_source_for_target(
+    state: &AppState,
+    headers: &HeaderMap,
+    user_id: Uuid,
+    id: Uuid,
+    target: PlaybackTarget,
+) -> Result<PlaybackSourceResponse, AppError> {
     let record = sqlx::query_as::<_, ChannelPlaybackRecord>(
         r#"
         SELECT
@@ -2627,10 +2673,12 @@ async fn resolve_channel_playback_source(
     .ok_or_else(|| AppError::NotFound("Channel not found".to_string()))?;
 
     let credentials = playback_credentials(state, &record)?;
+    let format =
+        resolve_effective_playback_format(&record.output_format, record.stream_extension.as_deref())?;
     let url = xtreme::build_live_stream_url(
         &credentials,
         record.remote_stream_id,
-        record.stream_extension.as_deref(),
+        Some(output_format_as_str(format)),
     )?;
     touch_recent(&state.pool, user_id, record.id).await?;
 
@@ -2639,12 +2687,13 @@ async fn resolve_channel_playback_source(
         headers,
         user_id,
         record.profile_id,
+        target,
         &record.playback_mode,
         &record.name,
         url,
         true,
         false,
-        record.stream_extension.as_deref(),
+        format,
         None,
     )
 }
@@ -2654,6 +2703,17 @@ async fn resolve_program_playback_source(
     headers: &HeaderMap,
     user_id: Uuid,
     id: Uuid,
+) -> Result<PlaybackSourceResponse, AppError> {
+    resolve_program_playback_source_for_target(state, headers, user_id, id, PlaybackTarget::Browser)
+        .await
+}
+
+async fn resolve_program_playback_source_for_target(
+    state: &AppState,
+    headers: &HeaderMap,
+    user_id: Uuid,
+    id: Uuid,
+    target: PlaybackTarget,
 ) -> Result<PlaybackSourceResponse, AppError> {
     let row = sqlx::query_as::<_, ProgramPlaybackRow>(
         r#"
@@ -2704,10 +2764,12 @@ async fn resolve_program_playback_source(
                 password: decrypt_secret(&state.config.encryption_key, &row.password_encrypted)?,
                 output_format: row.output_format,
             };
+            let format =
+                resolve_effective_playback_format(&credentials.output_format, row.stream_extension.as_deref())?;
             let url = xtreme::build_live_stream_url(
                 &credentials,
                 row.remote_stream_id,
-                row.stream_extension.as_deref(),
+                Some(output_format_as_str(format)),
             )?;
 
             playback_source_for_mode(
@@ -2715,12 +2777,13 @@ async fn resolve_program_playback_source(
                 headers,
                 user_id,
                 row.profile_id,
+                target,
                 &row.playback_mode,
                 &row.channel_name,
                 url,
                 true,
                 false,
-                row.stream_extension.as_deref(),
+                format,
                 None,
             )
         }
@@ -2731,10 +2794,12 @@ async fn resolve_program_playback_source(
                 password: decrypt_secret(&state.config.encryption_key, &row.password_encrypted)?,
                 output_format: row.output_format,
             };
+            let format =
+                resolve_effective_playback_format(&credentials.output_format, row.stream_extension.as_deref())?;
             let url = xtreme::build_catchup_url(
                 &credentials,
                 row.remote_stream_id,
-                row.stream_extension.as_deref(),
+                Some(output_format_as_str(format)),
                 row.start_at,
                 row.end_at,
             )?;
@@ -2744,12 +2809,13 @@ async fn resolve_program_playback_source(
                 headers,
                 user_id,
                 row.profile_id,
+                target,
                 &row.playback_mode,
                 &row.title,
                 url,
                 false,
                 true,
-                row.stream_extension.as_deref(),
+                format,
                 None,
             )
         }
@@ -3337,9 +3403,12 @@ async fn relay_hls_playlist(
     let relay = validate_relay_token(&state, &query.token, RelayAssetKind::Hls).await?;
     let public_base_url = request_base_url(&state.config, &headers)?;
 
-    let response = state
-        .http_client
-        .get(relay.upstream_url.clone())
+    let response = relay_upstream_request(
+        &state.relay_http_client,
+        relay.upstream_url.clone(),
+        &headers,
+        &["user-agent"],
+    )
         .send()
         .await
         .map_err(|error| AppError::Internal(anyhow!(error)))?
@@ -3384,48 +3453,97 @@ async fn relay_hls_playlist(
 
 async fn relay_raw_stream(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Query(query): Query<RelayTokenQuery>,
 ) -> Result<Response, AppError> {
     let relay = validate_relay_token(&state, &query.token, RelayAssetKind::Raw).await?;
 
-    relay_stream_response(&state, relay.upstream_url).await
+    relay_stream_response(&state, relay.upstream_url, &headers).await
 }
 
 async fn relay_asset(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Query(query): Query<RelayTokenQuery>,
 ) -> Result<Response, AppError> {
     let relay = validate_relay_token(&state, &query.token, RelayAssetKind::Asset).await?;
 
-    relay_stream_response(&state, relay.upstream_url).await
+    relay_stream_response(&state, relay.upstream_url, &headers).await
 }
 
-async fn relay_stream_response(state: &AppState, upstream_url: Url) -> Result<Response, AppError> {
-    let response = state
-        .http_client
-        .get(upstream_url)
+async fn relay_stream_response(
+    state: &AppState,
+    upstream_url: Url,
+    headers: &HeaderMap,
+) -> Result<Response, AppError> {
+    let response = relay_upstream_request(
+        &state.relay_http_client,
+        upstream_url,
+        headers,
+        &["range", "if-range", "user-agent"],
+    )
         .send()
         .await
-        .map_err(|error| AppError::Internal(anyhow!(error)))?
-        .error_for_status()
         .map_err(|error| AppError::Internal(anyhow!(error)))?;
-    let content_type = response.headers().get(header::CONTENT_TYPE).cloned();
-    let content_length = response.headers().get(header::CONTENT_LENGTH).cloned();
+    let status = StatusCode::from_u16(response.status().as_u16())
+        .map_err(|error| AppError::Internal(anyhow!(error)))?;
+    let upstream_headers = response.headers().clone();
     let body = Body::from_stream(response.bytes_stream());
 
-    let mut builder = Response::builder()
-        .status(StatusCode::OK)
-        .header(header::CACHE_CONTROL, "no-store");
-    if let Some(content_type) = content_type {
-        builder = builder.header(header::CONTENT_TYPE, content_type);
-    }
-    if let Some(content_length) = content_length {
-        builder = builder.header(header::CONTENT_LENGTH, content_length);
-    }
+    let builder = relay_response_headers(
+        Response::builder().status(status),
+        &upstream_headers,
+        &[
+            "content-type",
+            "content-length",
+            "content-range",
+            "accept-ranges",
+            "etag",
+            "last-modified",
+            "cache-control",
+        ],
+    );
 
     builder
         .body(body)
         .map_err(|error| AppError::Internal(anyhow!(error)))
+}
+
+fn relay_upstream_request(
+    client: &reqwest::Client,
+    upstream_url: Url,
+    incoming_headers: &HeaderMap,
+    forwarded_headers: &[&str],
+) -> reqwest::RequestBuilder {
+    let mut request = client.get(upstream_url);
+
+    for header_name in forwarded_headers {
+        if let Some(value) = incoming_headers
+            .get(*header_name)
+            .and_then(|value| value.to_str().ok())
+        {
+            request = request.header(*header_name, value);
+        }
+    }
+
+    request
+}
+
+fn relay_response_headers(
+    mut builder: axum::http::response::Builder,
+    upstream_headers: &reqwest::header::HeaderMap,
+    passed_headers: &[&str],
+) -> axum::http::response::Builder {
+    for header_name in passed_headers {
+        if let Some(value) = upstream_headers
+            .get(*header_name)
+            .and_then(|value| value.to_str().ok())
+        {
+            builder = builder.header(*header_name, value);
+        }
+    }
+
+    builder
 }
 
 const GUIDE_DEFAULT_LIMIT: i64 = 40;
@@ -3964,12 +4082,13 @@ fn playback_source_for_mode(
     headers: &HeaderMap,
     user_id: Uuid,
     profile_id: Uuid,
+    target: PlaybackTarget,
     raw_playback_mode: &str,
     title: &str,
     upstream_url: String,
     live: bool,
     catchup: bool,
-    extension: Option<&str>,
+    format: PlaybackStreamFormat,
     expires_at: Option<DateTime<Utc>>,
 ) -> Result<PlaybackSourceResponse, AppError> {
     let direct = playback_source_from_url(
@@ -3977,26 +4096,19 @@ fn playback_source_for_mode(
         upstream_url.clone(),
         live,
         catchup,
-        extension,
+        format,
         expires_at,
     );
     let playback_mode = normalize_playback_mode(raw_playback_mode)?;
-    if direct.kind == "unsupported" {
-        return Ok(direct);
-    }
 
     let request_base_url = request_base_url(&state.config, headers)?;
-    let relay_required_for_https =
-        should_force_relay_for_secure_request(&request_base_url, &upstream_url);
+    let relay_required_for_https = matches!(target, PlaybackTarget::Browser)
+        && should_force_relay_for_secure_request(&request_base_url, &upstream_url);
     if playback_mode == PlaybackMode::Direct && !relay_required_for_https {
         return Ok(direct);
     }
 
-    let relay_kind = relay_asset_kind_for_extension(extension).ok_or_else(|| {
-        AppError::BadRequest(
-            "Relay mode only supports browser-playable stream formats.".to_string(),
-        )
-    })?;
+    let relay_kind = relay_asset_kind_for_format(format);
     let relay_token =
         issue_relay_token(state, user_id, profile_id, &upstream_url, relay_kind, None)?;
     let relay_url = relay_url_for_token(&request_base_url, relay_kind, &relay_token.token)?;
@@ -4014,54 +4126,8 @@ async fn resolve_channel_playback_source_for_receiver(
     user_id: Uuid,
     id: Uuid,
 ) -> Result<PlaybackSourceResponse, AppError> {
-    let source = resolve_channel_playback_source(state, headers, user_id, id).await?;
-    if source.kind == "unsupported" {
-        return Ok(source);
-    }
-
-    let record = sqlx::query_as::<_, ChannelPlaybackRecord>(
-        r#"
-        SELECT
-          c.id,
-          c.profile_id,
-          c.name,
-          c.remote_stream_id,
-          c.stream_extension,
-          c.has_catchup,
-          c.archive_duration_hours,
-          p.base_url,
-          p.username AS provider_username,
-          p.password_encrypted,
-          p.output_format,
-          p.playback_mode
-        FROM channels c
-        JOIN provider_profiles p ON p.id = c.profile_id
-        WHERE c.user_id = $1 AND c.id = $2
-        "#,
-    )
-    .bind(user_id)
-    .bind(id)
-    .fetch_one(&state.pool)
-    .await?;
-    let credentials = playback_credentials(state, &record)?;
-    let url = xtreme::build_live_stream_url(
-        &credentials,
-        record.remote_stream_id,
-        record.stream_extension.as_deref(),
-    )?;
-    playback_source_for_mode(
-        state,
-        headers,
-        user_id,
-        record.profile_id,
-        "relay",
-        &record.name,
-        url,
-        true,
-        false,
-        record.stream_extension.as_deref(),
-        None,
-    )
+    resolve_channel_playback_source_for_target(state, headers, user_id, id, PlaybackTarget::Receiver)
+        .await
 }
 
 async fn resolve_program_playback_source_for_receiver(
@@ -4070,97 +4136,8 @@ async fn resolve_program_playback_source_for_receiver(
     user_id: Uuid,
     id: Uuid,
 ) -> Result<PlaybackSourceResponse, AppError> {
-    let row = sqlx::query_as::<_, ProgramPlaybackRow>(
-        r#"
-        SELECT
-          p.id,
-          p.title,
-          p.start_at,
-          p.end_at,
-          p.can_catchup,
-          p.profile_id,
-          c.id AS channel_id,
-          c.remote_stream_id,
-          c.stream_extension,
-          c.name AS channel_name,
-          c.has_catchup,
-          pr.base_url,
-          pr.username AS provider_username,
-          pr.password_encrypted,
-          pr.output_format,
-          pr.playback_mode
-        FROM programs p
-        LEFT JOIN channels c ON c.id = p.channel_id
-        LEFT JOIN provider_profiles pr ON pr.id = p.profile_id
-        WHERE p.user_id = $1 AND p.id = $2
-        "#,
-    )
-    .bind(user_id)
-    .bind(id)
-    .fetch_optional(&state.pool)
-    .await?
-    .ok_or_else(|| AppError::NotFound("Program not found".to_string()))?;
-
-    let behavior = determine_program_playback_behavior(&row, Utc::now());
-    match behavior {
-        ProgramPlaybackBehavior::Live => {
-            let credentials = XtreamCredentials {
-                base_url: row.base_url,
-                username: row.provider_username,
-                password: decrypt_secret(&state.config.encryption_key, &row.password_encrypted)?,
-                output_format: row.output_format,
-            };
-            let url = xtreme::build_live_stream_url(
-                &credentials,
-                row.remote_stream_id,
-                row.stream_extension.as_deref(),
-            )?;
-            playback_source_for_mode(
-                state,
-                headers,
-                user_id,
-                row.profile_id,
-                "relay",
-                &row.channel_name,
-                url,
-                true,
-                false,
-                row.stream_extension.as_deref(),
-                None,
-            )
-        }
-        ProgramPlaybackBehavior::Catchup => {
-            let credentials = XtreamCredentials {
-                base_url: row.base_url,
-                username: row.provider_username,
-                password: decrypt_secret(&state.config.encryption_key, &row.password_encrypted)?,
-                output_format: row.output_format,
-            };
-            let url = xtreme::build_catchup_url(
-                &credentials,
-                row.remote_stream_id,
-                row.stream_extension.as_deref(),
-                row.start_at,
-                row.end_at,
-            )?;
-            playback_source_for_mode(
-                state,
-                headers,
-                user_id,
-                row.profile_id,
-                "relay",
-                &row.title,
-                url,
-                false,
-                true,
-                row.stream_extension.as_deref(),
-                None,
-            )
-        }
-        ProgramPlaybackBehavior::Unsupported(reason) => {
-            Ok(unsupported_playback(&row.title, reason))
-        }
-    }
+    resolve_program_playback_source_for_target(state, headers, user_id, id, PlaybackTarget::Receiver)
+        .await
 }
 
 fn should_force_relay_for_secure_request(request_base_url: &Url, upstream_url: &str) -> bool {
@@ -4178,25 +4155,17 @@ fn playback_source_from_url(
     url: String,
     live: bool,
     catchup: bool,
-    extension: Option<&str>,
+    format: PlaybackStreamFormat,
     expires_at: Option<DateTime<Utc>>,
 ) -> PlaybackSourceResponse {
-    let kind = match extension.unwrap_or("m3u8") {
-        "m3u8" => "hls",
-        "ts" => "mpegts",
-        _ => "unsupported",
-    };
-
     PlaybackSourceResponse {
-        kind: kind.to_string(),
+        kind: playback_kind_for_format(format).to_string(),
         url,
         headers: HashMap::new(),
         live,
         catchup,
         expires_at,
-        unsupported_reason: (kind == "unsupported").then_some(
-            "The provider returned a stream format Euripus v1 cannot play in-browser.".to_string(),
-        ),
+        unsupported_reason: None,
         title: title.to_string(),
     }
 }
@@ -4287,11 +4256,34 @@ fn decode_relay_token(
     })
 }
 
-fn relay_asset_kind_for_extension(extension: Option<&str>) -> Option<RelayAssetKind> {
-    match extension.unwrap_or("m3u8") {
-        "m3u8" => Some(RelayAssetKind::Hls),
-        "ts" => Some(RelayAssetKind::Raw),
-        _ => None,
+fn resolve_effective_playback_format(
+    output_format: &str,
+    legacy_stream_extension: Option<&str>,
+) -> Result<PlaybackStreamFormat, AppError> {
+    match normalize_output_format(output_format) {
+        Ok(format) => Ok(format),
+        Err(_) => legacy_stream_extension
+            .map(normalize_output_format)
+            .transpose()?
+            .ok_or_else(|| {
+                AppError::BadRequest(
+                    "The provider returned a stream format Euripus v1 cannot play.".to_string(),
+                )
+            }),
+    }
+}
+
+fn playback_kind_for_format(format: PlaybackStreamFormat) -> &'static str {
+    match format {
+        PlaybackStreamFormat::Hls => "hls",
+        PlaybackStreamFormat::Ts => "mpegts",
+    }
+}
+
+fn relay_asset_kind_for_format(format: PlaybackStreamFormat) -> RelayAssetKind {
+    match format {
+        PlaybackStreamFormat::Hls => RelayAssetKind::Hls,
+        PlaybackStreamFormat::Ts => RelayAssetKind::Raw,
     }
 }
 
@@ -5391,7 +5383,7 @@ async fn run_sync_job(
     .await?;
     let validation_started_at = Instant::now();
     info!("sync job {job_id}: validating provider");
-    let validation = xtreme::validate_profile(&state.http_client, &credentials).await?;
+    let validation = xtreme::validate_profile(&state.provider_http_client, &credentials).await?;
     info!(
         job_id = %job_id,
         elapsed_ms = validation_started_at.elapsed().as_millis() as u64,
@@ -5424,7 +5416,8 @@ async fn run_sync_job(
         let categories_future = async {
             let started_at = Instant::now();
             info!("sync job {job_id}: fetching categories");
-            let categories = xtreme::fetch_categories(&state.http_client, &credentials).await?;
+            let categories =
+                xtreme::fetch_categories(&state.provider_http_client, &credentials).await?;
             info!(
                 job_id = %job_id,
                 category_count = categories.len(),
@@ -5445,7 +5438,8 @@ async fn run_sync_job(
         let channels_future = async {
             let started_at = Instant::now();
             info!("sync job {job_id}: fetching live streams");
-            let channels = xtreme::fetch_live_streams(&state.http_client, &credentials).await?;
+            let channels =
+                xtreme::fetch_live_streams(&state.provider_http_client, &credentials).await?;
             info!(
                 job_id = %job_id,
                 channel_count = channels.len(),
@@ -5492,7 +5486,7 @@ async fn run_sync_job(
     .await?;
     let epg_fetch_started_at = Instant::now();
     let (fetched_feeds, mut source_statuses) =
-        fetch_epg_feeds(&state.http_client, &credentials, &epg_sources).await?;
+        fetch_epg_feeds(&state.provider_http_client, &credentials, &epg_sources).await?;
     info!(
         job_id = %job_id,
         feed_count = fetched_feeds.len(),
@@ -6847,10 +6841,26 @@ mod tests {
             "https://example.com/live.m3u8".to_string(),
             true,
             false,
-            Some("m3u8"),
+            PlaybackStreamFormat::Hls,
             None,
         );
         assert_eq!(response.kind, "hls");
+    }
+
+    #[test]
+    fn resolve_effective_playback_format_prefers_saved_output_format() {
+        let format =
+            resolve_effective_playback_format("m3u8", Some("ts")).expect("playback format");
+
+        assert_eq!(format, PlaybackStreamFormat::Hls);
+    }
+
+    #[test]
+    fn resolve_effective_playback_format_falls_back_to_legacy_stream_extension() {
+        let format =
+            resolve_effective_playback_format("legacy", Some("ts")).expect("playback format");
+
+        assert_eq!(format, PlaybackStreamFormat::Ts);
     }
 
     #[tokio::test]
@@ -6861,12 +6871,13 @@ mod tests {
             &HeaderMap::new(),
             Uuid::from_u128(1),
             Uuid::from_u128(2),
+            PlaybackTarget::Browser,
             "direct",
             "Arena 1",
             "https://provider.example.com/live/42.m3u8".to_string(),
             true,
             false,
-            Some("m3u8"),
+            PlaybackStreamFormat::Hls,
             None,
         )
         .expect("direct playback source");
@@ -6884,12 +6895,13 @@ mod tests {
             &HeaderMap::new(),
             Uuid::from_u128(3),
             Uuid::from_u128(4),
+            PlaybackTarget::Browser,
             "relay",
             "Arena 1",
             "https://provider.example.com/live/42.m3u8".to_string(),
             true,
             false,
-            Some("m3u8"),
+            PlaybackStreamFormat::Hls,
             None,
         )
         .expect("relay playback source");
@@ -6924,12 +6936,13 @@ mod tests {
             &HeaderMap::new(),
             Uuid::from_u128(31),
             Uuid::from_u128(32),
+            PlaybackTarget::Browser,
             "direct",
             "Arena 1",
             "http://provider.example.com/live/42.m3u8".to_string(),
             true,
             false,
-            Some("m3u8"),
+            PlaybackStreamFormat::Hls,
             None,
         )
         .expect("forced relay playback source");
@@ -6969,15 +6982,40 @@ mod tests {
             &headers,
             Uuid::from_u128(33),
             Uuid::from_u128(34),
+            PlaybackTarget::Browser,
             "direct",
             "Arena 1",
             "http://provider.example.com/live/42.m3u8".to_string(),
             true,
             false,
-            Some("m3u8"),
+            PlaybackStreamFormat::Hls,
             None,
         )
         .expect("direct playback source");
+
+        assert_eq!(response.kind, "hls");
+        assert_eq!(response.url, "http://provider.example.com/live/42.m3u8");
+        assert!(response.expires_at.is_none());
+    }
+
+    #[tokio::test]
+    async fn playback_source_for_mode_keeps_http_streams_direct_for_receivers() {
+        let state = sample_app_state();
+        let response = playback_source_for_mode(
+            &state,
+            &HeaderMap::new(),
+            Uuid::from_u128(35),
+            Uuid::from_u128(36),
+            PlaybackTarget::Receiver,
+            "direct",
+            "Arena 1",
+            "http://provider.example.com/live/42.m3u8".to_string(),
+            true,
+            false,
+            PlaybackStreamFormat::Hls,
+            None,
+        )
+        .expect("direct receiver playback source");
 
         assert_eq!(response.kind, "hls");
         assert_eq!(response.url, "http://provider.example.com/live/42.m3u8");
@@ -7129,6 +7167,150 @@ mod tests {
 
         assert_eq!(urls.len(), 3);
         assert!(urls.iter().all(Result::is_ok));
+    }
+
+    #[test]
+    fn relay_upstream_request_forwards_selected_headers() {
+        let client = reqwest::Client::new();
+        let mut headers = HeaderMap::new();
+        headers.insert(header::RANGE, HeaderValue::from_static("bytes=100-"));
+        headers.insert(
+            HeaderName::from_static("if-range"),
+            HeaderValue::from_static("\"etag-1\""),
+        );
+        headers.insert(header::USER_AGENT, HeaderValue::from_static("EuripusTest/1.0"));
+
+        let request = relay_upstream_request(
+            &client,
+            Url::parse("https://provider.example.com/video.ts").expect("upstream url"),
+            &headers,
+            &["range", "if-range", "user-agent"],
+        )
+        .build()
+        .expect("relay request");
+
+        assert_eq!(
+            request
+                .headers()
+                .get(header::RANGE)
+                .and_then(|value| value.to_str().ok()),
+            Some("bytes=100-")
+        );
+        assert_eq!(
+            request
+                .headers()
+                .get("if-range")
+                .and_then(|value| value.to_str().ok()),
+            Some("\"etag-1\"")
+        );
+        assert_eq!(
+            request
+                .headers()
+                .get(header::USER_AGENT)
+                .and_then(|value| value.to_str().ok()),
+            Some("EuripusTest/1.0")
+        );
+    }
+
+    #[tokio::test]
+    async fn relay_stream_response_preserves_partial_content_and_headers() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind listener");
+        let addr = listener.local_addr().expect("listener addr");
+        let server = tokio::spawn(async move {
+            let app = Router::new().route(
+                "/video.ts",
+                get(|headers: HeaderMap| async move {
+                    let range = headers
+                        .get(header::RANGE)
+                        .and_then(|value| value.to_str().ok());
+                    let if_range = headers
+                        .get("if-range")
+                        .and_then(|value| value.to_str().ok());
+                    let user_agent = headers
+                        .get(header::USER_AGENT)
+                        .and_then(|value| value.to_str().ok());
+
+                    if range == Some("bytes=1-4")
+                        && if_range == Some("\"etag-1\"")
+                        && user_agent == Some("EuripusTest/1.0")
+                    {
+                        Response::builder()
+                            .status(StatusCode::PARTIAL_CONTENT)
+                            .header(header::CONTENT_TYPE, "video/mp2t")
+                            .header(header::CONTENT_LENGTH, "4")
+                            .header(header::CONTENT_RANGE, "bytes 1-4/10")
+                            .header(header::ACCEPT_RANGES, "bytes")
+                            .header(header::ETAG, "\"etag-1\"")
+                            .header(header::CACHE_CONTROL, "public, max-age=30")
+                            .body(Body::from("data"))
+                            .expect("partial content response")
+                    } else {
+                        Response::builder()
+                            .status(StatusCode::BAD_REQUEST)
+                            .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+                            .body(Body::from("missing headers"))
+                            .expect("bad request response")
+                    }
+                }),
+            );
+
+            axum::serve(listener, app).await.expect("serve relay upstream");
+        });
+
+        let state = sample_app_state();
+        let mut headers = HeaderMap::new();
+        headers.insert(header::RANGE, HeaderValue::from_static("bytes=1-4"));
+        headers.insert(
+            HeaderName::from_static("if-range"),
+            HeaderValue::from_static("\"etag-1\""),
+        );
+        headers.insert(header::USER_AGENT, HeaderValue::from_static("EuripusTest/1.0"));
+
+        let response = relay_stream_response(
+            &state,
+            Url::parse(&format!("http://{addr}/video.ts")).expect("upstream url"),
+            &headers,
+        )
+        .await
+        .expect("relay response");
+
+        assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
+        assert_eq!(
+            response
+                .headers()
+                .get(header::CONTENT_RANGE)
+                .and_then(|value| value.to_str().ok()),
+            Some("bytes 1-4/10")
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get(header::ACCEPT_RANGES)
+                .and_then(|value| value.to_str().ok()),
+            Some("bytes")
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get(header::ETAG)
+                .and_then(|value| value.to_str().ok()),
+            Some("\"etag-1\"")
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get(header::CACHE_CONTROL)
+                .and_then(|value| value.to_str().ok()),
+            Some("public, max-age=30")
+        );
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("relay body");
+        assert_eq!(body.as_ref(), b"data");
+
+        server.abort();
     }
 
     #[test]
@@ -7612,7 +7794,8 @@ mod tests {
                 meilisearch_url: None,
                 meilisearch_api_key: None,
             }),
-            http_client: reqwest::Client::new(),
+            provider_http_client: reqwest::Client::new(),
+            relay_http_client: reqwest::Client::new(),
             meili: None,
             session_cache: Arc::new(DashMap::new()),
             receiver_channels: Arc::new(DashMap::new()),
