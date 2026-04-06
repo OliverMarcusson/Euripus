@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import Hls from "hls.js";
 import type { PlaybackSource, ReceiverSession } from "@euripus/shared";
 import { Tv } from "lucide-react";
 import {
@@ -16,6 +15,7 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@/components/ui/empty";
+import { createIptvHls, isIptvHlsSupported } from "@/lib/hls";
 
 const RECEIVER_STORAGE_KEY = "euripus-receiver-device";
 const RECEIVER_HEARTBEAT_MS = 15_000;
@@ -177,10 +177,8 @@ export function ReceiverPage() {
     video.removeAttribute("src");
     video.load();
 
-    if (source.kind === "hls" && Hls.isSupported()) {
-      const hls = new Hls();
-      hls.loadSource(source.url);
-      hls.attachMedia(video);
+    if (source.kind === "hls" && isIptvHlsSupported()) {
+      const hls = createIptvHls(video, source.url, { live: source.live });
       return () => hls.destroy();
     }
 

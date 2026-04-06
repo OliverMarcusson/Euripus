@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from "react";
-import Hls from "hls.js";
 import {
   ChevronDown,
   ChevronUp,
@@ -23,6 +22,7 @@ import {
   resumeRemotePlayback,
   stopRemotePlayback,
 } from "@/lib/api";
+import { createIptvHls, isIptvHlsSupported } from "@/lib/hls";
 import { usePlayerStore } from "@/store/player-store";
 import { useRemoteControllerStore } from "@/store/remote-controller-store";
 import { cn, formatRelativeTime } from "@/lib/utils";
@@ -43,10 +43,8 @@ export function PlayerView() {
     video.removeAttribute("src");
     video.load();
 
-    if (source.kind === "hls" && Hls.isSupported()) {
-      const hls = new Hls();
-      hls.loadSource(source.url);
-      hls.attachMedia(video);
+    if (source.kind === "hls" && isIptvHlsSupported()) {
+      const hls = createIptvHls(video, source.url, { live: source.live });
       return () => hls.destroy();
     }
 
