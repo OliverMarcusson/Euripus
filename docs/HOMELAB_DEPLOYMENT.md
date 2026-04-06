@@ -61,6 +61,8 @@ Deploy the latest published images with:
 ./scripts/deploy-homelab-images.sh
 ```
 
+The deploy script now waits for PostgreSQL and the server health check, and it automatically repairs SQLx migration checksum drift before the new server starts.
+
 Deploy a specific immutable revision by setting `EURIPUS_IMAGE_TAG` in `.env.homelab-images` to the published git SHA.
 
 By default, the deploy script pulls and starts:
