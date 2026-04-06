@@ -15,8 +15,52 @@ warn() {
   echo "Warning: $*" >&2
 }
 
+info() {
+  echo "==> $*"
+}
+
+default_compose_project_name() {
+  basename "$repo_root" | tr '[:upper:]' '[:lower:]'
+}
+
 get_compose_service_container_id() {
-  "${compose_cmd[@]}" "${compose_files[@]}" ps -q "$1" 2>/dev/null | head -n1 | tr -d '\r'
+  local service_name="$1"
+  local project_name="${COMPOSE_PROJECT_NAME:-$(default_compose_project_name)}"
+  local container_id=""
+
+  container_id="$(
+    "$container_cli" ps -aq \
+      --filter "label=com.docker.compose.project=$project_name" \
+      --filter "label=com.docker.compose.service=$service_name" \
+      --format "{{.ID}}" 2>/dev/null | head -n1 | tr -d '\r'
+  )"
+  if [[ -n "$container_id" ]]; then
+    printf '%s\n' "$container_id"
+    return 0
+  fi
+
+  container_id="$(
+    "$container_cli" ps -aq \
+      --filter "label=io.podman.compose.project=$project_name" \
+      --filter "label=io.podman.compose.service=$service_name" \
+      --format "{{.ID}}" 2>/dev/null | head -n1 | tr -d '\r'
+  )"
+  if [[ -n "$container_id" ]]; then
+    printf '%s\n' "$container_id"
+    return 0
+  fi
+
+  container_id="$(
+    "$container_cli" ps -aq \
+      --filter "name=${project_name}_${service_name}_" \
+      --format "{{.ID}}" 2>/dev/null | head -n1 | tr -d '\r'
+  )"
+  if [[ -n "$container_id" ]]; then
+    printf '%s\n' "$container_id"
+    return 0
+  fi
+
+  return 1
 }
 
 get_container_health() {
@@ -35,11 +79,23 @@ wait_for_service_health() {
 
   while (( SECONDS < deadline )); do
     local container_id
-    container_id="$(get_compose_service_container_id "$service_name")"
-    local health
-    health="$(get_container_health "$container_id")"
+    if ! container_id="$(get_compose_service_container_id "$service_name")"; then
+      warn "failed to resolve container id for service '$service_name'; retrying"
+      sleep 1
+      continue
+    fi
 
-    if [[ "$health" == "healthy" || "$health" == "running" ]]; then
+    local health
+    if ! health="$(get_container_health "$container_id")"; then
+      warn "failed to inspect health for service '$service_name'; retrying"
+      sleep 1
+      continue
+    fi
+
+    health="${health//$'\n'/}"
+    health="${health//$'\r'/}"
+
+    if [[ "$health" == *"healthy"* || "$health" == *"running"* ]]; then
       return 0
     fi
 
@@ -47,7 +103,7 @@ wait_for_service_health() {
   done
 
   echo "Service '$service_name' did not become healthy within $timeout_seconds seconds." >&2
-  exit 1
+  return 1
 }
 
 run_psql_scalar() {
@@ -131,15 +187,27 @@ wait_for_server_health() {
 
   while (( SECONDS < deadline )); do
     local server_container_id
-    server_container_id="$(get_compose_service_container_id server)"
-    local server_status
-    server_status="$(get_container_health "$server_container_id")"
+    if ! server_container_id="$(get_compose_service_container_id server)"; then
+      warn "failed to resolve server container id; retrying"
+      sleep 1
+      continue
+    fi
 
-    if [[ "$server_status" == "healthy" ]]; then
+    local server_status
+    if ! server_status="$(get_container_health "$server_container_id")"; then
+      warn "failed to inspect server health; retrying"
+      sleep 1
+      continue
+    fi
+
+    server_status="${server_status//$'\n'/}"
+    server_status="${server_status//$'\r'/}"
+
+    if [[ "$server_status" == *"healthy"* ]]; then
       return 0
     fi
 
-    if [[ "$server_status" == "exited" || "$server_status" == "unhealthy" ]]; then
+    if [[ "$server_status" == *"exited"* || "$server_status" == *"unhealthy"* ]]; then
       local logs
       logs="$(get_server_logs)"
       echo "Server failed to become healthy during deployment." >&2
@@ -158,7 +226,7 @@ wait_for_server_health() {
   echo >&2
   echo "Server logs:" >&2
   echo "$logs" >&2
-  exit 1
+  return 1
 }
 
 if command -v docker >/dev/null 2>&1; then
@@ -198,16 +266,23 @@ cd "$repo_root"
 
 require_command sha384sum
 
+info "Logging in to ghcr.io"
 printf '%s' "$GHCR_TOKEN" | "$container_cli" login ghcr.io --username "$GHCR_USERNAME" --password-stdin
 
 server_image_ref="${EURIPUS_SERVER_IMAGE}:${EURIPUS_IMAGE_TAG}"
 
+info "Pulling homelab images"
 "${compose_cmd[@]}" "${compose_files[@]}" pull postgres meilisearch server web
+info "Starting PostgreSQL"
 "${compose_cmd[@]}" "${compose_files[@]}" up -d postgres
-wait_for_service_health postgres 180
+info "Waiting for PostgreSQL health"
+wait_for_service_health postgres 180 || exit 1
+info "Repairing SQLx migration checksums if needed"
 repair_sqlx_migration_checksums
-"${compose_cmd[@]}" "${compose_files[@]}" up -d
-wait_for_server_health 180
+info "Starting remaining homelab services"
+"${compose_cmd[@]}" "${compose_files[@]}" up -d meilisearch server web
+info "Waiting for server health"
+wait_for_server_health 180 || exit 1
 
 echo
 echo "Homelab deploy complete."
