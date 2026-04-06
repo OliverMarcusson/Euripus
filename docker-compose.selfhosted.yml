@@ -5,7 +5,7 @@ services:
     env_file:
       - apps/server/.env
     volumes:
-      - homelab-postgres-data:/var/lib/postgresql/data
+      - euripus-postgres-data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 5s
@@ -18,10 +18,10 @@ services:
     env_file:
       - apps/server/.env
     volumes:
-      - homelab-meilisearch-data:/meili_data
+      - euripus-meilisearch-data:/meili_data
 
   server:
-    image: ${EURIPUS_SERVER_IMAGE:-ghcr.io/olivermarcusson/euripus-server}:${EURIPUS_IMAGE_TAG:-homelab-latest}
+    image: ${EURIPUS_SERVER_IMAGE:-ghcr.io/olivermarcusson/euripus-server}:${EURIPUS_IMAGE_TAG:-selfhosted-latest}
     restart: unless-stopped
     env_file:
       - apps/server/.env
@@ -39,7 +39,7 @@ services:
       - "8080"
 
   web:
-    image: ${EURIPUS_WEB_IMAGE:-ghcr.io/olivermarcusson/euripus-web}:${EURIPUS_IMAGE_TAG:-homelab-latest}
+    image: ${EURIPUS_WEB_IMAGE:-ghcr.io/olivermarcusson/euripus-web}:${EURIPUS_IMAGE_TAG:-selfhosted-latest}
     restart: unless-stopped
     environment:
       EURIPUS_API_UPSTREAM: server
@@ -50,5 +50,5 @@ services:
       - "${EURIPUS_WEB_PORT:-8088}:80"
 
 volumes:
-  homelab-postgres-data:
-  homelab-meilisearch-data:
+  euripus-postgres-data:
+  euripus-meilisearch-data:

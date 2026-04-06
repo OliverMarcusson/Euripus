@@ -1,18 +1,18 @@
-# Euripus Homelab Deployment
+# Euripus Self-Hosted Deployment
 
 This guide describes the browser-first self-hosted deployment for Euripus behind a reverse proxy.
 
 ## Topology
 
 - Reverse proxy terminates HTTPS for your dedicated Euripus host.
-- The proxy forwards traffic to the `web` service from `docker-compose.homelab.yml`.
+- The proxy forwards traffic to the `web` service from `docker-compose.selfhosted.yml`.
 - The `web` service serves the built SPA and proxies `/api/*` to the Rust server.
 - PostgreSQL stays private on the Compose network.
 
 ## Required Setup
 
 1. Copy `apps/server/.env.example` to `apps/server/.env`.
-2. Copy `.env.homelab-images.example` to `.env.homelab-images`.
+2. Copy `.env.selfhosted-images.example` to `.env.selfhosted-images`.
 3. Replace `APP_JWT_SECRET`, `APP_ENCRYPTION_KEY_B64`, and `POSTGRES_PASSWORD` with strong values.
 4. Set `APP_PUBLIC_ORIGIN` to your public HTTPS URL, for example `https://euripus.home.arpa`.
 5. Set `APP_ALLOWED_ORIGINS` to include that public origin, plus any local development origins you still use.
@@ -40,14 +40,14 @@ The publish script builds `linux/amd64` images for:
 It pushes two tags for each image:
 
 - the current git SHA
-- `homelab-latest`
+- `selfhosted-latest`
 
 If `GHCR_USERNAME` and `GHCR_TOKEN` are set in the Windows environment, the script logs in to GHCR before pushing. Otherwise it assumes you have already run `docker login ghcr.io`.
-By default it also loads `.env.homelab-images`, so you usually do not need to export anything manually. Override that path with `EURIPUS_PUBLISH_ENV_FILE` if needed.
+By default it also loads `.env.selfhosted-images`, so you usually do not need to export anything manually. Override that path with `EURIPUS_PUBLISH_ENV_FILE` if needed.
 
 ## Deploy On Fedora
 
-Store your private GHCR read credentials in `.env.homelab-images` on the Fedora host:
+Store your private GHCR read credentials in `.env.selfhosted-images` on the Fedora host:
 
 - `GHCR_USERNAME`
 - `GHCR_TOKEN`
@@ -63,18 +63,18 @@ bun run prod:start
 
 The deploy script now waits for PostgreSQL and the server health check, and it automatically repairs SQLx migration checksum drift before the new server starts.
 
-Deploy a specific immutable revision by setting `EURIPUS_IMAGE_TAG` in `.env.homelab-images` to the published git SHA.
+Deploy a specific immutable revision by setting `EURIPUS_IMAGE_TAG` in `.env.selfhosted-images` to the published git SHA.
 
 By default, the deploy script pulls and starts:
 
-- `ghcr.io/olivermarcusson/euripus-server:${EURIPUS_IMAGE_TAG:-homelab-latest}`
-- `ghcr.io/olivermarcusson/euripus-web:${EURIPUS_IMAGE_TAG:-homelab-latest}`
+- `ghcr.io/olivermarcusson/euripus-server:${EURIPUS_IMAGE_TAG:-selfhosted-latest}`
+- `ghcr.io/olivermarcusson/euripus-web:${EURIPUS_IMAGE_TAG:-selfhosted-latest}`
 
 By default, the `web` service is published on host port `8088`. Override it with `EURIPUS_WEB_PORT` if needed.
 
 ## Optional NordVPN Routing
 
-If you want Euripus server-side traffic to leave through NordVPN, enable it in `.env.homelab-images`:
+If you want Euripus server-side traffic to leave through NordVPN, enable it in `.env.selfhosted-images`:
 
 ```bash
 EURIPUS_ENABLE_NORDVPN=true bun run prod:start
@@ -113,7 +113,7 @@ Route your dedicated Euripus host to the single upstream `http://YOUR-HOST:8088`
 
 ## Validation Checklist
 
-- `docker compose -f docker-compose.homelab.yml images` shows the GHCR image references rather than local build contexts.
+- `docker compose -f docker-compose.selfhosted.yml images` shows the GHCR image references rather than local build contexts.
 - `GET /health` returns `204` through the public web upstream.
 - Loading `/guide` directly in the browser returns the SPA instead of a 404.
 - Registering or logging in from the browser succeeds and survives a full page reload.

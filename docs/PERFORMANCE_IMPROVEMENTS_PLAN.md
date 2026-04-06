@@ -105,7 +105,7 @@ volumes:
   meilisearch-data:
 ```
 
-**File**: `docker-compose.homelab.yml` — add same service with `restart: unless-stopped` and no host port binding:
+**File**: `docker-compose.selfhosted.yml` — add same service with `restart: unless-stopped` and no host port binding:
 ```yaml
   meilisearch:
     image: docker.io/getmeili/meilisearch:v1.15
@@ -113,10 +113,10 @@ volumes:
     env_file:
       - apps/server/.env
     volumes:
-      - homelab-meilisearch-data:/meili_data
+      - euripus-meilisearch-data:/meili_data
 
 volumes:
-  homelab-meilisearch-data:
+  euripus-meilisearch-data:
 ```
 
 Add `depends_on: meilisearch` to the `server` service in both files.
@@ -341,7 +341,7 @@ Evict on session revoke by calling `state.session_cache.remove(&cache_key)` in t
 | `apps/server/src/main.rs` | AppState, sync pipeline, search handlers, session cache |
 | `apps/server/Cargo.toml` | Add `meilisearch-sdk`, `dashmap` |
 | `docker-compose.yml` | Add `meilisearch` service + volume |
-| `docker-compose.homelab.yml` | Add `meilisearch` service + volume |
+| `docker-compose.selfhosted.yml` | Add `meilisearch` service + volume |
 | `apps/server/.env.example` | Document `APP_MEILISEARCH_URL`, `APP_MEILISEARCH_API_KEY`, `MEILI_MASTER_KEY` |
 
 ---

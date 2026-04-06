@@ -2,7 +2,7 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-env_file="${EURIPUS_DEPLOY_ENV_FILE:-$repo_root/.env.homelab-images}"
+env_file="${EURIPUS_DEPLOY_ENV_FILE:-$repo_root/.env.selfhosted-images}"
 
 require_command() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -247,7 +247,7 @@ fi
 
 : "${EURIPUS_SERVER_IMAGE:=ghcr.io/olivermarcusson/euripus-server}"
 : "${EURIPUS_WEB_IMAGE:=ghcr.io/olivermarcusson/euripus-web}"
-: "${EURIPUS_IMAGE_TAG:=homelab-latest}"
+: "${EURIPUS_IMAGE_TAG:=selfhosted-latest}"
 : "${EURIPUS_ENABLE_NORDVPN:=false}"
 : "${GHCR_USERNAME:?Set GHCR_USERNAME in the environment or $env_file before deploying.}"
 : "${GHCR_TOKEN:?Set GHCR_TOKEN in the environment or $env_file before deploying.}"
@@ -255,11 +255,11 @@ fi
 export EURIPUS_SERVER_IMAGE EURIPUS_WEB_IMAGE EURIPUS_IMAGE_TAG EURIPUS_ENABLE_NORDVPN
 
 compose_files=(
-  "-f" "docker-compose.homelab.yml"
+  "-f" "docker-compose.selfhosted.yml"
 )
 
 if [[ "$EURIPUS_ENABLE_NORDVPN" == "true" ]]; then
-  compose_files+=("-f" "docker-compose.homelab.nordvpn.yml")
+  compose_files+=("-f" "docker-compose.selfhosted.nordvpn.yml")
 fi
 
 cd "$repo_root"

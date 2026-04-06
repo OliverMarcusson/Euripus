@@ -2,7 +2,7 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-env_file="${EURIPUS_DEPLOY_ENV_FILE:-$repo_root/.env.homelab-images}"
+env_file="${EURIPUS_DEPLOY_ENV_FILE:-$repo_root/.env.selfhosted-images}"
 
 if command -v docker >/dev/null 2>&1; then
   compose_cmd=(docker compose)
@@ -21,11 +21,11 @@ fi
 : "${EURIPUS_ENABLE_NORDVPN:=false}"
 
 compose_files=(
-  "-f" "docker-compose.homelab.yml"
+  "-f" "docker-compose.selfhosted.yml"
 )
 
 if [[ "$EURIPUS_ENABLE_NORDVPN" == "true" ]]; then
-  compose_files+=("-f" "docker-compose.homelab.nordvpn.yml")
+  compose_files+=("-f" "docker-compose.selfhosted.nordvpn.yml")
 fi
 
 cd "$repo_root"

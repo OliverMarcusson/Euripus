@@ -21,12 +21,12 @@ The Vite dev server proxies `/api` and `/health` to `http://127.0.0.1:8080`, so 
 
 `bun run dev:start` builds and starts PostgreSQL + the API in Docker, launches the frontend dev server, and waits for both the API and frontend to become ready before returning.
 
-## Homelab Deployment
+## Self-Hosted Deployment
 
-Use `docker-compose.homelab.yml` for the self-hosted web deployment. The homelab host now pulls prebuilt Linux images from GHCR instead of building them locally.
+Use `docker-compose.selfhosted.yml` for the self-hosted web deployment. The deployment host pulls prebuilt Linux images from GHCR instead of building them locally.
 
 1. Copy `apps/server/.env.example` to `apps/server/.env` and replace the placeholder secrets.
-2. Copy `.env.homelab-images.example` to `.env.homelab-images`.
+2. Copy `.env.selfhosted-images.example` to `.env.selfhosted-images`.
 3. Set `APP_PUBLIC_ORIGIN` to the HTTPS URL exposed by your reverse proxy.
 4. Set `APP_ALLOWED_ORIGINS` to include your public browser origin and any local development origins you still need.
 5. Publish fresh images with `bun run publish`.
@@ -44,9 +44,9 @@ Default image names:
 Published tags:
 
 - immutable tag: current git SHA
-- moving tag: `homelab-latest`
+- moving tag: `selfhosted-latest`
 
-Both helper scripts read `GHCR_USERNAME` and `GHCR_TOKEN` from `.env.homelab-images` by default. Use a token with package write access on the publishing machine and a read-only package token on the production host. The deploy script uses `docker` when available and falls back to `podman` automatically.
+Both helper scripts read `GHCR_USERNAME` and `GHCR_TOKEN` from `.env.selfhosted-images` by default. Use a token with package write access on the publishing machine and a read-only package token on the production host. The deploy script uses `docker` when available and falls back to `podman` automatically.
 
 To route Euripus server-side traffic through NordVPN, add the override file:
 
@@ -60,5 +60,5 @@ That only affects server-originated traffic such as provider validation, sync jo
 ## Operational Docs
 
 - Server setup handoff: `docs/AI_SERVER_SETUP.md`
-- Homelab deployment guide: `docs/HOMELAB_DEPLOYMENT.md`
+- Self-hosted deployment guide: `docs/SELF_HOSTED_DEPLOYMENT.md`
 - Future browser and self-hosting plan: `docs/V2_BROWSER_SELF_HOSTED_PLAN.md`
