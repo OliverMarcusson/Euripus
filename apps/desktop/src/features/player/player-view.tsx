@@ -1,17 +1,20 @@
 import { useEffect, useRef, useState } from "react";
 import Hls from "hls.js";
-import { ChevronDown, ChevronUp, Radio, X } from "lucide-react";
+import { ChevronDown, ChevronUp, Pause, Play, Radio, Square, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Empty, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { useTvAutoFocus } from "@/hooks/use-tv-auto-focus";
+import { pauseRemotePlayback, resumeRemotePlayback, stopRemotePlayback } from "@/lib/api";
 import { usePlayerStore } from "@/store/player-store";
+import { useRemoteControllerStore } from "@/store/remote-controller-store";
 import { cn, formatRelativeTime } from "@/lib/utils";
 
 export function PlayerView() {
   const source = usePlayerStore((state) => state.source);
   const setSource = usePlayerStore((state) => state.setSource);
+  const remoteTarget = useRemoteControllerStore((state) => state.target);
   const [minimized, setMinimized] = useState(false);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   useTvAutoFocus(source ? "[data-player-close='true']" : null, [source?.title]);
@@ -40,6 +43,38 @@ export function PlayerView() {
   }, [source, minimized]);
 
   if (!source) {
+    if (remoteTarget?.currentPlayback) {
+      return (
+        <Card className="h-full border-0 bg-transparent shadow-none">
+          <CardContent className="flex h-full flex-col gap-4 p-0">
+            <div className="rounded-2xl border border-border/40 bg-muted/10 p-5">
+              <div className="flex flex-wrap items-center gap-2">
+                <Badge variant={remoteTarget.currentPlayback.live ? "live" : "outline"}>
+                  {remoteTarget.currentPlayback.live ? "Live" : "Archive"}
+                </Badge>
+                <Badge variant="outline">{remoteTarget.name}</Badge>
+              </div>
+              <h2 className="mt-3 text-lg font-semibold">{remoteTarget.currentPlayback.title}</h2>
+              <div className="mt-4 flex flex-wrap gap-2">
+                <Button size="sm" variant="secondary" onClick={() => void resumeRemotePlayback()}>
+                  <Play data-icon="inline-start" />
+                  Play
+                </Button>
+                <Button size="sm" variant="secondary" onClick={() => void pauseRemotePlayback()}>
+                  <Pause data-icon="inline-start" />
+                  Pause
+                </Button>
+                <Button size="sm" variant="outline" onClick={() => void stopRemotePlayback()}>
+                  <Square data-icon="inline-start" />
+                  Stop
+                </Button>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      );
+    }
+
     return (
       <Card className="h-full max-md:hidden border-0 bg-transparent shadow-none">
         <CardContent className="flex h-full flex-col p-0 opacity-50 grayscale">

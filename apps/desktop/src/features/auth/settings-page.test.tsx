@@ -4,13 +4,15 @@ import { SettingsPage } from "@/features/auth/settings-page";
 import {
   getProvider,
   getRecents,
-  getRemoteDevices,
+  getRemoteReceivers,
   getServerNetworkStatus,
+  pairReceiver,
   getSyncStatus,
   saveProvider,
   startChannelPlayback,
   startRemoteChannelPlayback,
   triggerProviderSync,
+  unpairReceiver,
 } from "@/lib/api";
 import { usePlaybackDeviceStore } from "@/store/playback-device-store";
 import { useThemeStore } from "@/store/theme-store";
@@ -20,33 +22,51 @@ vi.mock("@/lib/api", () => ({
   addFavorite: vi.fn(),
   getProvider: vi.fn(),
   getRecents: vi.fn(),
-  getRemoteDevices: vi.fn(),
+  getRemoteReceivers: vi.fn(),
   getServerNetworkStatus: vi.fn(),
   getSyncStatus: vi.fn(),
+  pairReceiver: vi.fn(),
   removeFavorite: vi.fn(),
   saveProvider: vi.fn(),
   startChannelPlayback: vi.fn(),
   startRemoteChannelPlayback: vi.fn(),
   triggerProviderSync: vi.fn(),
+  unpairReceiver: vi.fn(),
   validateProvider: vi.fn(),
 }));
 
 const mockedGetRecents = vi.mocked(getRecents);
 const mockedGetProvider = vi.mocked(getProvider);
-const mockedGetRemoteDevices = vi.mocked(getRemoteDevices);
+const mockedGetRemoteReceivers = vi.mocked(getRemoteReceivers);
 const mockedGetServerNetworkStatus = vi.mocked(getServerNetworkStatus);
 const mockedGetSyncStatus = vi.mocked(getSyncStatus);
+const mockedPairReceiver = vi.mocked(pairReceiver);
 const mockedSaveProvider = vi.mocked(saveProvider);
 const mockedStartChannelPlayback = vi.mocked(startChannelPlayback);
 const mockedStartRemoteChannelPlayback = vi.mocked(startRemoteChannelPlayback);
 const mockedTriggerProviderSync = vi.mocked(triggerProviderSync);
+const mockedUnpairReceiver = vi.mocked(unpairReceiver);
 
 describe("SettingsPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockedGetRecents.mockResolvedValue([]);
     mockedGetProvider.mockResolvedValue(null);
-    mockedGetRemoteDevices.mockResolvedValue([]);
+    mockedGetRemoteReceivers.mockResolvedValue([]);
+    mockedPairReceiver.mockResolvedValue({
+      id: "receiver-1",
+      name: "Living room TV",
+      platform: "web",
+      formFactorHint: "large-screen",
+      appKind: "receiver-web",
+      remembered: true,
+      online: true,
+      currentController: false,
+      lastSeenAt: "2026-04-05T10:00:00.000Z",
+      updatedAt: "2026-04-05T10:00:00.000Z",
+      currentPlayback: null,
+    });
+    mockedUnpairReceiver.mockResolvedValue();
     mockedGetServerNetworkStatus.mockResolvedValue({
       serverStatus: "online",
       vpnActive: false,
@@ -111,6 +131,7 @@ describe("SettingsPage", () => {
       id: "remote-command-1",
       targetDeviceId: "tv-1",
       targetDeviceName: "Living room TV",
+      commandType: "playback_source",
       status: "delivered",
       sourceTitle: "Arena 1",
       createdAt: "2026-04-05T10:00:00.000Z",

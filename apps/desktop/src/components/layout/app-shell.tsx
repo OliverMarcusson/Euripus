@@ -20,7 +20,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import {
   clearRemoteControllerTarget,
   getRemoteControllerTarget,
-  getRemoteDevices,
+  getRemoteReceivers,
   logout,
   selectRemoteControllerTarget,
 } from "@/lib/api";
@@ -56,8 +56,8 @@ export function AppShell() {
     .join("")
     .slice(0, 2);
   const devicesQuery = useQuery({
-    queryKey: ["remote", "devices"],
-    queryFn: getRemoteDevices,
+    queryKey: ["remote", "receivers"],
+    queryFn: getRemoteReceivers,
     enabled: !!user,
     refetchInterval: user ? 5_000 : false,
   });
@@ -113,9 +113,9 @@ export function AppShell() {
           </span>
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-72">
-        <DropdownMenuLabel>Playback target</DropdownMenuLabel>
-        <DropdownMenuSeparator />
+        <DropdownMenuContent align="end" className="w-72">
+          <DropdownMenuLabel>Playback target</DropdownMenuLabel>
+          <DropdownMenuSeparator />
         <DropdownMenuItem
           onClick={() => clearTargetMutation.mutate()}
           disabled={!remoteTarget || clearTargetMutation.isPending}
@@ -141,6 +141,10 @@ export function AppShell() {
         ) : (
           <DropdownMenuItem disabled>No remote targets online</DropdownMenuItem>
         )}
+        <DropdownMenuSeparator />
+        <DropdownMenuItem asChild>
+          <Link to="/settings">Pair a screen</Link>
+        </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -186,12 +190,6 @@ export function AppShell() {
         className={cn("flex h-screen w-full flex-col overflow-hidden bg-background md:flex-row")}
       >
         <MobileTopHeader />
-        {remoteTarget ? (
-          <div className="shrink-0 border-b border-border/40 bg-primary/5 px-4 py-2 text-sm text-foreground/80 md:px-6">
-            Controlling <span className="font-semibold">{remoteTarget.name}</span>
-            {remoteTarget.currentPlayback ? ` • ${remoteTarget.currentPlayback.title}` : ""}
-          </div>
-        ) : null}
 
         <aside
           className={cn(
@@ -292,14 +290,25 @@ export function AppShell() {
           "flex min-w-0 flex-1 flex-col overflow-hidden relative",
           !isTvMode ? "md:flex-row" : "flex-row",
         )}>
-          <ScrollArea className="flex-1 min-w-0 min-h-0 bg-background/50 outline-none z-0">
-            <main className={cn(
-              "mx-auto flex min-h-full w-full max-w-[1240px] flex-col p-4 md:p-8 relative overflow-x-hidden",
-              isTvMode && "max-w-[1600px] p-8 lg:p-12 mb-10"
-            )}>
-              <Outlet />
-            </main>
-          </ScrollArea>
+          <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+            {remoteTarget ? (
+              <div className="shrink-0 border-b border-border/40 bg-primary/5 px-4 py-2 text-sm text-foreground/80 md:px-8">
+                <div className={cn("mx-auto w-full text-center", isTvMode ? "max-w-[1600px]" : "max-w-[1240px]")}>
+                  Controlling <span className="font-semibold">{remoteTarget.name}</span>
+                  {remoteTarget.currentPlayback ? ` • ${remoteTarget.currentPlayback.title}` : ""}
+                </div>
+              </div>
+            ) : null}
+
+            <ScrollArea className="flex-1 min-w-0 min-h-0 bg-background/50 outline-none z-0">
+              <main className={cn(
+                "mx-auto flex min-h-full w-full max-w-[1240px] flex-col p-4 md:p-8 relative overflow-x-hidden",
+                isTvMode && "max-w-[1600px] p-8 lg:p-12 mb-10"
+              )}>
+                <Outlet />
+              </main>
+            </ScrollArea>
+          </div>
 
           <aside
             className={cn(
