@@ -2,12 +2,12 @@ import Hls, { type ErrorData, type HlsConfig } from "hls.js";
 
 export const IPTV_HLS_CONFIG = {
   lowLatencyMode: false,
-  liveSyncDurationCount: 1,
-  liveMaxLatencyDurationCount: 2,
-  maxBufferLength: 6,
-  backBufferLength: 12,
-  manifestLoadingTimeOut: 10_000,
-  fragLoadingTimeOut: 15_000,
+  liveSyncDurationCount: 2,
+  liveMaxLatencyDurationCount: 4,
+  maxBufferLength: 10,
+  backBufferLength: 16,
+  manifestLoadingTimeOut: 12_000,
+  fragLoadingTimeOut: 20_000,
 } satisfies Partial<HlsConfig>;
 
 const LIVE_EDGE_HARD_RESYNC_SECONDS = 4;
