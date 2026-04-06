@@ -11,12 +11,12 @@ describe("IPTV HLS helpers", () => {
   it("uses the tuned IPTV buffering configuration", () => {
     expect(IPTV_HLS_CONFIG).toMatchObject({
       lowLatencyMode: false,
-      liveSyncDurationCount: 1,
-      liveMaxLatencyDurationCount: 2,
-      maxBufferLength: 6,
-      backBufferLength: 12,
-      manifestLoadingTimeOut: 10_000,
-      fragLoadingTimeOut: 15_000,
+      liveSyncDurationCount: 2,
+      liveMaxLatencyDurationCount: 4,
+      maxBufferLength: 10,
+      backBufferLength: 16,
+      manifestLoadingTimeOut: 12_000,
+      fragLoadingTimeOut: 20_000,
     });
   });
 

@@ -70,6 +70,7 @@ struct AppState {
     relay_http_client: reqwest::Client,
     meili: Option<Arc<MeilisearchClient>>,
     session_cache: Arc<DashMap<(Uuid, Uuid), Instant>>,
+    relay_profile_cache: Arc<DashMap<(Uuid, Uuid), Instant>>,
     receiver_channels: Arc<DashMap<Uuid, broadcast::Sender<ReceiverEventPayload>>>,
 }
 
@@ -898,6 +899,7 @@ const DATABASE_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const DATABASE_RETRY_DELAY_INITIAL: Duration = Duration::from_secs(2);
 const DATABASE_RETRY_DELAY_MAX: Duration = Duration::from_secs(10);
 const SESSION_CACHE_TTL: Duration = Duration::from_secs(30);
+const RELAY_PROFILE_CACHE_TTL: Duration = Duration::from_secs(10);
 const MEILI_INDEX_BATCH_SIZE: i64 = 10_000;
 const RECEIVER_TTL: Duration = Duration::from_secs(45);
 const RECEIVER_SESSION_TTL_HOURS: i64 = 12;
@@ -947,6 +949,7 @@ async fn main() -> Result<()> {
             .build()?,
         meili,
         session_cache: Arc::new(DashMap::new()),
+        relay_profile_cache: Arc::new(DashMap::new()),
         receiver_channels: Arc::new(DashMap::new()),
     };
 
@@ -2673,8 +2676,10 @@ async fn resolve_channel_playback_source_for_target(
     .ok_or_else(|| AppError::NotFound("Channel not found".to_string()))?;
 
     let credentials = playback_credentials(state, &record)?;
-    let format =
-        resolve_effective_playback_format(&record.output_format, record.stream_extension.as_deref())?;
+    let format = resolve_effective_playback_format(
+        &record.output_format,
+        record.stream_extension.as_deref(),
+    )?;
     let url = xtreme::build_live_stream_url(
         &credentials,
         record.remote_stream_id,
@@ -2764,8 +2769,10 @@ async fn resolve_program_playback_source_for_target(
                 password: decrypt_secret(&state.config.encryption_key, &row.password_encrypted)?,
                 output_format: row.output_format,
             };
-            let format =
-                resolve_effective_playback_format(&credentials.output_format, row.stream_extension.as_deref())?;
+            let format = resolve_effective_playback_format(
+                &credentials.output_format,
+                row.stream_extension.as_deref(),
+            )?;
             let url = xtreme::build_live_stream_url(
                 &credentials,
                 row.remote_stream_id,
@@ -2794,8 +2801,10 @@ async fn resolve_program_playback_source_for_target(
                 password: decrypt_secret(&state.config.encryption_key, &row.password_encrypted)?,
                 output_format: row.output_format,
             };
-            let format =
-                resolve_effective_playback_format(&credentials.output_format, row.stream_extension.as_deref())?;
+            let format = resolve_effective_playback_format(
+                &credentials.output_format,
+                row.stream_extension.as_deref(),
+            )?;
             let url = xtreme::build_catchup_url(
                 &credentials,
                 row.remote_stream_id,
@@ -3172,10 +3181,11 @@ async fn stream_receiver_events(
     } else {
         Vec::new()
     };
-    let live_events = BroadcastStream::new(sender.subscribe()).filter_map(|message| match message {
-        Ok(payload) => Some(receiver_event_to_sse(payload)),
-        Err(_) => None,
-    });
+    let live_events =
+        BroadcastStream::new(sender.subscribe()).filter_map(|message| match message {
+            Ok(payload) => Some(receiver_event_to_sse(payload)),
+            Err(_) => None,
+        });
     let stream = futures_util::stream::iter(initial_events).chain(live_events);
     Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
 }
@@ -3426,11 +3436,11 @@ async fn relay_hls_playlist(
         &headers,
         &["user-agent"],
     )
-        .send()
-        .await
-        .map_err(|error| AppError::Internal(anyhow!(error)))?
-        .error_for_status()
-        .map_err(|error| AppError::Internal(anyhow!(error)))?;
+    .send()
+    .await
+    .map_err(|error| AppError::Internal(anyhow!(error)))?
+    .error_for_status()
+    .map_err(|error| AppError::Internal(anyhow!(error)))?;
     let response_url = response.url().clone();
     let content_type = response
         .headers()
@@ -3499,9 +3509,9 @@ async fn relay_stream_response(
         headers,
         &["range", "if-range", "user-agent"],
     )
-        .send()
-        .await
-        .map_err(|error| AppError::Internal(anyhow!(error)))?;
+    .send()
+    .await
+    .map_err(|error| AppError::Internal(anyhow!(error)))?;
     let status = StatusCode::from_u16(response.status().as_u16())
         .map_err(|error| AppError::Internal(anyhow!(error)))?;
     let upstream_headers = response.headers().clone();
@@ -4143,8 +4153,14 @@ async fn resolve_channel_playback_source_for_receiver(
     user_id: Uuid,
     id: Uuid,
 ) -> Result<PlaybackSourceResponse, AppError> {
-    resolve_channel_playback_source_for_target(state, headers, user_id, id, PlaybackTarget::Receiver)
-        .await
+    resolve_channel_playback_source_for_target(
+        state,
+        headers,
+        user_id,
+        id,
+        PlaybackTarget::Receiver,
+    )
+    .await
 }
 
 async fn resolve_program_playback_source_for_receiver(
@@ -4153,8 +4169,14 @@ async fn resolve_program_playback_source_for_receiver(
     user_id: Uuid,
     id: Uuid,
 ) -> Result<PlaybackSourceResponse, AppError> {
-    resolve_program_playback_source_for_target(state, headers, user_id, id, PlaybackTarget::Receiver)
-        .await
+    resolve_program_playback_source_for_target(
+        state,
+        headers,
+        user_id,
+        id,
+        PlaybackTarget::Receiver,
+    )
+    .await
 }
 
 fn should_force_relay_for_secure_request(request_base_url: &Url, upstream_url: &str) -> bool {
@@ -4193,20 +4215,43 @@ async fn validate_relay_token(
     expected_kind: RelayAssetKind,
 ) -> Result<ValidatedRelayToken, AppError> {
     let relay = decode_relay_token(&state.config, token, expected_kind)?;
-    let valid_profile = sqlx::query_scalar::<_, i64>(
+    let cache_key = (relay.profile_id, relay.user_id);
+    let now = Instant::now();
+    let cached_expiry = state
+        .relay_profile_cache
+        .get(&cache_key)
+        .map(|expiry| *expiry);
+    if let Some(expiry) = cached_expiry {
+        if expiry > now {
+            return Ok(relay);
+        }
+        state.relay_profile_cache.remove(&cache_key);
+    }
+
+    let valid_profile = sqlx::query_scalar::<_, bool>(
         r#"
-        SELECT COUNT(*)
-        FROM provider_profiles
-        WHERE id = $1 AND user_id = $2
+        SELECT EXISTS(
+          SELECT 1
+          FROM provider_profiles
+          WHERE id = $1 AND user_id = $2
+        )
         "#,
     )
     .bind(relay.profile_id)
     .bind(relay.user_id)
     .fetch_one(&state.pool)
     .await?;
-    if valid_profile == 0 {
+    if !valid_profile {
         return Err(AppError::Unauthorized);
     }
+
+    let cache_ttl = relay
+        .expires_at
+        .signed_duration_since(Utc::now())
+        .to_std()
+        .map(|duration| duration.min(RELAY_PROFILE_CACHE_TTL))
+        .unwrap_or(RELAY_PROFILE_CACHE_TTL);
+    state.relay_profile_cache.insert(cache_key, now + cache_ttl);
 
     Ok(relay)
 }
@@ -4530,9 +4575,7 @@ fn receiver_sender(state: &AppState, device_id: Uuid) -> broadcast::Sender<Recei
         .clone()
 }
 
-fn receiver_event_to_sse(
-    payload: ReceiverEventPayload,
-) -> Result<Event, std::convert::Infallible> {
+fn receiver_event_to_sse(payload: ReceiverEventPayload) -> Result<Event, std::convert::Infallible> {
     Ok(Event::default()
         .event(payload.event_type.clone())
         .json_data(payload)
@@ -7204,7 +7247,10 @@ mod tests {
             HeaderName::from_static("if-range"),
             HeaderValue::from_static("\"etag-1\""),
         );
-        headers.insert(header::USER_AGENT, HeaderValue::from_static("EuripusTest/1.0"));
+        headers.insert(
+            header::USER_AGENT,
+            HeaderValue::from_static("EuripusTest/1.0"),
+        );
 
         let request = relay_upstream_request(
             &client,
@@ -7282,7 +7328,9 @@ mod tests {
                 }),
             );
 
-            axum::serve(listener, app).await.expect("serve relay upstream");
+            axum::serve(listener, app)
+                .await
+                .expect("serve relay upstream");
         });
 
         let state = sample_app_state();
@@ -7292,7 +7340,10 @@ mod tests {
             HeaderName::from_static("if-range"),
             HeaderValue::from_static("\"etag-1\""),
         );
-        headers.insert(header::USER_AGENT, HeaderValue::from_static("EuripusTest/1.0"));
+        headers.insert(
+            header::USER_AGENT,
+            HeaderValue::from_static("EuripusTest/1.0"),
+        );
 
         let response = relay_stream_response(
             &state,
@@ -7824,6 +7875,7 @@ mod tests {
             relay_http_client: reqwest::Client::new(),
             meili: None,
             session_cache: Arc::new(DashMap::new()),
+            relay_profile_cache: Arc::new(DashMap::new()),
             receiver_channels: Arc::new(DashMap::new()),
         }
     }
