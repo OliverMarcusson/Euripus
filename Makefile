@@ -1,10 +1,13 @@
 .PHONY: homelab-up homelab-down
 
-COMPOSE_FILES = -f docker-compose.homelab.yml -f docker-compose.homelab.nordvpn.yml
+EURIPUS_ENABLE_NORDVPN ?= true
 
 homelab-up:
-	podman compose $(COMPOSE_FILES) pull
-	podman compose $(COMPOSE_FILES) up -d
+	EURIPUS_ENABLE_NORDVPN=$(EURIPUS_ENABLE_NORDVPN) ./scripts/deploy-homelab-images.sh
 
 homelab-down:
-	podman compose $(COMPOSE_FILES) down
+	@if [ "$(EURIPUS_ENABLE_NORDVPN)" = "true" ]; then \
+		podman compose -f docker-compose.homelab.yml -f docker-compose.homelab.nordvpn.yml down; \
+	else \
+		podman compose -f docker-compose.homelab.yml down; \
+	fi
