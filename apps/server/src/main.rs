@@ -1,4 +1,5 @@
 mod config;
+mod epg;
 mod xmltv;
 mod xtreme;
 
@@ -41,6 +42,7 @@ use chrono::{DateTime, Duration as ChronoDuration, Local, NaiveDate, Timelike, U
 use config::Config;
 use cookie::time::Duration as CookieDuration;
 use dashmap::DashMap;
+use epg::{EPG_RETENTION_FUTURE_DAYS, EPG_RETENTION_PAST_HOURS};
 use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation, decode, encode};
 use meilisearch_sdk::{client::Client as MeilisearchClient, documents::DocumentDeletionQuery};
 use rand::RngCore;
@@ -48,7 +50,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256, Sha384};
 use sqlx::{FromRow, PgPool, Postgres, Transaction, postgres::PgPoolOptions};
 use tokio::signal;
-use tokio::sync::broadcast;
+use tokio::sync::{RwLock, broadcast};
 use tokio::task::{JoinHandle, JoinSet};
 use tokio_retry::{Retry, strategy::ExponentialBackoff};
 use tokio_stream::{StreamExt as TokioStreamExt, wrappers::BroadcastStream};
@@ -69,9 +71,30 @@ struct AppState {
     provider_http_client: reqwest::Client,
     relay_http_client: reqwest::Client,
     meili: Option<Arc<MeilisearchClient>>,
+    meili_readiness: Arc<RwLock<MeiliReadiness>>,
     session_cache: Arc<DashMap<(Uuid, Uuid), Instant>>,
     relay_profile_cache: Arc<DashMap<(Uuid, Uuid), Instant>>,
     receiver_channels: Arc<DashMap<Uuid, broadcast::Sender<ReceiverEventPayload>>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MeiliReadiness {
+    Disabled,
+    Bootstrapping,
+    Ready,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SearchIndexCounts {
+    postgres_channel_documents: i64,
+    postgres_program_documents: i64,
+    meili_channel_documents: i64,
+    meili_program_documents: i64,
+}
+
+struct MeiliSetup {
+    client: Option<Arc<MeilisearchClient>>,
+    readiness: MeiliReadiness,
 }
 
 #[derive(Debug, Serialize)]
@@ -319,6 +342,12 @@ struct ProgramSearchResponse {
     items: Vec<ProgramResponse>,
     total_count: i64,
     next_offset: Option<i64>,
+}
+
+#[derive(Debug, FromRow)]
+struct SearchDocumentCountsRow {
+    channel_documents: i64,
+    program_documents: i64,
 }
 
 #[derive(Debug, Serialize)]
@@ -903,6 +932,8 @@ const DATABASE_RETRY_DELAY_MAX: Duration = Duration::from_secs(10);
 const SESSION_CACHE_TTL: Duration = Duration::from_secs(30);
 const RELAY_PROFILE_CACHE_TTL: Duration = Duration::from_secs(10);
 const MEILI_INDEX_BATCH_SIZE: i64 = 10_000;
+const MEILI_TASK_POLL_INTERVAL: Duration = Duration::from_millis(250);
+const MEILI_TASK_TIMEOUT: Duration = Duration::from_secs(300);
 const RECEIVER_TTL: Duration = Duration::from_secs(45);
 const RECEIVER_SESSION_TTL_HOURS: i64 = 12;
 const RECEIVER_PAIRING_CODE_MINUTES: i64 = 5;
@@ -938,7 +969,7 @@ async fn main() -> Result<()> {
         ));
     }
 
-    let meili = setup_meilisearch(&config).await;
+    let meili_setup = setup_meilisearch(&config, &pool).await;
 
     let state = AppState {
         pool,
@@ -949,11 +980,16 @@ async fn main() -> Result<()> {
         relay_http_client: reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(10))
             .build()?,
-        meili,
+        meili: meili_setup.client,
+        meili_readiness: Arc::new(RwLock::new(meili_setup.readiness)),
         session_cache: Arc::new(DashMap::new()),
         relay_profile_cache: Arc::new(DashMap::new()),
         receiver_channels: Arc::new(DashMap::new()),
     };
+
+    if matches!(meili_setup.readiness, MeiliReadiness::Bootstrapping) {
+        spawn_meili_bootstrap_worker(state.clone());
+    }
 
     let periodic_state = state.clone();
     spawn_periodic_sync_worker(periodic_state);
@@ -1026,15 +1062,23 @@ async fn wait_for_postgres(database_url: &str) -> Result<PgPool> {
     }
 }
 
-async fn setup_meilisearch(config: &Config) -> Option<Arc<MeilisearchClient>> {
-    let url = config.meilisearch_url.as_deref()?;
+async fn setup_meilisearch(config: &Config, pool: &PgPool) -> MeiliSetup {
+    let Some(url) = config.meilisearch_url.as_deref() else {
+        return MeiliSetup {
+            client: None,
+            readiness: MeiliReadiness::Disabled,
+        };
+    };
     let client = match MeilisearchClient::new(url, config.meilisearch_api_key.as_deref()) {
         Ok(client) => client,
         Err(error) => {
             warn!(
                 "failed to initialize Meilisearch client, falling back to PostgreSQL search: {error:?}"
             );
-            return None;
+            return MeiliSetup {
+                client: None,
+                readiness: MeiliReadiness::Disabled,
+            };
         }
     };
 
@@ -1047,14 +1091,158 @@ async fn setup_meilisearch(config: &Config) -> Option<Arc<MeilisearchClient>> {
 
     match setup_result {
         Ok(()) => {
-            info!("Meilisearch configured successfully");
-            Some(Arc::new(client))
+            let readiness = match inspect_meili_readiness(&client, pool).await {
+                Ok(readiness) => readiness,
+                Err(error) => {
+                    warn!(
+                        "failed to verify Meilisearch index readiness, falling back to PostgreSQL search: {error:?}"
+                    );
+                    return MeiliSetup {
+                        client: None,
+                        readiness: MeiliReadiness::Disabled,
+                    };
+                }
+            };
+            match readiness {
+                MeiliReadiness::Ready => info!("Meilisearch configured successfully"),
+                MeiliReadiness::Bootstrapping => warn!(
+                    "Meilisearch configured but requires bootstrap from PostgreSQL; search will use PostgreSQL until bootstrap completes"
+                ),
+                MeiliReadiness::Disabled => {}
+            }
+            MeiliSetup {
+                client: Some(Arc::new(client)),
+                readiness,
+            }
         }
         Err(error) => {
             warn!("failed to configure Meilisearch, falling back to PostgreSQL search: {error:?}");
-            None
+            MeiliSetup {
+                client: None,
+                readiness: MeiliReadiness::Disabled,
+            }
         }
     }
+}
+
+async fn inspect_meili_readiness(client: &MeilisearchClient, pool: &PgPool) -> Result<MeiliReadiness> {
+    let counts = load_search_index_counts(client, pool).await?;
+    Ok(determine_meili_readiness(counts))
+}
+
+async fn load_search_index_counts(
+    client: &MeilisearchClient,
+    pool: &PgPool,
+) -> Result<SearchIndexCounts> {
+    let postgres_counts = sqlx::query_as::<_, SearchDocumentCountsRow>(
+        r#"
+        SELECT
+          COUNT(*) FILTER (WHERE entity_type = 'channel') AS channel_documents,
+          COUNT(*) FILTER (WHERE entity_type = 'program') AS program_documents
+        FROM search_documents
+        "#,
+    )
+    .fetch_one(pool)
+    .await?;
+    let channels_stats = client.index("channels").get_stats().await?;
+    let programs_stats = client.index("programs").get_stats().await?;
+
+    Ok(SearchIndexCounts {
+        postgres_channel_documents: postgres_counts.channel_documents,
+        postgres_program_documents: postgres_counts.program_documents,
+        meili_channel_documents: channels_stats.number_of_documents as i64,
+        meili_program_documents: programs_stats.number_of_documents as i64,
+    })
+}
+
+fn determine_meili_readiness(counts: SearchIndexCounts) -> MeiliReadiness {
+    let postgres_documents =
+        counts.postgres_channel_documents + counts.postgres_program_documents;
+    if postgres_documents == 0 {
+        return MeiliReadiness::Ready;
+    }
+
+    if counts.postgres_channel_documents == counts.meili_channel_documents
+        && counts.postgres_program_documents == counts.meili_program_documents
+    {
+        MeiliReadiness::Ready
+    } else {
+        MeiliReadiness::Bootstrapping
+    }
+}
+
+fn spawn_meili_bootstrap_worker(state: AppState) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        let Some(meili) = state.meili.clone() else {
+            return;
+        };
+
+        info!("starting Meilisearch bootstrap from PostgreSQL");
+        let started_at = Instant::now();
+        let user_ids = match load_meili_bootstrap_user_ids(&state.pool).await {
+            Ok(user_ids) => user_ids,
+            Err(error) => {
+                warn!("failed to load Meilisearch bootstrap users: {error:?}");
+                return;
+            }
+        };
+
+        let mut success_count = 0usize;
+        let mut failure_count = 0usize;
+        for user_id in user_ids {
+            info!("bootstrapping Meilisearch documents for user {user_id}");
+            match rebuild_meili_indexes(&meili, user_id, &state.pool).await {
+                Ok(()) => success_count += 1,
+                Err(error) => {
+                    failure_count += 1;
+                    warn!("failed to bootstrap Meilisearch documents for user {user_id}: {error:?}");
+                }
+            }
+        }
+
+        match refresh_meili_readiness(&state).await {
+            Ok(MeiliReadiness::Ready) => info!(
+                success_count,
+                failure_count,
+                elapsed_ms = started_at.elapsed().as_millis() as u64,
+                "finished Meilisearch bootstrap"
+            ),
+            Ok(MeiliReadiness::Bootstrapping) => warn!(
+                success_count,
+                failure_count,
+                elapsed_ms = started_at.elapsed().as_millis() as u64,
+                "Meilisearch bootstrap completed with incomplete coverage; PostgreSQL fallback remains active"
+            ),
+            Ok(MeiliReadiness::Disabled) => {}
+            Err(error) => warn!("failed to refresh Meilisearch readiness after bootstrap: {error:?}"),
+        }
+    })
+}
+
+async fn load_meili_bootstrap_user_ids(pool: &PgPool) -> Result<Vec<Uuid>> {
+    let user_ids = sqlx::query_scalar::<_, Uuid>(
+        r#"
+        SELECT DISTINCT user_id
+        FROM search_documents
+        ORDER BY user_id ASC
+        "#,
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(user_ids)
+}
+
+async fn meili_is_ready(state: &AppState) -> bool {
+    matches!(*state.meili_readiness.read().await, MeiliReadiness::Ready)
+}
+
+async fn refresh_meili_readiness(state: &AppState) -> Result<MeiliReadiness> {
+    let readiness = match &state.meili {
+        Some(meili) => inspect_meili_readiness(meili, &state.pool).await?,
+        None => MeiliReadiness::Disabled,
+    };
+    *state.meili_readiness.write().await = readiness;
+    Ok(readiness)
 }
 
 async fn configure_meili_indexes(client: &MeilisearchClient) -> Result<()> {
@@ -2159,8 +2347,8 @@ async fn get_channel(
             FROM programs p
             WHERE p.user_id = c.user_id
               AND p.channel_id = c.id
-              AND p.end_at > NOW() - INTERVAL '2 hours'
-              AND p.start_at < NOW() + INTERVAL '6 hours'
+              AND p.end_at > NOW() - ($3 * INTERVAL '1 hour')
+              AND p.start_at < NOW() + ($4 * INTERVAL '1 day')
           ) AS has_epg,
           c.has_catchup,
           c.archive_duration_hours,
@@ -2176,6 +2364,8 @@ async fn get_channel(
     )
     .bind(auth.user_id)
     .bind(id)
+    .bind(EPG_RETENTION_PAST_HOURS)
+    .bind(EPG_RETENTION_FUTURE_DAYS)
     .fetch_optional(&state.pool)
     .await?
     .ok_or_else(|| AppError::NotFound("Channel not found".to_string()))?;
@@ -2303,7 +2493,8 @@ async fn search_channels(
 ) -> ApiResult<ChannelSearchResponse> {
     let auth = require_auth(&state, &headers).await?;
     let (term, offset, limit) = parse_search_pagination(query)?;
-    if let Some(meili) = &state.meili {
+    if meili_is_ready(&state).await {
+        let meili = state.meili.as_ref().expect("Meilisearch client must exist when ready");
         match search_channels_meili(&state, &headers, meili, auth.user_id, &term, offset, limit)
             .await
         {
@@ -2352,8 +2543,8 @@ async fn search_channels(
             FROM programs p
             WHERE p.user_id = c.user_id
               AND p.channel_id = c.id
-              AND p.end_at > NOW() - INTERVAL '2 hours'
-              AND p.start_at < NOW() + INTERVAL '6 hours'
+              AND p.end_at > NOW() - ($5 * INTERVAL '1 hour')
+              AND p.start_at < NOW() + ($6 * INTERVAL '1 day')
           ) AS has_epg,
           c.has_catchup,
           c.archive_duration_hours,
@@ -2372,6 +2563,8 @@ async fn search_channels(
     .bind(&term)
     .bind(offset)
     .bind(limit)
+    .bind(EPG_RETENTION_PAST_HOURS)
+    .bind(EPG_RETENTION_FUTURE_DAYS)
     .fetch_all(&state.pool)
     .await?;
     let total_count = rows.first().map(|row| row.total_count).unwrap_or(0);
@@ -2409,7 +2602,8 @@ async fn search_programs(
 ) -> ApiResult<ProgramSearchResponse> {
     let auth = require_auth(&state, &headers).await?;
     let (term, offset, limit) = parse_search_pagination(query)?;
-    if let Some(meili) = &state.meili {
+    if meili_is_ready(&state).await {
+        let meili = state.meili.as_ref().expect("Meilisearch client must exist when ready");
         match search_programs_meili(meili, &state.pool, auth.user_id, &term, offset, limit).await {
             Ok(response) => return Ok(Json(response)),
             Err(error) => {
@@ -2539,8 +2733,8 @@ async fn list_favorites(
           FROM programs p
           WHERE p.user_id = c.user_id
             AND p.channel_id = c.id
-            AND p.end_at > NOW() - INTERVAL '2 hours'
-            AND p.start_at < NOW() + INTERVAL '6 hours'
+            AND p.end_at > NOW() - ($2 * INTERVAL '1 hour')
+            AND p.start_at < NOW() + ($3 * INTERVAL '1 day')
           ORDER BY
             CASE
               WHEN p.start_at <= NOW() AND p.end_at > NOW() THEN 0
@@ -2568,6 +2762,8 @@ async fn list_favorites(
         "#,
     )
     .bind(auth.user_id)
+    .bind(EPG_RETENTION_PAST_HOURS)
+    .bind(EPG_RETENTION_FUTURE_DAYS)
     .fetch_all(&state.pool)
     .await?;
 
@@ -2633,8 +2829,8 @@ async fn list_recents(
             FROM programs p
             WHERE p.user_id = c.user_id
               AND p.channel_id = c.id
-              AND p.end_at > NOW() - INTERVAL '2 hours'
-              AND p.start_at < NOW() + INTERVAL '6 hours'
+              AND p.end_at > NOW() - ($2 * INTERVAL '1 hour')
+              AND p.start_at < NOW() + ($3 * INTERVAL '1 day')
           ) AS has_epg,
           c.has_catchup,
           c.archive_duration_hours,
@@ -2653,6 +2849,8 @@ async fn list_recents(
         "#,
     )
     .bind(auth.user_id)
+    .bind(EPG_RETENTION_PAST_HOURS)
+    .bind(EPG_RETENTION_FUTURE_DAYS)
     .fetch_all(&state.pool)
     .await?;
     let request_base_url = request_base_url(&state.config, &headers)?;
@@ -3673,14 +3871,16 @@ async fn fetch_guide_categories(
         LEFT JOIN programs p
           ON p.user_id = c.user_id
          AND p.channel_id = c.id
-         AND p.end_at > NOW() - INTERVAL '2 hours'
-         AND p.start_at < NOW() + INTERVAL '6 hours'
+         AND p.end_at > NOW() - ($2 * INTERVAL '1 hour')
+         AND p.start_at < NOW() + ($3 * INTERVAL '1 day')
         WHERE c.user_id = $1
         GROUP BY COALESCE(c.category_id::text, 'uncategorized'), COALESCE(cc.name, 'Uncategorized')
         ORDER BY live_now_count DESC, channel_count DESC, name ASC
         "#,
     )
     .bind(user_id)
+    .bind(EPG_RETENTION_PAST_HOURS)
+    .bind(EPG_RETENTION_FUTURE_DAYS)
     .fetch_all(pool)
     .await?;
 
@@ -3714,8 +3914,8 @@ async fn fetch_guide_category_summary(
         LEFT JOIN programs p
           ON p.user_id = c.user_id
          AND p.channel_id = c.id
-         AND p.end_at > NOW() - INTERVAL '2 hours'
-         AND p.start_at < NOW() + INTERVAL '6 hours'
+         AND p.end_at > NOW() - ($3 * INTERVAL '1 hour')
+         AND p.start_at < NOW() + ($4 * INTERVAL '1 day')
         WHERE c.user_id = $1
           AND (
             ($2 = 'uncategorized' AND c.category_id IS NULL)
@@ -3726,6 +3926,8 @@ async fn fetch_guide_category_summary(
     )
     .bind(user_id)
     .bind(category_id)
+    .bind(EPG_RETENTION_PAST_HOURS)
+    .bind(EPG_RETENTION_FUTURE_DAYS)
     .fetch_optional(pool)
     .await?;
 
@@ -3809,8 +4011,8 @@ async fn fetch_guide_category_rows(
           FROM programs p
           WHERE p.user_id = c.user_id
             AND p.channel_id = c.id
-            AND p.end_at > NOW() - INTERVAL '2 hours'
-            AND p.start_at < NOW() + INTERVAL '6 hours'
+            AND p.end_at > NOW() - ($5 * INTERVAL '1 hour')
+            AND p.start_at < NOW() + ($6 * INTERVAL '1 day')
           ORDER BY
             CASE
               WHEN p.start_at <= NOW() AND p.end_at > NOW() THEN 0
@@ -3846,6 +4048,8 @@ async fn fetch_guide_category_rows(
     .bind(category_id)
     .bind(offset)
     .bind(limit)
+    .bind(EPG_RETENTION_PAST_HOURS)
+    .bind(EPG_RETENTION_FUTURE_DAYS)
     .fetch_all(pool)
     .await?;
 
@@ -3868,8 +4072,8 @@ async fn fetch_channels(pool: &PgPool, user_id: Uuid) -> Result<Vec<ChannelRespo
             FROM programs p
             WHERE p.user_id = c.user_id
               AND p.channel_id = c.id
-              AND p.end_at > NOW() - INTERVAL '2 hours'
-              AND p.start_at < NOW() + INTERVAL '6 hours'
+              AND p.end_at > NOW() - ($2 * INTERVAL '1 hour')
+              AND p.start_at < NOW() + ($3 * INTERVAL '1 day')
           ) AS has_epg,
           c.has_catchup,
           c.archive_duration_hours,
@@ -3885,6 +4089,8 @@ async fn fetch_channels(pool: &PgPool, user_id: Uuid) -> Result<Vec<ChannelRespo
         "#,
     )
     .bind(user_id)
+    .bind(EPG_RETENTION_PAST_HOURS)
+    .bind(EPG_RETENTION_FUTURE_DAYS)
     .fetch_all(pool)
     .await?;
 
@@ -5749,6 +5955,8 @@ fn spawn_search_refresh(state: AppState, user_id: Uuid, job_id: Uuid) -> JoinHan
         if let Some(meili) = &state.meili {
             if let Err(error) = rebuild_meili_indexes(meili, user_id, &state.pool).await {
                 warn!("sync job {job_id}: failed to rebuild Meilisearch indexes: {error:?}");
+            } else if let Err(error) = refresh_meili_readiness(&state).await {
+                warn!("sync job {job_id}: failed to refresh Meilisearch readiness: {error:?}");
             }
         }
 
@@ -6708,7 +6916,11 @@ async fn rebuild_meili_indexes(
         channels_index
             .add_or_replace(&docs, Some("id"))
             .await?
-            .wait_for_completion(meili, None, None)
+            .wait_for_completion(
+                meili,
+                Some(MEILI_TASK_POLL_INTERVAL),
+                Some(MEILI_TASK_TIMEOUT),
+            )
             .await?;
         last_channel_id = rows.last().map(|row| row.id);
     }
@@ -6773,7 +6985,11 @@ async fn rebuild_meili_indexes(
         programs_index
             .add_or_replace(&docs, Some("id"))
             .await?
-            .wait_for_completion(meili, None, None)
+            .wait_for_completion(
+                meili,
+                Some(MEILI_TASK_POLL_INTERVAL),
+                Some(MEILI_TASK_TIMEOUT),
+            )
             .await?;
         last_program_id = rows.last().map(|row| row.id);
     }
@@ -6793,7 +7009,11 @@ async fn delete_meili_user_documents(
     index
         .delete_documents_with(&query)
         .await?
-        .wait_for_completion(meili, None, None)
+        .wait_for_completion(
+            meili,
+            Some(MEILI_TASK_POLL_INTERVAL),
+            Some(MEILI_TASK_TIMEOUT),
+        )
         .await?;
     Ok(())
 }
@@ -6822,8 +7042,8 @@ async fn load_channels_by_ids(
             FROM programs p
             WHERE p.user_id = c.user_id
               AND p.channel_id = c.id
-              AND p.end_at > NOW() - INTERVAL '2 hours'
-              AND p.start_at < NOW() + INTERVAL '6 hours'
+              AND p.end_at > NOW() - ($3 * INTERVAL '1 hour')
+              AND p.start_at < NOW() + ($4 * INTERVAL '1 day')
           ) AS has_epg,
           c.has_catchup,
           c.archive_duration_hours,
@@ -6840,6 +7060,8 @@ async fn load_channels_by_ids(
     )
     .bind(user_id)
     .bind(ids)
+    .bind(EPG_RETENTION_PAST_HOURS)
+    .bind(EPG_RETENTION_FUTURE_DAYS)
     .fetch_all(pool)
     .await?;
 
@@ -7301,6 +7523,42 @@ mod tests {
             logo_url.as_deref(),
             Some("https://provider.example.com/logo.png")
         );
+    }
+
+    #[test]
+    fn determine_meili_readiness_is_ready_when_postgres_is_empty() {
+        let readiness = determine_meili_readiness(SearchIndexCounts {
+            postgres_channel_documents: 0,
+            postgres_program_documents: 0,
+            meili_channel_documents: 0,
+            meili_program_documents: 0,
+        });
+
+        assert_eq!(readiness, MeiliReadiness::Ready);
+    }
+
+    #[test]
+    fn determine_meili_readiness_requires_matching_counts() {
+        let readiness = determine_meili_readiness(SearchIndexCounts {
+            postgres_channel_documents: 10,
+            postgres_program_documents: 25,
+            meili_channel_documents: 10,
+            meili_program_documents: 24,
+        });
+
+        assert_eq!(readiness, MeiliReadiness::Bootstrapping);
+    }
+
+    #[test]
+    fn determine_meili_readiness_is_ready_when_counts_match() {
+        let readiness = determine_meili_readiness(SearchIndexCounts {
+            postgres_channel_documents: 10,
+            postgres_program_documents: 25,
+            meili_channel_documents: 10,
+            meili_program_documents: 25,
+        });
+
+        assert_eq!(readiness, MeiliReadiness::Ready);
     }
 
     #[tokio::test]
@@ -7982,6 +8240,7 @@ mod tests {
             provider_http_client: reqwest::Client::new(),
             relay_http_client: reqwest::Client::new(),
             meili: None,
+            meili_readiness: Arc::new(RwLock::new(MeiliReadiness::Disabled)),
             session_cache: Arc::new(DashMap::new()),
             relay_profile_cache: Arc::new(DashMap::new()),
             receiver_channels: Arc::new(DashMap::new()),

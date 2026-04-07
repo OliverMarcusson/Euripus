@@ -1,0 +1,2 @@
+pub const EPG_RETENTION_PAST_HOURS: i64 = 2;
+pub const EPG_RETENTION_FUTURE_DAYS: i64 = 7;
