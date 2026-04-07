@@ -1,3 +1,5 @@
+use crate::epg::{EPG_RETENTION_FUTURE_DAYS, EPG_RETENTION_PAST_HOURS};
+
 use std::{
     collections::HashMap,
     io::{BufRead, BufReader, Read},
@@ -21,8 +23,6 @@ use tracing::{info, warn};
 
 const XMLTV_REQUEST_TIMEOUT: Duration = Duration::from_secs(600);
 const GZIP_MAGIC_BYTES: [u8; 2] = [0x1f, 0x8b];
-const XMLTV_PROGRAMME_RETENTION_PAST_HOURS: i64 = 2;
-const XMLTV_PROGRAMME_RETENTION_FUTURE_HOURS: i64 = 6;
 
 #[derive(Debug, Clone)]
 pub struct XmltvChannel {
@@ -351,8 +351,8 @@ where
     if skipped_out_of_window_programmes > 0 {
         info!(
             skipped_out_of_window_programmes,
-            retention_past_hours = XMLTV_PROGRAMME_RETENTION_PAST_HOURS,
-            retention_future_hours = XMLTV_PROGRAMME_RETENTION_FUTURE_HOURS,
+            retention_past_hours = EPG_RETENTION_PAST_HOURS,
+            retention_future_days = EPG_RETENTION_FUTURE_DAYS,
             "discarded XMLTV programme entries outside retention window"
         );
     }
@@ -514,8 +514,8 @@ where
     if skipped_out_of_window_programmes > 0 {
         info!(
             skipped_out_of_window_programmes,
-            retention_past_hours = XMLTV_PROGRAMME_RETENTION_PAST_HOURS,
-            retention_future_hours = XMLTV_PROGRAMME_RETENTION_FUTURE_HOURS,
+            retention_past_hours = EPG_RETENTION_PAST_HOURS,
+            retention_future_days = EPG_RETENTION_FUTURE_DAYS,
             "discarded XMLTV programme entries outside retention window"
         );
     }
@@ -573,8 +573,8 @@ fn programme_is_within_retention_window(
     end_at: DateTime<Utc>,
     now: DateTime<Utc>,
 ) -> bool {
-    let earliest_end = now - chrono::Duration::hours(XMLTV_PROGRAMME_RETENTION_PAST_HOURS);
-    let latest_start = now + chrono::Duration::hours(XMLTV_PROGRAMME_RETENTION_FUTURE_HOURS);
+    let earliest_end = now - chrono::Duration::hours(EPG_RETENTION_PAST_HOURS);
+    let latest_start = now + chrono::Duration::days(EPG_RETENTION_FUTURE_DAYS);
     end_at > earliest_end && start_at < latest_start
 }
 
@@ -684,8 +684,8 @@ mod tests {
         };
         let future_programme = PendingProgramme {
             channel_key: "channel-1".to_string(),
-            start_raw: "20260405180000 +0000".to_string(),
-            end_raw: "20260405190000 +0000".to_string(),
+            start_raw: "20260412120000 +0000".to_string(),
+            end_raw: "20260412130000 +0000".to_string(),
             title: "Future".to_string(),
             description: None,
         };
@@ -715,8 +715,8 @@ mod tests {
         };
         let upcoming_programme = PendingProgramme {
             channel_key: "channel-1".to_string(),
-            start_raw: "20260405175959 +0000".to_string(),
-            end_raw: "20260405190000 +0000".to_string(),
+            start_raw: "20260412115959 +0000".to_string(),
+            end_raw: "20260412130000 +0000".to_string(),
             title: "Upcoming".to_string(),
             description: None,
         };
