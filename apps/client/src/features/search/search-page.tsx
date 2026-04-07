@@ -1,7 +1,9 @@
-import { useInfiniteQuery } from "@tanstack/react-query";
+import type { SearchBackend } from "@euripus/shared";
+import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import {
   Clapperboard,
   Heart,
+  LoaderCircle,
   Play,
   Search as SearchIcon,
   TvMinimal,
@@ -28,7 +30,11 @@ import {
   useChannelPlaybackMutation,
   useProgramPlaybackMutation,
 } from "@/hooks/use-playback-actions";
-import { searchChannels, searchPrograms } from "@/lib/api";
+import {
+  getSearchBackendStatus,
+  searchChannels,
+  searchPrograms,
+} from "@/lib/api";
 import {
   canPlayProgram,
   formatTimeRange,
@@ -46,6 +52,13 @@ export function SearchPage() {
   const deferredQuery = useDeferredValue(query);
   const debouncedQuery = useDebounce(deferredQuery, 250);
   const hasQuery = debouncedQuery.trim().length > 1;
+  const searchBackendStatusQuery = useQuery({
+    queryKey: ["search", "status"],
+    queryFn: getSearchBackendStatus,
+    refetchInterval: (statusQuery) =>
+      statusQuery.state.data?.meilisearch === "indexing" ? 5_000 : false,
+    retry: 1,
+  });
   const channelQuery = useInfiniteQuery({
     queryKey: ["search", "channels", debouncedQuery],
     queryFn: ({ pageParam }) =>
@@ -70,11 +83,47 @@ export function SearchPage() {
   const programs = programQuery.data?.pages.flatMap((page) => page.items) ?? [];
   const channelTotal = channelQuery.data?.pages[0]?.totalCount ?? 0;
   const programTotal = programQuery.data?.pages[0]?.totalCount ?? 0;
+  const channelBackend = channelQuery.data?.pages[0]?.backend;
+  const programBackend = programQuery.data?.pages[0]?.backend;
   const totalMatches = channelTotal + programTotal;
+  const isSearchIndexing =
+    searchBackendStatusQuery.data?.meilisearch === "indexing";
+  const searchIndexProgressPercent =
+    searchBackendStatusQuery.data?.progressPercent;
   const isInitialLoading =
     hasQuery &&
     ((channelQuery.isPending && !channels.length) ||
       (programQuery.isPending && !programs.length));
+  const headerMeta =
+    isSearchIndexing || hasQuery ? (
+      <>
+        {isSearchIndexing ? (
+          <Badge variant="outline" className="gap-1.5">
+            {typeof searchIndexProgressPercent === "number" ? (
+              <span
+                className="inline-flex size-6 items-center justify-center rounded-full border border-border bg-background text-[10px] font-semibold leading-none tabular-nums"
+                aria-label={`${searchIndexProgressPercent}% indexed`}
+              >
+                {searchIndexProgressPercent}%
+              </span>
+            ) : (
+              <LoaderCircle
+                className="size-3.5 animate-spin"
+                aria-hidden="true"
+              />
+            )}
+            Search index updating
+          </Badge>
+        ) : null}
+        {hasQuery ? (
+          <>
+            <Badge variant="accent">{totalMatches} matches</Badge>
+            <Badge variant="outline">{channelTotal} channels</Badge>
+            <Badge variant="outline">{programTotal} programs</Badge>
+          </>
+        ) : null}
+      </>
+    ) : null;
 
   useEffect(() => {
     if (!hasQuery) {
@@ -96,15 +145,7 @@ export function SearchPage() {
     <div className="flex flex-col gap-6">
       <PageHeader
         title="Master Search"
-        meta={
-          hasQuery ? (
-            <>
-              <Badge variant="accent">{totalMatches} matches</Badge>
-              <Badge variant="outline">{channelTotal} channels</Badge>
-              <Badge variant="outline">{programTotal} programs</Badge>
-            </>
-          ) : null
-        }
+        meta={headerMeta}
       />
 
       <Card className="rounded-none border-0 bg-transparent shadow-none sm:border-border/80 sm:bg-gradient-to-r sm:from-card sm:via-card sm:to-primary/5 sm:shadow-sm">
@@ -170,17 +211,22 @@ export function SearchPage() {
         >
           <TabsList>
             <TabsTrigger value="channels">
-              Channels ({channelTotal})
+              <span>Channels ({channelTotal})</span>
+              <SearchBackendBadge backend={channelBackend} compact />
             </TabsTrigger>
             <TabsTrigger value="programs">
-              Programs ({programTotal})
+              <span>Programs ({programTotal})</span>
+              <SearchBackendBadge backend={programBackend} compact />
             </TabsTrigger>
           </TabsList>
 
           <TabsContent value="channels" className="mt-0">
             <Card className="rounded-none border-0 bg-transparent shadow-none sm:rounded-xl sm:border sm:bg-card sm:shadow-sm">
               <CardHeader className="px-0 pt-0 pb-4 sm:px-6 sm:pt-6 sm:pb-0">
-                <CardTitle>Channel matches</CardTitle>
+                <div className="flex items-center justify-between gap-3">
+                  <CardTitle>Channel matches</CardTitle>
+                  <SearchBackendBadge backend={channelBackend} />
+                </div>
               </CardHeader>
               <CardContent className="p-0">
                 {channels.length ? (
@@ -271,7 +317,10 @@ export function SearchPage() {
           <TabsContent value="programs" className="mt-0">
             <Card className="rounded-none border-0 bg-transparent shadow-none sm:rounded-xl sm:border sm:bg-card sm:shadow-sm">
               <CardHeader className="px-0 pt-0 pb-4 sm:px-6 sm:pt-6 sm:pb-0">
-                <CardTitle>EPG matches</CardTitle>
+                <div className="flex items-center justify-between gap-3">
+                  <CardTitle>EPG matches</CardTitle>
+                  <SearchBackendBadge backend={programBackend} />
+                </div>
               </CardHeader>
               <CardContent className="p-0">
                 {programs.length ? (
@@ -389,6 +438,24 @@ function ProgramStateBadge({ state }: { state: ProgramPlaybackState }) {
   }
 
   return <Badge variant="outline">Info only</Badge>;
+}
+
+function SearchBackendBadge({
+  backend,
+  compact = false,
+}: {
+  backend?: SearchBackend;
+  compact?: boolean;
+}) {
+  if (!backend) {
+    return null;
+  }
+
+  if (backend === "meilisearch") {
+    return <Badge variant="accent">{compact ? "Meili" : "Meilisearch"}</Badge>;
+  }
+
+  return <Badge variant="outline">{compact ? "Postgres" : "PostgreSQL fallback"}</Badge>;
 }
 
 function LoadMoreTrigger({

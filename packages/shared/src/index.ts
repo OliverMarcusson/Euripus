@@ -67,7 +67,7 @@ export type ProviderProfile = {
 export type SyncJob = {
   id: string;
   status: "queued" | "running" | "succeeded" | "failed";
-  jobType: "full" | "epg";
+  jobType: "full" | "epg" | "channels";
   trigger: "manual" | "scheduled";
   createdAt: string;
   startedAt: string | null;
@@ -78,6 +78,15 @@ export type SyncJob = {
   phaseMessage: string | null;
   errorMessage: string | null;
 };
+
+export type SearchBackendStatus = {
+  meilisearch: "disabled" | "indexing" | "ready";
+  progressPercent?: number | null;
+  indexedDocuments?: number | null;
+  totalDocuments?: number | null;
+};
+
+export type SearchBackend = "meilisearch" | "postgres";
 
 export type Channel = {
   id: string;
@@ -133,6 +142,7 @@ export type GuideCategoryResponse = {
 
 export type SearchResultPage<T> = {
   query: string;
+  backend: SearchBackend;
   items: T[];
   totalCount: number;
   nextOffset: number | null;
