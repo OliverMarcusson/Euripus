@@ -1083,6 +1083,7 @@ const DATABASE_STARTUP_TIMEOUT: Duration = Duration::from_secs(180);
 const DATABASE_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const DATABASE_RETRY_DELAY_INITIAL: Duration = Duration::from_secs(2);
 const DATABASE_RETRY_DELAY_MAX: Duration = Duration::from_secs(10);
+const MEILI_STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
 const SESSION_CACHE_TTL: Duration = Duration::from_secs(30);
 const RELAY_PROFILE_CACHE_TTL: Duration = Duration::from_secs(10);
 const PERIODIC_CHANNEL_SYNC_INTERVAL: Duration = Duration::from_secs(60 * 3);
@@ -1149,7 +1150,9 @@ async fn main() -> Result<()> {
         receiver_channels: Arc::new(DashMap::new()),
     };
 
-    if matches!(meili_setup.readiness, MeiliReadiness::Bootstrapping) {
+    if state.meili.is_some() && !meili_setup.schema_ready {
+        spawn_meili_startup_worker(state.clone());
+    } else if matches!(meili_setup.readiness, MeiliReadiness::Bootstrapping) {
         spawn_meili_bootstrap_worker(state.clone());
     }
 
@@ -1246,55 +1249,75 @@ async fn setup_meilisearch(config: &Config, pool: &PgPool) -> MeiliSetup {
         }
     };
 
-    let schema_ready = inspect_meili_schema_readiness(&client).await.unwrap_or_else(|error| {
-        warn!(
-            "failed to inspect Meilisearch schema version before setup; forcing bootstrap: {error:?}"
-        );
-        false
-    });
+    let startup_result = tokio::time::timeout(MEILI_STARTUP_TIMEOUT, async {
+        let schema_ready = inspect_meili_schema_readiness(&client).await.unwrap_or_else(|error| {
+            warn!(
+                "failed to inspect Meilisearch schema version before setup; forcing bootstrap: {error:?}"
+            );
+            false
+        });
 
-    let strategy = ExponentialBackoff::from_millis(500).factor(2).take(4);
-    let setup_result = Retry::spawn(strategy, || {
-        let client = client.clone();
-        let pool = pool.clone();
-        async move { configure_meili_indexes(&client, &pool).await }
-    })
-    .await;
+        let strategy = ExponentialBackoff::from_millis(500).factor(2).take(4);
+        let setup_result = Retry::spawn(strategy, || {
+            let client = client.clone();
+            let pool = pool.clone();
+            async move { configure_meili_indexes(&client, &pool).await }
+        })
+        .await;
 
-    match setup_result {
-        Ok(()) => {
-            let readiness = match inspect_meili_readiness(&client, pool, schema_ready).await {
-                Ok(readiness) => readiness,
-                Err(error) => {
-                    warn!(
-                        "failed to verify Meilisearch index readiness, falling back to PostgreSQL search: {error:?}"
-                    );
+        match setup_result {
+            Ok(()) => {
+                let readiness = match inspect_meili_readiness(&client, pool, schema_ready).await {
+                    Ok(readiness) => readiness,
+                    Err(error) => {
+                        warn!(
+                            "failed to verify Meilisearch index readiness, falling back to PostgreSQL search: {error:?}"
+                        );
                     return MeiliSetup {
-                        client: None,
-                        readiness: MeiliReadiness::Disabled,
-                        schema_ready: true,
+                        client: Some(Arc::new(client.clone())),
+                        readiness: MeiliReadiness::Bootstrapping,
+                        schema_ready: false,
                     };
                 }
             };
             match readiness {
-                MeiliReadiness::Ready => info!("Meilisearch configured successfully"),
-                MeiliReadiness::Bootstrapping => warn!(
-                    "Meilisearch configured but requires bootstrap from PostgreSQL; search will use PostgreSQL until bootstrap completes"
-                ),
-                MeiliReadiness::Disabled => {}
+                    MeiliReadiness::Ready => info!("Meilisearch configured successfully"),
+                    MeiliReadiness::Bootstrapping => warn!(
+                        "Meilisearch configured but requires bootstrap from PostgreSQL; search will use PostgreSQL until bootstrap completes"
+                    ),
+                    MeiliReadiness::Disabled => {}
+                }
+                MeiliSetup {
+                    client: Some(Arc::new(client.clone())),
+                    readiness,
+                    schema_ready,
+                }
             }
-            MeiliSetup {
-                client: Some(Arc::new(client)),
-                readiness,
-                schema_ready,
+            Err(error) => {
+                warn!(
+                    "failed to configure Meilisearch during startup, continuing setup in the background: {error:?}"
+                );
+                MeiliSetup {
+                    client: Some(Arc::new(client.clone())),
+                    readiness: MeiliReadiness::Bootstrapping,
+                    schema_ready: false,
+                }
             }
         }
-        Err(error) => {
-            warn!("failed to configure Meilisearch, falling back to PostgreSQL search: {error:?}");
+    })
+    .await;
+
+    match startup_result {
+        Ok(setup) => setup,
+        Err(_) => {
+            warn!(
+                "Meilisearch startup exceeded {}s, continuing setup in the background",
+                MEILI_STARTUP_TIMEOUT.as_secs()
+            );
             MeiliSetup {
-                client: None,
-                readiness: MeiliReadiness::Disabled,
-                schema_ready: true,
+                client: Some(Arc::new(client)),
+                readiness: MeiliReadiness::Bootstrapping,
+                schema_ready: false,
             }
         }
     }
@@ -1436,6 +1459,55 @@ fn apply_meili_schema_version(mut synonyms: HashMap<String, Vec<String>>) -> Has
         vec![MEILI_SCHEMA_VERSION.to_string()],
     );
     synonyms
+}
+
+fn spawn_meili_startup_worker(state: AppState) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        let Some(meili) = state.meili.clone() else {
+            return;
+        };
+
+        info!("continuing Meilisearch startup in the background");
+        let strategy = ExponentialBackoff::from_millis(500).factor(2).take(4);
+        let setup_result = Retry::spawn(strategy, || {
+            let client = meili.clone();
+            let pool = state.pool.clone();
+            async move { configure_meili_indexes(&client, &pool).await }
+        })
+        .await;
+
+        match setup_result {
+            Ok(()) => {
+                *state.meili_schema_ready.write().await = true;
+                match inspect_meili_readiness(&meili, &state.pool, true).await {
+                    Ok(MeiliReadiness::Ready) => {
+                        *state.meili_readiness.write().await = MeiliReadiness::Ready;
+                        info!("Meilisearch background startup completed successfully");
+                    }
+                    Ok(MeiliReadiness::Bootstrapping) => {
+                        *state.meili_readiness.write().await = MeiliReadiness::Bootstrapping;
+                        warn!(
+                            "Meilisearch schema is ready; continuing document bootstrap in the background"
+                        );
+                        spawn_meili_bootstrap_worker(state.clone());
+                    }
+                    Ok(MeiliReadiness::Disabled) => {
+                        *state.meili_readiness.write().await = MeiliReadiness::Disabled;
+                    }
+                    Err(error) => {
+                        warn!(
+                            "failed to inspect Meilisearch readiness after background startup: {error:?}"
+                        );
+                    }
+                }
+            }
+            Err(error) => {
+                warn!(
+                    "failed to finish Meilisearch startup in the background; PostgreSQL fallback remains active: {error:?}"
+                );
+            }
+        }
+    })
 }
 
 fn spawn_meili_bootstrap_worker(state: AppState) -> JoinHandle<()> {
