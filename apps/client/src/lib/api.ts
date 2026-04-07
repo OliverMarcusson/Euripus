@@ -25,6 +25,7 @@ import type {
   RemoteCommandAck,
   RemoteControllerTarget,
   RemotePlaybackCommand,
+  SearchBackendStatus,
   ServerNetworkStatus,
   SyncJob,
   User,
@@ -163,6 +164,10 @@ export function getCurrentUser() {
 
 export function getServerNetworkStatus() {
   return request<ServerNetworkStatus>("/server/network");
+}
+
+export function getSearchBackendStatus() {
+  return request<SearchBackendStatus>("/search/status");
 }
 
 export function getSessions() {

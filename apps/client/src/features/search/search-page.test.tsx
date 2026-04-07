@@ -1,7 +1,12 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { SearchPage } from "@/features/search/search-page";
-import { searchChannels, searchPrograms, startRemoteChannelPlayback } from "@/lib/api";
+import {
+  getSearchBackendStatus,
+  searchChannels,
+  searchPrograms,
+  startRemoteChannelPlayback,
+} from "@/lib/api";
 import { useRemoteControllerStore } from "@/store/remote-controller-store";
 
 vi.mock("@/hooks/use-debounce", () => ({
@@ -10,6 +15,7 @@ vi.mock("@/hooks/use-debounce", () => ({
 
 vi.mock("@/lib/api", () => ({
   addFavorite: vi.fn(),
+  getSearchBackendStatus: vi.fn(),
   removeFavorite: vi.fn(),
   searchChannels: vi.fn(),
   searchPrograms: vi.fn(),
@@ -19,6 +25,7 @@ vi.mock("@/lib/api", () => ({
   startRemoteProgramPlayback: vi.fn(),
 }));
 
+const mockedGetSearchBackendStatus = vi.mocked(getSearchBackendStatus);
 const mockedSearchChannels = vi.mocked(searchChannels);
 const mockedSearchPrograms = vi.mocked(searchPrograms);
 const mockedStartRemoteChannelPlayback = vi.mocked(startRemoteChannelPlayback);
@@ -28,6 +35,12 @@ describe("SearchPage", () => {
     vi.clearAllMocks();
     vi.spyOn(Date, "now").mockReturnValue(new Date("2026-04-04T12:00:00.000Z").getTime());
     useRemoteControllerStore.getState().clearTarget();
+    mockedGetSearchBackendStatus.mockResolvedValue({
+      meilisearch: "ready",
+      progressPercent: 100,
+      indexedDocuments: 0,
+      totalDocuments: 0,
+    });
     mockedStartRemoteChannelPlayback.mockResolvedValue({
       id: "remote-command-1",
       targetDeviceId: "tv-1",
@@ -59,15 +72,31 @@ describe("SearchPage", () => {
     );
   }
 
+  it("shows an indexing spinner while Meilisearch is still bootstrapping", async () => {
+    mockedGetSearchBackendStatus.mockResolvedValue({
+      meilisearch: "indexing",
+      progressPercent: 42,
+      indexedDocuments: 42,
+      totalDocuments: 100,
+    });
+
+    renderSearchPage();
+
+    expect(await screen.findByText("Search index updating")).toBeInTheDocument();
+    expect(screen.getByText("42%")).toBeInTheDocument();
+  });
+
   it("renders EPG program states and play buttons only for playable results", async () => {
     mockedSearchChannels.mockResolvedValue({
       query: "hammarby",
+      backend: "meilisearch",
       items: [],
       totalCount: 0,
       nextOffset: null,
     });
     mockedSearchPrograms.mockResolvedValue({
       query: "hammarby",
+      backend: "meilisearch",
       items: [
         {
           id: "live-program",
@@ -131,6 +160,7 @@ describe("SearchPage", () => {
   it("renders favorite controls for channel matches", async () => {
     mockedSearchChannels.mockResolvedValue({
       query: "arena",
+      backend: "meilisearch",
       items: [
         {
           id: "channel-1",
@@ -151,6 +181,7 @@ describe("SearchPage", () => {
     });
     mockedSearchPrograms.mockResolvedValue({
       query: "arena",
+      backend: "postgres",
       items: [],
       totalCount: 0,
       nextOffset: null,
@@ -170,6 +201,7 @@ describe("SearchPage", () => {
   it("does not render the EPG badge when a channel only has an epg mapping id", async () => {
     mockedSearchChannels.mockResolvedValue({
       query: "film",
+      backend: "postgres",
       items: [
         {
           id: "channel-film",
@@ -190,6 +222,7 @@ describe("SearchPage", () => {
     });
     mockedSearchPrograms.mockResolvedValue({
       query: "film",
+      backend: "postgres",
       items: [],
       totalCount: 0,
       nextOffset: null,
@@ -226,6 +259,7 @@ describe("SearchPage", () => {
     });
     mockedSearchChannels.mockResolvedValue({
       query: "arena",
+      backend: "meilisearch",
       items: [
         {
           id: "channel-1",
@@ -246,6 +280,7 @@ describe("SearchPage", () => {
     });
     mockedSearchPrograms.mockResolvedValue({
       query: "arena",
+      backend: "meilisearch",
       items: [],
       totalCount: 0,
       nextOffset: null,
@@ -261,5 +296,30 @@ describe("SearchPage", () => {
     await waitFor(() =>
       expect(mockedStartRemoteChannelPlayback).toHaveBeenCalledWith("channel-1"),
     );
+  });
+
+  it("shows which backend answered each search section", async () => {
+    mockedSearchChannels.mockResolvedValue({
+      query: "arena",
+      backend: "meilisearch",
+      items: [],
+      totalCount: 0,
+      nextOffset: null,
+    });
+    mockedSearchPrograms.mockResolvedValue({
+      query: "arena",
+      backend: "postgres",
+      items: [],
+      totalCount: 0,
+      nextOffset: null,
+    });
+
+    renderSearchPage();
+    fireEvent.change(screen.getByPlaceholderText(/^search$/i), {
+      target: { value: "arena" },
+    });
+
+    expect(await screen.findByText("Meilisearch")).toBeInTheDocument();
+    expect(await screen.findByText("Postgres")).toBeInTheDocument();
   });
 });

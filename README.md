@@ -16,6 +16,7 @@ Euripus is a self-hostable IPTV application with a Rust API, a React web client,
 2. Run `bun install`.
 3. Start the full local stack with `bun run dev:start`.
 4. Stop it with `bun run dev:stop`.
+5. Reset PostgreSQL + Meilisearch and restart everything with `bun run dev:reset`.
 
 The Vite dev server proxies `/api` and `/health` to `http://127.0.0.1:8080`, so the browser client uses the same same-origin API shape in development and production.
 
@@ -32,6 +33,7 @@ Use `docker-compose.selfhosted.yml` for the self-hosted web deployment. The depl
 5. Publish fresh images with `bun run publish`.
 6. On the production host, start or refresh the stack with `bun run prod:start`.
    Stop it with `bun run prod:stop`.
+   Reset PostgreSQL + Meilisearch and restart the stack with `bun run prod:reset`.
 7. Point your reverse proxy at the host port `8088` by default, or override `EURIPUS_WEB_PORT`.
 
 The `web` service is the only public upstream. It serves the SPA, forwards `/api/*` to the Rust backend, and keeps PostgreSQL private inside the Compose network.

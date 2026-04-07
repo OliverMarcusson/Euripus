@@ -28,6 +28,8 @@ services:
       dockerfile: apps/server/Dockerfile
     env_file:
       - apps/server/.env
+    environment:
+      APP_MEILISEARCH_URL: http://meilisearch:7700
     depends_on:
       meilisearch:
         condition: service_started

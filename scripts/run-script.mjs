@@ -20,12 +20,21 @@ const scriptMap = {
     sh: "dev-stop.sh",
     args: [],
   },
+  "dev:reset": {
+    ps1: "dev-reset.ps1",
+    sh: "dev-reset.sh",
+    args: [],
+  },
   "prod:start": {
     sh: "deploy.sh",
     args: [],
   },
   "prod:stop": {
     sh: "prod-stop.sh",
+    args: [],
+  },
+  "prod:reset": {
+    sh: "prod-reset.sh",
     args: [],
   },
   publish: {
