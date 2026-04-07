@@ -39,6 +39,7 @@ services:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8080/health || exit 1"]
       interval: 5s
       timeout: 5s
+      start_period: 180s
       retries: 12
     ports:
       - "8080:8080"
