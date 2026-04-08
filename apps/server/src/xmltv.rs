@@ -24,6 +24,7 @@ use tracing::{info, warn};
 const XMLTV_REQUEST_TIMEOUT: Duration = Duration::from_secs(600);
 const GZIP_MAGIC_BYTES: [u8; 2] = [0x1f, 0x8b];
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct XmltvChannel {
     pub id: String,
@@ -131,6 +132,7 @@ pub async fn fetch_xmltv(client: &Client, url: &Url) -> Result<XmltvFeed> {
     Ok(feed)
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn decode_xmltv_bytes(metadata: &XmltvResponseMetadata, bytes: &[u8]) -> Result<String> {
     let decoded_bytes = if should_decompress_gzip(metadata, bytes) {
         let mut decoder = GzDecoder::new(bytes);
@@ -196,11 +198,13 @@ fn should_decompress_gzip(metadata: &XmltvResponseMetadata, bytes: &[u8]) -> boo
         || bytes.starts_with(&GZIP_MAGIC_BYTES)
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn parse_xmltv(xml: &str) -> Result<XmltvFeed> {
     let reader = Reader::from_reader(BufReader::new(xml.as_bytes()));
     parse_xmltv_reader(reader)
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 fn parse_xmltv_reader<R>(mut reader: Reader<R>) -> Result<XmltvFeed>
 where
     R: BufRead,
