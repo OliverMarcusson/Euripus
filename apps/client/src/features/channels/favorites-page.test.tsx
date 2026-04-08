@@ -4,9 +4,19 @@ import { FavoritesPage } from "@/features/channels/favorites-page";
 import { getFavorites } from "@/lib/api";
 import { formatTimeRange } from "@/lib/utils";
 
+vi.mock("@tanstack/react-router", async () => {
+  const actual = await vi.importActual<typeof import("@tanstack/react-router")>("@tanstack/react-router");
+  return {
+    ...actual,
+    useNavigate: () => vi.fn(),
+  };
+});
+
 vi.mock("@/lib/api", () => ({
   addFavorite: vi.fn(),
+  addCategoryFavorite: vi.fn(),
   getFavorites: vi.fn(),
+  removeCategoryFavorite: vi.fn(),
   removeFavorite: vi.fn(),
   startChannelPlayback: vi.fn(),
   startRemoteChannelPlayback: vi.fn(),
@@ -45,6 +55,7 @@ describe("FavoritesPage", () => {
   it("shows epg metadata when a favorite has a current program", async () => {
     mockedGetFavorites.mockResolvedValue([
       {
+        kind: "channel",
         channel: {
           id: "channel-1",
           name: "Arena 1",
@@ -90,6 +101,7 @@ describe("FavoritesPage", () => {
   it("keeps the row clean when no epg is available", async () => {
     mockedGetFavorites.mockResolvedValue([
       {
+        kind: "channel",
         channel: {
           id: "channel-2",
           name: "Arena 2",
@@ -113,5 +125,46 @@ describe("FavoritesPage", () => {
     expect(screen.queryByText("Live now")).not.toBeInTheDocument();
     expect(screen.queryByText("Upcoming")).not.toBeInTheDocument();
     expect(screen.queryByText("Info only")).not.toBeInTheDocument();
+  });
+
+  it("renders favorite categories before favorite channels", async () => {
+    mockedGetFavorites.mockResolvedValue([
+      {
+        kind: "category",
+        category: {
+          id: "sports",
+          name: "Sports",
+          channelCount: 3,
+          liveNowCount: 1,
+          isFavorite: true,
+        },
+      },
+      {
+        kind: "channel",
+        channel: {
+          id: "channel-3",
+          name: "Arena 3",
+          logoUrl: null,
+          categoryName: "Sports",
+          remoteStreamId: 3,
+          epgChannelId: null,
+          hasEpg: false,
+          hasCatchup: false,
+          archiveDurationHours: null,
+          streamExtension: "m3u8",
+          isFavorite: true,
+        },
+        program: null,
+      },
+    ]);
+
+    renderFavoritesPage();
+
+    const headings = await screen.findAllByRole("heading", { level: 2 });
+    expect(headings.map((heading) => heading.textContent)).toEqual([
+      "Sports",
+      "Arena 3",
+    ]);
+    expect(screen.getByText("Category")).toBeInTheDocument();
   });
 });

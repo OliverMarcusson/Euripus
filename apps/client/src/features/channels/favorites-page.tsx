@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
+import { useNavigate } from "@tanstack/react-router";
 import { Heart, Play } from "lucide-react";
-import type { Program } from "@euripus/shared";
+import type { FavoriteCategoryEntry, FavoriteChannelEntry, Program } from "@euripus/shared";
 import { PageHeader } from "@/components/layout/page-header";
 import { ChannelAvatar } from "@/components/ui/channel-avatar";
 import { Badge } from "@/components/ui/badge";
@@ -15,6 +16,7 @@ import {
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useChannelFavoriteMutation } from "@/hooks/use-channel-favorite";
+import { useCategoryFavoriteMutation } from "@/hooks/use-category-favorite";
 import { useChannelPlaybackMutation } from "@/hooks/use-playback-actions";
 import { getFavorites } from "@/lib/api";
 import {
@@ -25,22 +27,35 @@ import {
   type ProgramPlaybackState,
 } from "@/lib/utils";
 import { Progress } from "@/components/ui/progress";
+import { useGuideNavigationStore } from "@/store/guide-navigation-store";
 
 export function FavoritesPage() {
+  const navigate = useNavigate();
+  const requestOpenCategory = useGuideNavigationStore(
+    (state) => state.requestOpenCategory,
+  );
   const favoritesQuery = useQuery({
     queryKey: ["favorites"],
     queryFn: getFavorites,
   });
   const favoriteMutation = useChannelFavoriteMutation();
+  const categoryFavoriteMutation = useCategoryFavoriteMutation();
   const playMutation = useChannelPlaybackMutation();
 
   const favorites = favoritesQuery.data ?? [];
+  const categoryFavorites = favorites.filter(
+    (entry): entry is FavoriteCategoryEntry => entry.kind === "category",
+  );
+  const channelFavorites = favorites.filter(
+    (entry): entry is FavoriteChannelEntry => entry.kind === "channel",
+  );
+  const savedCount = categoryFavorites.length + channelFavorites.length;
 
   return (
     <div className="flex flex-col gap-5 sm:gap-6">
       <PageHeader
         title="Favorites"
-        meta={<Badge variant="accent">{favorites.length} saved</Badge>}
+        meta={<Badge variant="accent">{savedCount} saved</Badge>}
       />
 
       {favoritesQuery.isPending ? (
@@ -81,12 +96,30 @@ export function FavoritesPage() {
       {!favoritesQuery.isPending && favorites.length ? (
         <Card className="overflow-hidden rounded-none border-0 bg-transparent shadow-none sm:rounded-xl sm:border sm:bg-card sm:shadow-sm">
           <CardHeader className="px-0 pt-0 pb-4 sm:p-5 sm:pb-0">
-            <CardTitle>Saved channels</CardTitle>
+            <CardTitle>Saved items</CardTitle>
           </CardHeader>
           <CardContent className="p-0">
-            {favorites.map(({ channel, program }, index) => (
+            {categoryFavorites.map((entry, index) => (
+              <FavoriteCategoryRow
+                key={entry.category.id}
+                entry={entry}
+                index={index}
+                pending={
+                  categoryFavoriteMutation.isPending &&
+                  categoryFavoriteMutation.variables?.id === entry.category.id
+                }
+                onOpen={() => {
+                  requestOpenCategory(entry.category.id);
+                  void navigate({ to: "/guide" });
+                }}
+                onToggleFavorite={() =>
+                  categoryFavoriteMutation.mutate(entry.category)
+                }
+              />
+            ))}
+            {channelFavorites.map(({ channel, program }, index) => (
               <div key={channel.id} className="group">
-                {index > 0 ? <Separator /> : null}
+                {index > 0 || categoryFavorites.length > 0 ? <Separator /> : null}
                 <div className="flex flex-col gap-4 p-4 sm:gap-5 sm:p-5 transition-colors hover:bg-muted/30">
                   <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
                     <div className="flex min-w-0 flex-1 items-start gap-3 sm:gap-4">
@@ -184,6 +217,75 @@ export function FavoritesPage() {
           </CardContent>
         </Card>
       ) : null}
+    </div>
+  );
+}
+
+function FavoriteCategoryRow({
+  entry,
+  index,
+  pending,
+  onOpen,
+  onToggleFavorite,
+}: {
+  entry: FavoriteCategoryEntry;
+  index: number;
+  pending: boolean;
+  onOpen: () => void;
+  onToggleFavorite: () => void;
+}) {
+  const { category } = entry;
+
+  return (
+    <div className="group">
+      {index > 0 ? <Separator /> : null}
+      <div className="flex flex-col gap-4 p-4 sm:gap-5 sm:p-5 transition-colors hover:bg-muted/30">
+        <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
+          <div className="flex min-w-0 flex-1 flex-col gap-2">
+            <div className="flex min-w-0 flex-wrap items-center gap-2">
+              <h2 className="min-w-0 break-words text-base font-semibold tracking-tight sm:text-lg">
+                {category.name}
+              </h2>
+              <Badge variant="accent">Category</Badge>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge variant="outline">{category.channelCount} channels</Badge>
+              <Badge variant={category.liveNowCount ? "live" : "outline"}>
+                {category.liveNowCount} live now
+              </Badge>
+            </div>
+          </div>
+          <div className="hidden shrink-0 items-center gap-2 pt-1 sm:flex">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="text-muted-foreground hover:bg-secondary/60 hover:text-foreground"
+              onClick={onToggleFavorite}
+              disabled={pending}
+            >
+              <Heart data-icon="inline-start" className="fill-current opacity-70" />
+              Unfavorite
+            </Button>
+            <Button size="sm" className="min-w-24 shadow-sm" onClick={onOpen}>
+              Open
+            </Button>
+          </div>
+        </div>
+        <div className="flex w-full items-center gap-2 sm:hidden">
+          <Button
+            variant="secondary"
+            className="flex-1 bg-secondary/50 shadow-sm"
+            onClick={onToggleFavorite}
+            disabled={pending}
+          >
+            <Heart data-icon="inline-start" className="fill-current opacity-70" />
+            Unfavorite
+          </Button>
+          <Button className="flex-1 shadow-sm" onClick={onOpen}>
+            Open
+          </Button>
+        </div>
+      </div>
     </div>
   );
 }

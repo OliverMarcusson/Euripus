@@ -118,6 +118,7 @@ export type GuideCategorySummary = {
   name: string;
   channelCount: number;
   liveNowCount: number;
+  isFavorite: boolean;
 };
 
 export type GuideChannelEntry = {
@@ -152,7 +153,16 @@ export type ChannelSearchResults = SearchResultPage<Channel>;
 
 export type ProgramSearchResults = SearchResultPage<Program>;
 
-export type FavoriteEntry = GuideChannelEntry;
+export type FavoriteChannelEntry = GuideChannelEntry & {
+  kind: "channel";
+};
+
+export type FavoriteCategoryEntry = {
+  kind: "category";
+  category: GuideCategorySummary;
+};
+
+export type FavoriteEntry = FavoriteCategoryEntry | FavoriteChannelEntry;
 
 export type RecentChannel = {
   channel: Channel;

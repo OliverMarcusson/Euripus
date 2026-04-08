@@ -267,6 +267,14 @@ export function removeFavorite(channelId: string) {
   return request<void>(`/favorites/${channelId}`, { method: "DELETE" });
 }
 
+export function addCategoryFavorite(categoryId: string) {
+  return request<void>(`/favorites/categories/${categoryId}`, { method: "POST" });
+}
+
+export function removeCategoryFavorite(categoryId: string) {
+  return request<void>(`/favorites/categories/${categoryId}`, { method: "DELETE" });
+}
+
 export function getRecents() {
   return request<RecentChannel[]>("/recents");
 }
