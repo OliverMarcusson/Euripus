@@ -1,7 +1,10 @@
-use super::*;
 use super::lexicon::SearchLexicon;
+use super::*;
 
-pub(in crate::server_main) async fn rebuild_search_documents(pool: &PgPool, user_id: Uuid) -> Result<()> {
+pub(in crate::server_main) async fn rebuild_search_documents(
+    pool: &PgPool,
+    user_id: Uuid,
+) -> Result<()> {
     sqlx::query(
         r#"
         DELETE FROM search_documents
@@ -346,9 +349,9 @@ fn derive_event_keywords(value: &str) -> Vec<String> {
 }
 
 fn contains_any_keyword(text: &str, keywords: &[&str]) -> bool {
-    keywords.iter().any(|keyword| {
-        contains_normalized_phrase(text, &lexicon::normalize_search_text(keyword))
-    })
+    keywords
+        .iter()
+        .any(|keyword| contains_normalized_phrase(text, &lexicon::normalize_search_text(keyword)))
 }
 
 fn detect_event_channel(value: &str) -> bool {
@@ -387,10 +390,7 @@ fn is_placeholder_channel_name(value: &str) -> bool {
     )
 }
 
-pub(in crate::server_main) fn channel_doc_contains_term(
-    doc: &MeiliChannelDoc,
-    term: &str,
-) -> bool {
+pub(in crate::server_main) fn channel_doc_contains_term(doc: &MeiliChannelDoc, term: &str) -> bool {
     let term = term.to_ascii_lowercase();
     doc.channel_name.to_ascii_lowercase().contains(&term)
         || doc
@@ -516,10 +516,8 @@ pub(in crate::server_main) fn determine_meili_readiness(
 pub(in crate::server_main) async fn inspect_meili_schema_readiness(
     client: &MeilisearchClient,
 ) -> Result<bool> {
-    Ok(
-        load_meili_schema_version(client, "channels").await?
-            && load_meili_schema_version(client, "programs").await?,
-    )
+    Ok(load_meili_schema_version(client, "channels").await?
+        && load_meili_schema_version(client, "programs").await?)
 }
 
 pub(in crate::server_main) async fn load_meili_schema_version(
@@ -527,12 +525,10 @@ pub(in crate::server_main) async fn load_meili_schema_version(
     index_name: &str,
 ) -> Result<bool> {
     let synonyms = client.index(index_name).get_synonyms().await?;
-    Ok(
-        synonyms
-            .get(MEILI_SCHEMA_VERSION_KEY)
-            .map(|values| values.iter().any(|value| value == MEILI_SCHEMA_VERSION))
-            .unwrap_or(false),
-    )
+    Ok(synonyms
+        .get(MEILI_SCHEMA_VERSION_KEY)
+        .map(|values| values.iter().any(|value| value == MEILI_SCHEMA_VERSION))
+        .unwrap_or(false))
 }
 
 pub(in crate::server_main) fn apply_meili_schema_version(
@@ -658,7 +654,9 @@ pub(in crate::server_main) fn spawn_meili_bootstrap_worker(state: AppState) -> J
     })
 }
 
-pub(in crate::server_main) async fn load_meili_bootstrap_user_ids(pool: &PgPool) -> Result<Vec<Uuid>> {
+pub(in crate::server_main) async fn load_meili_bootstrap_user_ids(
+    pool: &PgPool,
+) -> Result<Vec<Uuid>> {
     let user_ids = sqlx::query_scalar::<_, Uuid>(
         r#"
         SELECT DISTINCT user_id
@@ -830,8 +828,7 @@ mod tests {
         let mut state = sample_app_state();
         let user_id = Uuid::from_u128(91);
         state.meili = Some(Arc::new(
-            MeilisearchClient::new("http://localhost:7700", None::<String>)
-                .expect("meili client"),
+            MeilisearchClient::new("http://localhost:7700", None::<String>).expect("meili client"),
         ));
         *state.meili_readiness.write().await = MeiliReadiness::Ready;
         state.meili_bootstrapping_users.insert(user_id);
@@ -1248,7 +1245,10 @@ pub(in crate::server_main) async fn rebuild_meili_indexes(
         let docs = rows
             .iter()
             .map(|row| {
-                let event_titles = channel_event_titles.get(&row.id).cloned().unwrap_or_default();
+                let event_titles = channel_event_titles
+                    .get(&row.id)
+                    .cloned()
+                    .unwrap_or_default();
                 let (
                     country_code,
                     region_code,
@@ -1293,7 +1293,11 @@ pub(in crate::server_main) async fn rebuild_meili_indexes(
                         row.category_name.as_deref().unwrap_or_default(),
                         event_titles.join(" "),
                         event_keywords.join(" "),
-                        if row.has_catchup { "catchup archive" } else { "live" },
+                        if row.has_catchup {
+                            "catchup archive"
+                        } else {
+                            "live"
+                        },
                         provider_label_text
                     )
                     .trim()
@@ -1527,7 +1531,8 @@ pub(in crate::server_main) async fn refresh_meili_channels_delta(
 
     let user_id_str = user_id.to_string();
     let lexicon = lexicon::refresh_search_lexicon(state, user_id).await?;
-    let channel_event_titles = load_channel_event_titles(&state.pool, user_id, Some(profile_id)).await?;
+    let channel_event_titles =
+        load_channel_event_titles(&state.pool, user_id, Some(profile_id)).await?;
     let rows = sqlx::query_as::<_, MeiliChannelRow>(
         r#"
         SELECT
@@ -1556,7 +1561,10 @@ pub(in crate::server_main) async fn refresh_meili_channels_delta(
     let docs = rows
         .iter()
         .map(|row| {
-            let event_titles = channel_event_titles.get(&row.id).cloned().unwrap_or_default();
+            let event_titles = channel_event_titles
+                .get(&row.id)
+                .cloned()
+                .unwrap_or_default();
             let (
                 country_code,
                 region_code,
@@ -1601,7 +1609,11 @@ pub(in crate::server_main) async fn refresh_meili_channels_delta(
                     row.category_name.as_deref().unwrap_or_default(),
                     event_titles.join(" "),
                     event_keywords.join(" "),
-                    if row.has_catchup { "catchup archive" } else { "live" },
+                    if row.has_catchup {
+                        "catchup archive"
+                    } else {
+                        "live"
+                    },
                     provider_label_text
                 )
                 .trim()

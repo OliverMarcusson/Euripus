@@ -1,5 +1,5 @@
-use super::*;
 use super::relay_tokens::{issue_relay_token, relay_url_for_token};
+use super::*;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -23,7 +23,8 @@ pub(in crate::server_main) enum PlaybackMode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::server_main) enum PlaybackTarget {
     Browser,
-    Receiver,
+    ReceiverWeb,
+    ReceiverAndroidTv,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -75,7 +76,9 @@ pub(in crate::server_main) fn playback_mode_as_str(mode: PlaybackMode) -> &'stat
     }
 }
 
-pub(in crate::server_main) fn normalize_output_format(raw: &str) -> Result<PlaybackStreamFormat, AppError> {
+pub(in crate::server_main) fn normalize_output_format(
+    raw: &str,
+) -> Result<PlaybackStreamFormat, AppError> {
     match raw.trim().to_ascii_lowercase().as_str() {
         "m3u8" => Ok(PlaybackStreamFormat::Hls),
         "ts" => Ok(PlaybackStreamFormat::Ts),
@@ -92,7 +95,10 @@ pub(in crate::server_main) fn output_format_as_str(format: PlaybackStreamFormat)
     }
 }
 
-pub(in crate::server_main) fn unsupported_playback(title: &str, reason: &str) -> PlaybackSourceResponse {
+pub(in crate::server_main) fn unsupported_playback(
+    title: &str,
+    reason: &str,
+) -> PlaybackSourceResponse {
     PlaybackSourceResponse {
         kind: "unsupported".to_string(),
         url: String::new(),
@@ -130,6 +136,7 @@ pub(in crate::server_main) fn playback_source_for_mode(
     let playback_mode = normalize_playback_mode(raw_playback_mode)?;
 
     let request_base_url = request_base_url(&state.config, headers)?;
+    let relay_required_for_android_tv = matches!(target, PlaybackTarget::ReceiverAndroidTv);
     let relay_required_for_https = matches!(target, PlaybackTarget::Browser)
         && should_force_relay_for_secure_request(&request_base_url, &upstream_url);
     let bypass_relay_in_local_dev = matches!(target, PlaybackTarget::Browser)
@@ -137,7 +144,9 @@ pub(in crate::server_main) fn playback_source_for_mode(
         && state.config.public_origin.is_none()
         && !state.config.vpn_enabled
         && !relay_required_for_https;
-    if (playback_mode == PlaybackMode::Direct && !relay_required_for_https)
+    if (playback_mode == PlaybackMode::Direct
+        && !relay_required_for_https
+        && !relay_required_for_android_tv)
         || bypass_relay_in_local_dev
     {
         return Ok(direct);
@@ -206,14 +215,18 @@ pub(in crate::server_main) fn resolve_effective_playback_format(
     })
 }
 
-pub(in crate::server_main) fn playback_kind_for_format(format: PlaybackStreamFormat) -> &'static str {
+pub(in crate::server_main) fn playback_kind_for_format(
+    format: PlaybackStreamFormat,
+) -> &'static str {
     match format {
         PlaybackStreamFormat::Hls => "hls",
         PlaybackStreamFormat::Ts => "mpegts",
     }
 }
 
-pub(in crate::server_main) fn relay_asset_kind_for_format(format: PlaybackStreamFormat) -> RelayAssetKind {
+pub(in crate::server_main) fn relay_asset_kind_for_format(
+    format: PlaybackStreamFormat,
+) -> RelayAssetKind {
     match format {
         PlaybackStreamFormat::Hls => RelayAssetKind::Hls,
         PlaybackStreamFormat::Ts => RelayAssetKind::Raw,

@@ -64,10 +64,20 @@ export function useCategoryFavoriteMutation() {
           const nextCategoryEntries = existing
             ? categoryEntries.map((entry) =>
                 entry.category.id === category.id
-                  ? { kind: "category" as const, category: nextCategory }
+                  ? { kind: "category" as const, category: nextCategory, order: entry.order }
                   : entry,
               )
-            : [{ kind: "category" as const, category: nextCategory }, ...categoryEntries];
+            : [
+                ...categoryEntries,
+                {
+                  kind: "category" as const,
+                  category: nextCategory,
+                  order:
+                    categoryEntries.length > 0
+                      ? Math.max(...categoryEntries.map((entry) => entry.order)) + 1
+                      : 0,
+                },
+              ];
 
           return [...nextCategoryEntries, ...channelEntries];
         }

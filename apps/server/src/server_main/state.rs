@@ -1,6 +1,6 @@
-use super::*;
-use super::search::lexicon::SearchLexicon;
 use super::receiver::ReceiverEventPayload;
+use super::search::lexicon::SearchLexicon;
+use super::*;
 
 #[derive(Clone)]
 pub(super) struct AppState {

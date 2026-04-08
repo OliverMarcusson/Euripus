@@ -4,6 +4,7 @@ import type {
   ChannelSearchResults,
   Channel,
   FavoriteEntry,
+  FavoriteOrderPayload,
   GuidePreferences,
   GuideCategoryResponse,
   GuideResponse,
@@ -273,6 +274,13 @@ export function addCategoryFavorite(categoryId: string) {
 
 export function removeCategoryFavorite(categoryId: string) {
   return request<void>(`/favorites/categories/${categoryId}`, { method: "DELETE" });
+}
+
+export function reorderFavorites(payload: FavoriteOrderPayload) {
+  return request<void>("/favorites/order", {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
 }
 
 export function getRecents() {

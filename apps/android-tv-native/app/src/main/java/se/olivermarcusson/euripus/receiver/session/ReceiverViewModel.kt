@@ -304,8 +304,10 @@ class ReceiverViewModel(application: Application) : AndroidViewModel(application
             )
         }.onSuccess { session ->
             sessionToken = session.sessionToken
-            currentPreferences = currentPreferences.copy(receiverCredential = session.receiverCredential)
-            preferencesRepository.saveReceiverCredential(session.receiverCredential)
+            session.receiverCredential?.let { credential ->
+                currentPreferences = currentPreferences.copy(receiverCredential = credential)
+                preferencesRepository.saveReceiverCredential(credential)
+            }
             mutableUiState.update {
                 it.copy(
                     status = if (session.pairingCode != null) ReceiverStatus.PAIRING else ReceiverStatus.IDLE,
@@ -408,7 +410,7 @@ class ReceiverViewModel(application: Application) : AndroidViewModel(application
             "transport_command" -> {
                 when (event.command.commandType) {
                     "pause" -> playerController.pause()
-                    "play" -> playerController.play()
+                    "play" -> playerController.playFromTvRemote()
                     "seek" -> event.positionSeconds?.let(playerController::seekTo)
                     "stop" -> playerController.stopPlayback()
                 }

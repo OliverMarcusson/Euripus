@@ -55,7 +55,18 @@ export function useChannelFavoriteMutation() {
                   ? { ...favorite, channel: nextChannel }
                   : favorite,
               )
-            : [{ kind: "channel" as const, channel: nextChannel, program: null }, ...channelEntries];
+            : [
+                ...channelEntries,
+                {
+                  kind: "channel" as const,
+                  channel: nextChannel,
+                  program: null,
+                  order:
+                    channelEntries.length > 0
+                      ? Math.max(...channelEntries.map((entry) => entry.order)) + 1
+                      : 0,
+                },
+              ];
 
           return [...categoryEntries, ...nextChannelEntries];
         }

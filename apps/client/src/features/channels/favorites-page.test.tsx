@@ -18,6 +18,7 @@ vi.mock("@/lib/api", () => ({
   getFavorites: vi.fn(),
   removeCategoryFavorite: vi.fn(),
   removeFavorite: vi.fn(),
+  reorderFavorites: vi.fn(),
   startChannelPlayback: vi.fn(),
   startRemoteChannelPlayback: vi.fn(),
 }));
@@ -56,6 +57,7 @@ describe("FavoritesPage", () => {
     mockedGetFavorites.mockResolvedValue([
       {
         kind: "channel",
+        order: 0,
         channel: {
           id: "channel-1",
           name: "Arena 1",
@@ -102,6 +104,7 @@ describe("FavoritesPage", () => {
     mockedGetFavorites.mockResolvedValue([
       {
         kind: "channel",
+        order: 0,
         channel: {
           id: "channel-2",
           name: "Arena 2",
@@ -131,6 +134,7 @@ describe("FavoritesPage", () => {
     mockedGetFavorites.mockResolvedValue([
       {
         kind: "category",
+        order: 0,
         category: {
           id: "sports",
           name: "Sports",
@@ -141,6 +145,7 @@ describe("FavoritesPage", () => {
       },
       {
         kind: "channel",
+        order: 0,
         channel: {
           id: "channel-3",
           name: "Arena 3",

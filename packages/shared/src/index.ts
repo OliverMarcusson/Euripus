@@ -155,14 +155,21 @@ export type ProgramSearchResults = SearchResultPage<Program>;
 
 export type FavoriteChannelEntry = GuideChannelEntry & {
   kind: "channel";
+  order: number;
 };
 
 export type FavoriteCategoryEntry = {
   kind: "category";
   category: GuideCategorySummary;
+  order: number;
 };
 
 export type FavoriteEntry = FavoriteCategoryEntry | FavoriteChannelEntry;
+
+export type FavoriteOrderPayload = {
+  categoryIds: string[];
+  channelIds: string[];
+};
 
 export type RecentChannel = {
   channel: Channel;
@@ -203,6 +210,7 @@ export type ReceiverDevice = {
   lastSeenAt: string;
   updatedAt: string;
   currentPlayback: ReceiverPlaybackState | null;
+  playbackStateStale: boolean;
 };
 
 export type ReceiverSession = {

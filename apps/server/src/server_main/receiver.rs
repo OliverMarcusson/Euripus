@@ -1,8 +1,8 @@
-use super::*;
+use super::playback::resolve::PlaybackSourceResponse;
 use super::playback::{
     resolve_channel_playback_source_for_receiver, resolve_program_playback_source_for_receiver,
 };
-use super::playback::resolve::PlaybackSourceResponse;
+use super::*;
 
 pub(super) fn browser_router() -> Router<AppState> {
     Router::new()
@@ -10,7 +10,10 @@ pub(super) fn browser_router() -> Router<AppState> {
         .route("/receiver/pairing-code", post(issue_receiver_pairing_code))
         .route("/receiver/events", get(stream_receiver_events))
         .route("/receiver/heartbeat", post(heartbeat_receiver))
-        .route("/receiver/playback-state", post(update_receiver_playback_state))
+        .route(
+            "/receiver/playback-state",
+            post(update_receiver_playback_state),
+        )
         .route(
             "/receiver/commands/{command_id}/ack",
             post(acknowledge_receiver_command),
@@ -64,6 +67,7 @@ pub(super) struct ReceiverDeviceResponse {
     pub(super) last_seen_at: DateTime<Utc>,
     pub(super) updated_at: DateTime<Utc>,
     pub(super) current_playback: Option<ReceiverPlaybackStateResponse>,
+    pub(super) playback_state_stale: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -270,7 +274,12 @@ async fn create_receiver_session(
         sqlx::query_as::<_, ReceiverDeviceRecord>(
             r#"
             UPDATE receiver_devices
-            SET device_key = $2, device_name = $3, platform = $4, form_factor_hint = $5,
+            SET device_key = $2,
+                device_name = CASE
+                    WHEN owner_user_id IS NULL THEN $3
+                    ELSE device_name
+                END,
+                platform = $4, form_factor_hint = $5,
                 app_kind = $6, last_seen_at = NOW(), updated_at = NOW()
             WHERE id = $1
             RETURNING id, owner_user_id, device_name, platform, form_factor_hint, app_kind,
@@ -297,9 +306,15 @@ async fn create_receiver_session(
             )
             VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
             ON CONFLICT (device_key)
-            DO UPDATE SET device_name = EXCLUDED.device_name, platform = EXCLUDED.platform,
-                          form_factor_hint = EXCLUDED.form_factor_hint, app_kind = EXCLUDED.app_kind,
-                          last_seen_at = NOW(), updated_at = NOW()
+            DO UPDATE SET device_name = CASE
+                              WHEN receiver_devices.owner_user_id IS NULL THEN EXCLUDED.device_name
+                              ELSE receiver_devices.device_name
+                          END,
+                          platform = EXCLUDED.platform,
+                          form_factor_hint = EXCLUDED.form_factor_hint,
+                          app_kind = EXCLUDED.app_kind,
+                          last_seen_at = NOW(),
+                          updated_at = NOW()
             RETURNING id, owner_user_id, device_name, platform, form_factor_hint, app_kind,
                    remembered, last_seen_at,
                    current_playback_title, current_playback_kind, current_playback_live,
@@ -351,7 +366,7 @@ async fn create_receiver_session(
             .remembered
             .then(|| payload.receiver_credential.unwrap_or_default())
             .filter(|value| !value.is_empty()),
-        device: receiver_device_response(&state, None, &record),
+        device: receiver_device_response(&state, &record, None),
         pairing_code: pairing_code.as_ref().map(|value| value.code.clone()),
         paired: record.owner_user_id.is_some() && record.revoked_at.is_none(),
     }))
@@ -374,7 +389,7 @@ async fn issue_receiver_pairing_code(
     Ok(Json(PairingCodeResponse {
         code: pairing.code,
         expires_at: pairing.expires_at,
-        device: receiver_device_response(&state, None, &record),
+        device: receiver_device_response(&state, &record, None),
     }))
 }
 
@@ -588,7 +603,7 @@ async fn pair_receiver(
         receiver_credential,
     });
 
-    let response = receiver_device_response(&state, Some(&auth), &record);
+    let response = receiver_device_response(&state, &record, None);
     Ok(Json(response))
 }
 
@@ -613,11 +628,15 @@ async fn list_remote_receivers(
     .bind(auth.user_id)
     .fetch_all(&state.pool)
     .await?;
+    let current_controller_device_id =
+        load_receiver_controller_target_record(&state.pool, auth.user_id, auth.session_id)
+            .await?
+            .map(|record| record.id);
 
     let items = records
         .into_iter()
         .filter(|record| record.remembered || is_receiver_online(&state, record))
-        .map(|record| receiver_device_response(&state, Some(&auth), &record))
+        .map(|record| receiver_device_response(&state, &record, current_controller_device_id))
         .collect();
     Ok(Json(items))
 }
@@ -659,12 +678,16 @@ async fn get_remote_controller_target(
     let target =
         load_receiver_controller_target_record(&state.pool, auth.user_id, auth.session_id).await?;
 
-    Ok(Json(target.map(|record| RemoteControllerTargetResponse {
-        device: receiver_device_response(
-            &state,
-            Some(&auth),
-            &receiver_device_record_from_target(record.clone()),
-        ),
+    let Some(record) = target else {
+        return Ok(Json(None));
+    };
+    let device_record = receiver_device_record_from_target(record.clone());
+    if !is_receiver_online(&state, &device_record) {
+        return Ok(Json(None));
+    }
+
+    Ok(Json(Some(RemoteControllerTargetResponse {
+        device: receiver_device_response(&state, &device_record, Some(record.id)),
         selected_at: record.selected_at,
     })))
 }
@@ -713,8 +736,8 @@ async fn select_remote_controller_target(
     Ok(Json(RemoteControllerTargetResponse {
         device: receiver_device_response(
             &state,
-            Some(&auth),
             &receiver_device_record_from_target(selected.clone()),
+            Some(selected.id),
         ),
         selected_at: selected.selected_at,
     }))
@@ -742,8 +765,14 @@ async fn play_channel_remotely(
 ) -> ApiResult<RemotePlaybackCommandResponse> {
     let auth = require_auth(&state, &headers).await?;
     let target = current_remote_target_for_control(&state, &auth).await?;
-    let source =
-        resolve_channel_playback_source_for_receiver(&state, &headers, auth.user_id, id).await?;
+    let source = resolve_channel_playback_source_for_receiver(
+        &state,
+        &headers,
+        auth.user_id,
+        id,
+        &target.app_kind,
+    )
+    .await?;
 
     Ok(Json(
         deliver_remote_playback_command(&state, &auth, &target, source).await?,
@@ -757,8 +786,14 @@ async fn play_program_remotely(
 ) -> ApiResult<RemotePlaybackCommandResponse> {
     let auth = require_auth(&state, &headers).await?;
     let target = current_remote_target_for_control(&state, &auth).await?;
-    let source =
-        resolve_program_playback_source_for_receiver(&state, &headers, auth.user_id, id).await?;
+    let source = resolve_program_playback_source_for_receiver(
+        &state,
+        &headers,
+        auth.user_id,
+        id,
+        &target.app_kind,
+    )
+    .await?;
 
     Ok(Json(
         deliver_remote_playback_command(&state, &auth, &target, source).await?,
@@ -936,9 +971,12 @@ fn receiver_device_record_from_target(
 
 fn receiver_device_response(
     state: &AppState,
-    _auth: Option<&AuthContext>,
     record: &ReceiverDeviceRecord,
+    current_controller_device_id: Option<Uuid>,
 ) -> ReceiverDeviceResponse {
+    let online = is_receiver_online(state, record);
+    let playback_state_stale = record.current_playback_title.is_some() && !online;
+
     ReceiverDeviceResponse {
         id: record.id,
         name: record.device_name.clone(),
@@ -946,22 +984,30 @@ fn receiver_device_response(
         form_factor_hint: record.form_factor_hint.clone(),
         app_kind: record.app_kind.clone(),
         remembered: record.remembered,
-        online: is_receiver_online(state, record),
-        current_controller: false,
+        online,
+        current_controller: online && current_controller_device_id == Some(record.id),
         last_seen_at: record.last_seen_at,
         updated_at: record.updated_at,
-        current_playback: record.current_playback_title.as_ref().map(|title| {
-            ReceiverPlaybackStateResponse {
-                title: title.clone(),
-                source_kind: record.current_playback_kind.clone().unwrap_or_default(),
-                live: record.current_playback_live.unwrap_or(false),
-                catchup: record.current_playback_catchup.unwrap_or(false),
-                updated_at: record.current_playback_updated_at.unwrap_or(record.updated_at),
-                paused: record.current_playback_paused.unwrap_or(false),
-                position_seconds: record.current_playback_position_seconds,
-                duration_seconds: record.current_playback_duration_seconds,
-            }
-        }),
+        current_playback: (!playback_state_stale)
+            .then(|| {
+                record
+                    .current_playback_title
+                    .as_ref()
+                    .map(|title| ReceiverPlaybackStateResponse {
+                        title: title.clone(),
+                        source_kind: record.current_playback_kind.clone().unwrap_or_default(),
+                        live: record.current_playback_live.unwrap_or(false),
+                        catchup: record.current_playback_catchup.unwrap_or(false),
+                        updated_at: record
+                            .current_playback_updated_at
+                            .unwrap_or(record.updated_at),
+                        paused: record.current_playback_paused.unwrap_or(false),
+                        position_seconds: record.current_playback_position_seconds,
+                        duration_seconds: record.current_playback_duration_seconds,
+                    })
+            })
+            .flatten(),
+        playback_state_stale,
     }
 }
 

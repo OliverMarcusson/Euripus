@@ -138,14 +138,16 @@ export function AppShell() {
             <DropdownMenuItem
               key={device.id}
               onClick={() => selectTargetMutation.mutate(device.id)}
-              disabled={selectTargetMutation.isPending}
+              disabled={selectTargetMutation.isPending || !device.online}
             >
               <div className="flex min-w-0 flex-col">
                 <span className="truncate font-medium">{device.name}</span>
                 <span className="truncate text-xs text-muted-foreground">
                   {device.currentPlayback
                     ? `Now playing ${device.currentPlayback.title}`
-                    : device.platform}
+                    : device.online
+                      ? device.platform
+                      : "Offline"}
                 </span>
               </div>
             </DropdownMenuItem>

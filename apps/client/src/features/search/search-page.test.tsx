@@ -2,7 +2,6 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { SearchPage } from "@/features/search/search-page";
 import {
-  getSearchBackendStatus,
   searchChannels,
   searchPrograms,
   startRemoteChannelPlayback,
@@ -15,7 +14,6 @@ vi.mock("@/hooks/use-debounce", () => ({
 
 vi.mock("@/lib/api", () => ({
   addFavorite: vi.fn(),
-  getSearchBackendStatus: vi.fn(),
   removeFavorite: vi.fn(),
   searchChannels: vi.fn(),
   searchPrograms: vi.fn(),
@@ -25,7 +23,6 @@ vi.mock("@/lib/api", () => ({
   startRemoteProgramPlayback: vi.fn(),
 }));
 
-const mockedGetSearchBackendStatus = vi.mocked(getSearchBackendStatus);
 const mockedSearchChannels = vi.mocked(searchChannels);
 const mockedSearchPrograms = vi.mocked(searchPrograms);
 const mockedStartRemoteChannelPlayback = vi.mocked(startRemoteChannelPlayback);
@@ -35,12 +32,6 @@ describe("SearchPage", () => {
     vi.clearAllMocks();
     vi.spyOn(Date, "now").mockReturnValue(new Date("2026-04-04T12:00:00.000Z").getTime());
     useRemoteControllerStore.getState().clearTarget();
-    mockedGetSearchBackendStatus.mockResolvedValue({
-      meilisearch: "ready",
-      progressPercent: 100,
-      indexedDocuments: 0,
-      totalDocuments: 0,
-    });
     mockedStartRemoteChannelPlayback.mockResolvedValue({
       id: "remote-command-1",
       targetDeviceId: "tv-1",
@@ -71,20 +62,6 @@ describe("SearchPage", () => {
       </QueryClientProvider>,
     );
   }
-
-  it("shows an indexing spinner while Meilisearch is still bootstrapping", async () => {
-    mockedGetSearchBackendStatus.mockResolvedValue({
-      meilisearch: "indexing",
-      progressPercent: 42,
-      indexedDocuments: 42,
-      totalDocuments: 100,
-    });
-
-    renderSearchPage();
-
-    expect(await screen.findByText("Search index updating")).toBeInTheDocument();
-    expect(screen.getByText("42%")).toBeInTheDocument();
-  });
 
   it("renders EPG program states and play buttons only for playable results", async () => {
     mockedSearchChannels.mockResolvedValue({
@@ -254,6 +231,7 @@ describe("SearchPage", () => {
         lastSeenAt: "2026-04-05T10:00:00.000Z",
         updatedAt: "2026-04-05T10:00:00.000Z",
         currentPlayback: null,
+        playbackStateStale: false,
       },
       selectedAt: "2026-04-05T10:00:00.000Z",
     });
