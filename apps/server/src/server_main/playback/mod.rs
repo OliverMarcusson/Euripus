@@ -1,9 +1,9 @@
-use super::*;
 use self::resolve::{
     PlaybackSourceResponse, PlaybackTarget, ProgramPlaybackBehavior, ProgramPlaybackRow,
     determine_program_playback_behavior, output_format_as_str, playback_source_for_mode,
     resolve_effective_playback_format, unsupported_playback,
 };
+use super::*;
 
 pub(super) mod relay_tokens;
 pub(super) mod resolve;
@@ -65,13 +65,14 @@ pub(in crate::server_main) async fn resolve_channel_playback_source_for_receiver
     headers: &HeaderMap,
     user_id: Uuid,
     id: Uuid,
+    receiver_app_kind: &str,
 ) -> Result<PlaybackSourceResponse, AppError> {
     resolve_channel_playback_source_for_target(
         state,
         headers,
         user_id,
         id,
-        PlaybackTarget::Receiver,
+        playback_target_for_receiver_app(receiver_app_kind),
     )
     .await
 }
@@ -150,13 +151,14 @@ pub(in crate::server_main) async fn resolve_program_playback_source_for_receiver
     headers: &HeaderMap,
     user_id: Uuid,
     id: Uuid,
+    receiver_app_kind: &str,
 ) -> Result<PlaybackSourceResponse, AppError> {
     resolve_program_playback_source_for_target(
         state,
         headers,
         user_id,
         id,
-        PlaybackTarget::Receiver,
+        playback_target_for_receiver_app(receiver_app_kind),
     )
     .await
 }
@@ -275,7 +277,9 @@ async fn resolve_program_playback_source_for_target(
                 None,
             )
         }
-        ProgramPlaybackBehavior::Unsupported(reason) => Ok(unsupported_playback(&row.title, reason)),
+        ProgramPlaybackBehavior::Unsupported(reason) => {
+            Ok(unsupported_playback(&row.title, reason))
+        }
     }
 }
 
@@ -291,11 +295,19 @@ fn playback_credentials(
     })
 }
 
+fn playback_target_for_receiver_app(app_kind: &str) -> PlaybackTarget {
+    if app_kind == "receiver-android-tv" {
+        PlaybackTarget::ReceiverAndroidTv
+    } else {
+        PlaybackTarget::ReceiverWeb
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::relay_tokens::decode_relay_token;
     use super::resolve::{PlaybackStreamFormat, playback_source_for_mode};
+    use super::*;
 
     fn sample_app_state() -> AppState {
         sample_app_state_with_public_origin(Some("https://app.example.com"))
@@ -526,7 +538,7 @@ mod tests {
             &HeaderMap::new(),
             Uuid::from_u128(35),
             Uuid::from_u128(36),
-            PlaybackTarget::Receiver,
+            PlaybackTarget::ReceiverWeb,
             "direct",
             "Arena 1",
             "http://provider.example.com/live/42.m3u8".to_string(),
@@ -540,5 +552,32 @@ mod tests {
         assert_eq!(response.kind, "hls");
         assert_eq!(response.url, "http://provider.example.com/live/42.m3u8");
         assert!(response.expires_at.is_none());
+    }
+
+    #[tokio::test]
+    async fn playback_source_for_mode_forces_relay_for_android_tv_receivers() {
+        let state = sample_app_state();
+        let response = playback_source_for_mode(
+            &state,
+            &HeaderMap::new(),
+            Uuid::from_u128(45),
+            Uuid::from_u128(46),
+            PlaybackTarget::ReceiverAndroidTv,
+            "direct",
+            "Arena 1",
+            "https://provider.example.com/live/42.m3u8".to_string(),
+            true,
+            false,
+            PlaybackStreamFormat::Hls,
+            None,
+        )
+        .expect("android tv playback source");
+
+        assert!(
+            response
+                .url
+                .starts_with("https://app.example.com/api/relay/hls?token=")
+        );
+        assert!(response.expires_at.is_some());
     }
 }

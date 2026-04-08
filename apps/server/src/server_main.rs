@@ -8,6 +8,11 @@ use std::{
     time::{Duration, Instant},
 };
 
+use crate::config::Config;
+use crate::epg::{EPG_RETENTION_FUTURE_DAYS, EPG_RETENTION_PAST_HOURS};
+use crate::xmltv::{XmltvChannel, XmltvFeed, XmltvProgramme};
+use crate::xtreme::{XtreamCategory, XtreamChannel, XtreamCredentials};
+use crate::{xmltv, xtreme};
 use aes_gcm::{
     Aes256Gcm, Nonce,
     aead::{Aead, KeyInit},
@@ -34,10 +39,8 @@ use base64::{
     engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
 };
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
-use crate::config::Config;
 use cookie::time::Duration as CookieDuration;
 use dashmap::{DashMap, DashSet};
-use crate::epg::{EPG_RETENTION_FUTURE_DAYS, EPG_RETENTION_PAST_HOURS};
 use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation, decode, encode};
 use meilisearch_sdk::{
     client::Client as MeilisearchClient,
@@ -62,9 +65,6 @@ use tower_http::{
 use tracing::{error, info, warn};
 use url::Url;
 use uuid::Uuid;
-use crate::xmltv::{XmltvChannel, XmltvFeed, XmltvProgramme};
-use crate::{xmltv, xtreme};
-use crate::xtreme::{XtreamCategory, XtreamChannel, XtreamCredentials};
 
 mod app;
 mod auth;
@@ -78,11 +78,11 @@ mod search;
 mod state;
 mod sync;
 
+use self::playback::relay_tokens::{issue_relay_token, relay_url_for_token};
 use self::playback::resolve::{
     normalize_output_format, normalize_playback_mode, output_format_as_str, playback_mode_as_str,
     should_force_relay_for_secure_request,
 };
-use self::playback::relay_tokens::{issue_relay_token, relay_url_for_token};
 use self::receiver::{ReceiverSessionRecord, load_receiver_device};
 
 pub use app::run;

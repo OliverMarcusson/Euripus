@@ -63,6 +63,7 @@ describe("SettingsPage", () => {
       lastSeenAt: "2026-04-05T10:00:00.000Z",
       updatedAt: "2026-04-05T10:00:00.000Z",
       currentPlayback: null,
+      playbackStateStale: false,
     });
     mockedUnpairReceiver.mockResolvedValue();
     mockedGetServerNetworkStatus.mockResolvedValue({

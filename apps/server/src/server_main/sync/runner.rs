@@ -509,8 +509,13 @@ fn spawn_search_refresh(
             state.meili_bootstrapping_users.insert(user_id);
             let meili_refresh = match &scope {
                 SearchRefreshScope::FullProfile { profile_id } => {
-                    search::indexing::rebuild_meili_indexes(&state, meili, user_id, Some(*profile_id))
-                        .await
+                    search::indexing::rebuild_meili_indexes(
+                        &state,
+                        meili,
+                        user_id,
+                        Some(*profile_id),
+                    )
+                    .await
                 }
                 SearchRefreshScope::ChannelDelta {
                     profile_id,
@@ -533,11 +538,18 @@ fn spawn_search_refresh(
             if let Err(error) = meili_refresh {
                 warn!("sync job {job_id}: failed to rebuild Meilisearch indexes: {error:?}");
             } else if !matches!(
-                search::indexing::inspect_meili_readiness_for_user(meili, &state.pool, user_id, true)
-                    .await,
+                search::indexing::inspect_meili_readiness_for_user(
+                    meili,
+                    &state.pool,
+                    user_id,
+                    true
+                )
+                .await,
                 Ok(MeiliReadiness::Ready)
             ) {
-                warn!("sync job {job_id}: Meilisearch rebuild finished but the user index is still incomplete");
+                warn!(
+                    "sync job {job_id}: Meilisearch rebuild finished but the user index is still incomplete"
+                );
             } else if let Err(error) = search::indexing::refresh_meili_readiness(&state).await {
                 warn!("sync job {job_id}: failed to refresh Meilisearch readiness: {error:?}");
             } else {
@@ -549,9 +561,14 @@ fn spawn_search_refresh(
 
         if state.meili.is_some()
             && state.meili_bootstrapping_users.contains(&user_id)
-            && !matches!(*state.meili_readiness.read().await, MeiliReadiness::Disabled)
+            && !matches!(
+                *state.meili_readiness.read().await,
+                MeiliReadiness::Disabled
+            )
         {
-            warn!("sync job {job_id}: keeping user on PostgreSQL fallback until a later successful Meilisearch refresh");
+            warn!(
+                "sync job {job_id}: keeping user on PostgreSQL fallback until a later successful Meilisearch refresh"
+            );
         }
 
         info!(

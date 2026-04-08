@@ -371,7 +371,10 @@ async fn bulk_upsert_channels(
             .iter()
             .map(|channel| channel.category_id.clone())
             .collect::<Vec<_>>();
-        let has_catchup = chunk.iter().map(|channel| channel.has_catchup).collect::<Vec<_>>();
+        let has_catchup = chunk
+            .iter()
+            .map(|channel| channel.has_catchup)
+            .collect::<Vec<_>>();
         let archive_duration_hours = chunk
             .iter()
             .map(|channel| channel.archive_duration_hours)
@@ -620,12 +623,9 @@ fn determine_channel_sync_delta(
                         || existing.has_catchup != incoming.has_catchup
                         || existing.archive_duration_hours != incoming.archive_duration_hours
                         || existing.stream_extension != incoming.stream_extension
-                        || incoming
-                            .category_id
-                            .as_ref()
-                            .is_some_and(|category_id| {
-                                changed_category_remote_ids.contains(category_id)
-                            })
+                        || incoming.category_id.as_ref().is_some_and(|category_id| {
+                            changed_category_remote_ids.contains(category_id)
+                        })
                 })
         })
         .map(|channel| channel.remote_stream_id)
@@ -947,8 +947,14 @@ async fn bulk_insert_programmes(
             .iter()
             .map(|programme| programme.description.clone())
             .collect::<Vec<_>>();
-        let start_times = chunk.iter().map(|programme| programme.start_at).collect::<Vec<_>>();
-        let end_times = chunk.iter().map(|programme| programme.end_at).collect::<Vec<_>>();
+        let start_times = chunk
+            .iter()
+            .map(|programme| programme.start_at)
+            .collect::<Vec<_>>();
+        let end_times = chunk
+            .iter()
+            .map(|programme| programme.end_at)
+            .collect::<Vec<_>>();
         let can_catchup = chunk
             .iter()
             .map(|programme| programme.can_catchup)
@@ -1075,7 +1081,11 @@ mod tests {
 
     #[test]
     fn channel_sync_delta_marks_channels_when_their_category_changes() {
-        let existing = vec![sample_persisted_channel_sync_row(1, Some("sports"), "Sports 1")];
+        let existing = vec![sample_persisted_channel_sync_row(
+            1,
+            Some("sports"),
+            "Sports 1",
+        )];
         let incoming = vec![sample_xtream_channel(1, Some("sports"), "Sports 1")];
         let changed_categories = HashSet::from(["sports".to_string()]);
 

@@ -1,5 +1,5 @@
-use super::*;
 use self::queries::{search_channels_postgres, search_programs_postgres};
+use super::*;
 
 pub(super) mod indexing;
 pub(super) mod lexicon;
@@ -26,22 +26,23 @@ async fn get_search_backend_status(
         }));
     };
 
-    let counts = match indexing::load_search_index_counts_for_user(meili, &state.pool, auth.user_id).await {
-        Ok(counts) => counts,
-        Err(error) => {
-            warn!(
-                user_id = %auth.user_id,
-                "failed to load Meilisearch progress for search status: {error:?}"
-            );
-            let readiness = *state.meili_readiness.read().await;
-            return Ok(Json(SearchBackendStatusResponse {
-                meilisearch: readiness.search_status().to_string(),
-                progress_percent: None,
-                indexed_documents: None,
-                total_documents: None,
-            }));
-        }
-    };
+    let counts =
+        match indexing::load_search_index_counts_for_user(meili, &state.pool, auth.user_id).await {
+            Ok(counts) => counts,
+            Err(error) => {
+                warn!(
+                    user_id = %auth.user_id,
+                    "failed to load Meilisearch progress for search status: {error:?}"
+                );
+                let readiness = *state.meili_readiness.read().await;
+                return Ok(Json(SearchBackendStatusResponse {
+                    meilisearch: readiness.search_status().to_string(),
+                    progress_percent: None,
+                    indexed_documents: None,
+                    total_documents: None,
+                }));
+            }
+        };
 
     let total_documents = counts.postgres_channel_documents + counts.postgres_program_documents;
     let indexed_documents =
@@ -254,9 +255,16 @@ async fn search_channels_meili(
     }
 
     let primary_limit = lexicon::meili_channel_primary_limit(offset, limit);
-    let primary_results =
-        execute_meili_channel_search(meili, user_id, &parsed, &parsed.search, primary_limit, 0, false)
-            .await?;
+    let primary_results = execute_meili_channel_search(
+        meili,
+        user_id,
+        &parsed,
+        &parsed.search,
+        primary_limit,
+        0,
+        false,
+    )
+    .await?;
     let total_count = primary_results
         .estimated_total_hits
         .map(|value| value as i64)

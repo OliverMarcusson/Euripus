@@ -321,6 +321,9 @@ export function SettingsPage() {
                     <Badge variant={device.online ? "accent" : "outline"}>
                       {device.online ? "Online" : "Offline"}
                     </Badge>
+                    {device.currentController ? (
+                      <Badge variant="accent">Current controller</Badge>
+                    ) : null}
                     <Badge variant="outline">
                       {device.remembered ? "Remembered" : "Temporary"}
                     </Badge>
@@ -328,7 +331,11 @@ export function SettingsPage() {
                   <p className="text-sm text-muted-foreground">
                     {device.currentPlayback
                       ? `Now playing ${device.currentPlayback.title}`
-                      : device.platform}
+                      : device.playbackStateStale
+                        ? `Playback state expired ${formatRelativeTime(device.lastSeenAt)}`
+                        : device.online
+                          ? device.platform
+                          : `Last seen ${formatRelativeTime(device.lastSeenAt)}`}
                   </p>
                 </div>
                 <Button

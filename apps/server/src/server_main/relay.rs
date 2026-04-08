@@ -1,8 +1,8 @@
-use super::*;
 use super::playback::relay_tokens::{
     RelayTokenQuery, issue_relay_token, relay_asset_kind_for_url, relay_url_for_token,
     validate_relay_token,
 };
+use super::*;
 
 pub(super) fn router() -> Router<AppState> {
     Router::new()
@@ -142,6 +142,7 @@ pub(super) fn relay_upstream_request(
     forwarded_headers: &[&str],
 ) -> reqwest::RequestBuilder {
     let mut request = client.get(upstream_url);
+    let mut forwarded_user_agent = false;
 
     for header_name in forwarded_headers {
         if let Some(value) = incoming_headers
@@ -149,7 +150,14 @@ pub(super) fn relay_upstream_request(
             .and_then(|value| value.to_str().ok())
         {
             request = request.header(*header_name, value);
+            if *header_name == "user-agent" {
+                forwarded_user_agent = true;
+            }
         }
+    }
+
+    if !forwarded_user_agent {
+        request = request.header(header::USER_AGENT, "EuripusRelay/1.0");
     }
 
     request
@@ -316,8 +324,8 @@ fn relayable_uri_to_public_url(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::playback::relay_tokens::decode_relay_token;
+    use super::*;
 
     fn sample_app_state() -> AppState {
         AppState {
@@ -456,6 +464,30 @@ mod tests {
                 .get(header::USER_AGENT)
                 .and_then(|value| value.to_str().ok()),
             Some("EuripusTest/1.0")
+        );
+    }
+
+    #[test]
+    fn relay_upstream_request_sets_default_user_agent_when_missing() {
+        let client = reqwest::Client::new();
+        let mut headers = HeaderMap::new();
+        headers.insert(header::RANGE, HeaderValue::from_static("bytes=100-"));
+
+        let request = relay_upstream_request(
+            &client,
+            Url::parse("https://provider.example.com/video.ts").expect("upstream url"),
+            &headers,
+            &["range", "if-range", "user-agent"],
+        )
+        .build()
+        .expect("relay request");
+
+        assert_eq!(
+            request
+                .headers()
+                .get(header::USER_AGENT)
+                .and_then(|value| value.to_str().ok()),
+            Some("EuripusRelay/1.0")
         );
     }
 

@@ -399,8 +399,8 @@ async fn trigger_sync(
     .ok_or_else(|| AppError::BadRequest("Connect a provider before starting sync".to_string()))?;
 
     sync::ensure_no_active_sync(&state.pool, profile.id).await?;
-    let job = sync::insert_sync_job(&state.pool, auth.user_id, profile.id, "full", "manual")
-        .await?;
+    let job =
+        sync::insert_sync_job(&state.pool, auth.user_id, profile.id, "full", "manual").await?;
 
     sync::spawn_sync_job(state.clone(), auth.user_id, profile.id, job.id);
     Ok(Json(job))

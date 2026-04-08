@@ -1,9 +1,8 @@
 import type { SearchBackend } from "@euripus/shared";
-import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery } from "@tanstack/react-query";
 import {
   Clapperboard,
   Heart,
-  LoaderCircle,
   Play,
   Search as SearchIcon,
   TvMinimal,
@@ -31,7 +30,6 @@ import {
   useProgramPlaybackMutation,
 } from "@/hooks/use-playback-actions";
 import {
-  getSearchBackendStatus,
   searchChannels,
   searchPrograms,
 } from "@/lib/api";
@@ -52,13 +50,6 @@ export function SearchPage() {
   const deferredQuery = useDeferredValue(query);
   const debouncedQuery = useDebounce(deferredQuery, 250);
   const hasQuery = debouncedQuery.trim().length > 1;
-  const searchBackendStatusQuery = useQuery({
-    queryKey: ["search", "status"],
-    queryFn: getSearchBackendStatus,
-    refetchInterval: (statusQuery) =>
-      statusQuery.state.data?.meilisearch === "indexing" ? 5_000 : false,
-    retry: 1,
-  });
   const channelQuery = useInfiniteQuery({
     queryKey: ["search", "channels", debouncedQuery],
     queryFn: ({ pageParam }) =>
@@ -86,42 +77,16 @@ export function SearchPage() {
   const channelBackend = channelQuery.data?.pages[0]?.backend;
   const programBackend = programQuery.data?.pages[0]?.backend;
   const totalMatches = channelTotal + programTotal;
-  const isSearchIndexing =
-    searchBackendStatusQuery.data?.meilisearch === "indexing";
-  const searchIndexProgressPercent =
-    searchBackendStatusQuery.data?.progressPercent;
   const isInitialLoading =
     hasQuery &&
     ((channelQuery.isPending && !channels.length) ||
       (programQuery.isPending && !programs.length));
   const headerMeta =
-    isSearchIndexing || hasQuery ? (
+    hasQuery ? (
       <>
-        {isSearchIndexing ? (
-          <Badge variant="outline" className="gap-1.5">
-            {typeof searchIndexProgressPercent === "number" ? (
-              <span
-                className="inline-flex size-6 items-center justify-center rounded-full border border-border bg-background text-[10px] font-semibold leading-none tabular-nums"
-                aria-label={`${searchIndexProgressPercent}% indexed`}
-              >
-                {searchIndexProgressPercent}%
-              </span>
-            ) : (
-              <LoaderCircle
-                className="size-3.5 animate-spin"
-                aria-hidden="true"
-              />
-            )}
-            Search index updating
-          </Badge>
-        ) : null}
-        {hasQuery ? (
-          <>
-            <Badge variant="accent">{totalMatches} matches</Badge>
-            <Badge variant="outline">{channelTotal} channels</Badge>
-            <Badge variant="outline">{programTotal} programs</Badge>
-          </>
-        ) : null}
+        <Badge variant="accent">{totalMatches} matches</Badge>
+        <Badge variant="outline">{channelTotal} channels</Badge>
+        <Badge variant="outline">{programTotal} programs</Badge>
       </>
     ) : null;
 
