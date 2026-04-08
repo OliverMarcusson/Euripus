@@ -48,7 +48,6 @@ struct XtreamValidationPayload {
 #[derive(Debug, Deserialize)]
 struct XtreamUserInfo {
     auth: serde_json::Value,
-    status: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

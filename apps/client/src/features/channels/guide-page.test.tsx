@@ -277,6 +277,70 @@ describe("GuidePage", () => {
     expect(screen.getAllByRole("button", { name: /show channels/i })).toHaveLength(1);
   });
 
+  it("does not prune saved category ids when guide data is temporarily partial", async () => {
+    mockedGetGuidePreferences.mockResolvedValue({
+      includedCategoryIds: ["sports", "missing-category"],
+    });
+    mockedSaveGuidePreferences.mockImplementation(async (payload) => payload);
+    mockedGetGuide.mockResolvedValue({
+      categories: [
+        {
+          id: "sports",
+          name: "Sports",
+          channelCount: 2,
+          liveNowCount: 1,
+          isFavorite: false,
+        },
+        {
+          id: "news",
+          name: "News",
+          channelCount: 1,
+          liveNowCount: 0,
+          isFavorite: false,
+        },
+      ],
+    });
+
+    renderGuidePage();
+
+    expect(await screen.findByText("Sports")).toBeInTheDocument();
+    expect(screen.queryByText("News")).not.toBeInTheDocument();
+    await waitFor(() => expect(mockedGetGuidePreferences).toHaveBeenCalledTimes(1));
+    expect(mockedSaveGuidePreferences).not.toHaveBeenCalled();
+  });
+
+  it("saves preferences only after an explicit category selection change", async () => {
+    mockedSaveGuidePreferences.mockImplementation(async (payload) => payload);
+    mockedGetGuide.mockResolvedValue({
+      categories: [
+        {
+          id: "sports",
+          name: "Sports",
+          channelCount: 2,
+          liveNowCount: 1,
+          isFavorite: false,
+        },
+        {
+          id: "news",
+          name: "News",
+          channelCount: 1,
+          liveNowCount: 0,
+          isFavorite: false,
+        },
+      ],
+    });
+
+    renderGuidePage();
+    fireEvent.click(await screen.findByRole("button", { name: /show filter/i }));
+    fireEvent.click(screen.getByRole("button", { name: /sports/i }));
+
+    await waitFor(() =>
+      expect(mockedSaveGuidePreferences).toHaveBeenCalledWith(
+        { includedCategoryIds: ["sports"] },
+        expect.anything(),
+      ));
+  });
+
   it("applies a custom filter only after pressing Enter", async () => {
     mockedGetGuide.mockResolvedValue({
       categories: [
