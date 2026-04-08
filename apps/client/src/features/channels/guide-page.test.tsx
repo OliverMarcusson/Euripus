@@ -3,11 +3,22 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { GuidePage } from "@/features/channels/guide-page";
 import { getGuide, getGuideCategory, getGuidePreferences, saveGuidePreferences } from "@/lib/api";
 
+vi.mock("@tanstack/react-router", async () => {
+  const actual = await vi.importActual<typeof import("@tanstack/react-router")>("@tanstack/react-router");
+  return {
+    ...actual,
+    useNavigate: () => vi.fn(),
+    useSearch: () => ({}),
+  };
+});
+
 vi.mock("@/lib/api", () => ({
   addFavorite: vi.fn(),
+  addCategoryFavorite: vi.fn(),
   getGuide: vi.fn(),
   getGuideCategory: vi.fn(),
   getGuidePreferences: vi.fn(),
+  removeCategoryFavorite: vi.fn(),
   removeFavorite: vi.fn(),
   saveGuidePreferences: vi.fn(),
   startChannelPlayback: vi.fn(),
@@ -31,6 +42,7 @@ describe("GuidePage", () => {
           name: "Sports",
           channelCount: 2,
           liveNowCount: 1,
+          isFavorite: false,
         },
       ],
     });
@@ -67,6 +79,7 @@ describe("GuidePage", () => {
         name: "Sports",
         channelCount: 2,
         liveNowCount: 1,
+        isFavorite: false,
       },
       entries: [
         {
@@ -114,6 +127,7 @@ describe("GuidePage", () => {
           name: "Sports",
           channelCount: 2,
           liveNowCount: 1,
+          isFavorite: false,
         },
         entries: [
           {
@@ -151,6 +165,7 @@ describe("GuidePage", () => {
           name: "Sports",
           channelCount: 2,
           liveNowCount: 1,
+          isFavorite: false,
         },
         entries: [
           {
@@ -201,6 +216,7 @@ describe("GuidePage", () => {
         name: "Sports",
         channelCount: 2,
         liveNowCount: 0,
+        isFavorite: false,
       },
       entries: [
         {
@@ -242,12 +258,14 @@ describe("GuidePage", () => {
           name: "Sports",
           channelCount: 2,
           liveNowCount: 1,
+          isFavorite: false,
         },
         {
           id: "news",
           name: "News",
           channelCount: 1,
           liveNowCount: 0,
+          isFavorite: false,
         },
       ],
     });
@@ -267,12 +285,14 @@ describe("GuidePage", () => {
           name: "Sports",
           channelCount: 2,
           liveNowCount: 1,
+          isFavorite: false,
         },
         {
           id: "news",
           name: "News",
           channelCount: 1,
           liveNowCount: 0,
+          isFavorite: false,
         },
       ],
     });
@@ -309,12 +329,14 @@ describe("GuidePage", () => {
           name: "Sports",
           channelCount: 2,
           liveNowCount: 1,
+          isFavorite: false,
         },
         {
           id: "news",
           name: "News",
           channelCount: 1,
           liveNowCount: 0,
+          isFavorite: false,
         },
       ],
     });

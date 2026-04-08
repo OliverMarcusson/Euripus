@@ -41,6 +41,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useChannelFavoriteMutation } from "@/hooks/use-channel-favorite";
+import { useCategoryFavoriteMutation } from "@/hooks/use-category-favorite";
 import { useChannelPlaybackMutation } from "@/hooks/use-playback-actions";
 import {
   getGuide,
@@ -54,6 +55,7 @@ import {
   formatTimeRange,
   getTimeProgress,
 } from "@/lib/utils";
+import { useGuideNavigationStore } from "@/store/guide-navigation-store";
 
 const GUIDE_PAGE_SIZE = 40;
 
@@ -62,7 +64,10 @@ type GuideCategorySectionProps = {
   open: boolean;
   favoritePending: boolean;
   activeFavoriteChannelId?: string;
+  categoryFavoritePending: boolean;
+  activeFavoriteCategoryId?: string;
   onToggle: (nextOpen: boolean) => void;
+  onToggleCategoryFavorite: (category: GuideCategorySummary) => void;
   onFavorite: (channel: {
     id: string;
     name: string;
@@ -94,7 +99,14 @@ type GuideCategoryFilterCardProps = {
 
 export function GuidePage() {
   const queryClient = useQueryClient();
+  const pendingOpenCategoryId = useGuideNavigationStore(
+    (state) => state.pendingOpenCategoryId,
+  );
+  const clearPendingOpenCategory = useGuideNavigationStore(
+    (state) => state.clearPendingOpenCategory,
+  );
   const [openCategories, setOpenCategories] = useState<string[]>([]);
+  const [forcedVisibleCategoryId, setForcedVisibleCategoryId] = useState<string | null>(null);
   const [filterInput, setFilterInput] = useState("");
   const [appliedFilter, setAppliedFilter] = useState("");
   const guideQuery = useQuery({
@@ -134,6 +146,7 @@ export function GuidePage() {
     },
   });
   const favoriteMutation = useChannelFavoriteMutation();
+  const categoryFavoriteMutation = useCategoryFavoriteMutation();
   const playMutation = useChannelPlaybackMutation();
 
   function toggleCategory(categoryId: string, nextOpen: boolean) {
@@ -181,23 +194,38 @@ export function GuidePage() {
     );
   }, [categories, normalizedAppliedFilter, shouldApplyFilter]);
   const selectedCategories = useMemo(() => {
-    if (!validSelectedCategoryIds.length) {
+    if (!validSelectedCategoryIds.length && !forcedVisibleCategoryId) {
       return categories;
     }
 
     return categories.filter((category) =>
-      selectedCategoryIdsSet.has(category.id),
+      selectedCategoryIdsSet.has(category.id) || category.id === forcedVisibleCategoryId,
     );
-  }, [categories, selectedCategoryIdsSet, validSelectedCategoryIds.length]);
+  }, [
+    categories,
+    forcedVisibleCategoryId,
+    selectedCategoryIdsSet,
+    validSelectedCategoryIds.length,
+  ]);
   const visibleCategories = useMemo(() => {
     if (!shouldApplyFilter) {
       return selectedCategories;
     }
 
-    return selectedCategories.filter((category) =>
+    const filteredCategories = selectedCategories.filter((category) =>
       category.name.toLowerCase().includes(normalizedAppliedFilter),
     );
-  }, [normalizedAppliedFilter, selectedCategories, shouldApplyFilter]);
+
+    if (!forcedVisibleCategoryId) {
+      return filteredCategories;
+    }
+
+    return selectedCategories.filter(
+      (category) =>
+        category.id === forcedVisibleCategoryId ||
+        filteredCategories.some((entry) => entry.id === category.id),
+    );
+  }, [forcedVisibleCategoryId, normalizedAppliedFilter, selectedCategories, shouldApplyFilter]);
 
   useEffect(() => {
     if (
@@ -221,6 +249,29 @@ export function GuidePage() {
     savedCategoryIds,
     validSelectedCategoryIds,
   ]);
+
+  useEffect(() => {
+    const requestedCategoryId = pendingOpenCategoryId;
+    if (!requestedCategoryId || !categories.length) {
+      return;
+    }
+
+    const categoryExists = categories.some(
+      (category) => category.id === requestedCategoryId,
+    );
+    if (!categoryExists) {
+      clearPendingOpenCategory();
+      return;
+    }
+
+    setOpenCategories((current) =>
+      current.includes(requestedCategoryId)
+        ? current
+        : [...current, requestedCategoryId],
+    );
+    setForcedVisibleCategoryId(requestedCategoryId);
+    clearPendingOpenCategory();
+  }, [categories, clearPendingOpenCategory, pendingOpenCategoryId]);
 
   function updateIncludedCategoryIds(includedCategoryIds: string[]) {
     savePreferencesMutation.mutate({ includedCategoryIds });
@@ -325,8 +376,13 @@ export function GuidePage() {
                     open={openCategories.includes(category.id)}
                     favoritePending={favoriteMutation.isPending}
                     activeFavoriteChannelId={favoriteMutation.variables?.id}
+                    categoryFavoritePending={categoryFavoriteMutation.isPending}
+                    activeFavoriteCategoryId={categoryFavoriteMutation.variables?.id}
                     onToggle={(nextOpen) =>
                       toggleCategory(category.id, nextOpen)
+                    }
+                    onToggleCategoryFavorite={(nextCategory) =>
+                      categoryFavoriteMutation.mutate(nextCategory)
                     }
                     onFavorite={(channel) => favoriteMutation.mutate(channel)}
                     onPlay={(channelId) => playMutation.mutate(channelId)}
@@ -523,7 +579,10 @@ function GuideCategorySection({
   open,
   favoritePending,
   activeFavoriteChannelId,
+  categoryFavoritePending,
+  activeFavoriteCategoryId,
   onToggle,
+  onToggleCategoryFavorite,
   onFavorite,
   onPlay,
 }: GuideCategorySectionProps) {
@@ -560,17 +619,34 @@ function GuideCategorySection({
               </div>
             </div>
           </div>
-          <CollapsibleTrigger asChild>
+          <div className="flex flex-wrap items-center gap-2">
             <Button
               variant="ghost"
               className="self-start"
-              aria-expanded={open}
-              data-guide-category-toggle="true"
+              onClick={() => onToggleCategoryFavorite(category)}
+              disabled={
+                categoryFavoritePending &&
+                activeFavoriteCategoryId === category.id
+              }
             >
-              <Icon data-icon="inline-start" />
-              {open ? "Hide channels" : "Show channels"}
+              <Heart
+                data-icon="inline-start"
+                className={category.isFavorite ? "fill-current opacity-70" : "opacity-70"}
+              />
+              {category.isFavorite ? "Unfavorite category" : "Favorite category"}
             </Button>
-          </CollapsibleTrigger>
+            <CollapsibleTrigger asChild>
+              <Button
+                variant="ghost"
+                className="self-start"
+                aria-expanded={open}
+                data-guide-category-toggle="true"
+              >
+                <Icon data-icon="inline-start" />
+                {open ? "Hide channels" : "Show channels"}
+              </Button>
+            </CollapsibleTrigger>
+          </div>
         </div>
       </div>
 

@@ -337,6 +337,7 @@ struct GuideCategorySummaryResponse {
     name: String,
     channel_count: i64,
     live_now_count: i64,
+    is_favorite: bool,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -344,6 +345,16 @@ struct GuideCategorySummaryResponse {
 struct GuideChannelEntryResponse {
     channel: ChannelResponse,
     program: Option<ProgramResponse>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+enum FavoriteEntryResponse {
+    Category { category: GuideCategorySummaryResponse },
+    Channel {
+        channel: ChannelResponse,
+        program: Option<ProgramResponse>,
+    },
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -1931,6 +1942,10 @@ fn shared_api_router() -> Router<AppState> {
             "/favorites/{channel_id}",
             post(add_favorite).delete(remove_favorite),
         )
+        .route(
+            "/favorites/categories/{category_id}",
+            post(add_category_favorite).delete(remove_category_favorite),
+        )
         .route("/recents", get(list_recents))
         .route("/playback/channel/{id}", post(play_channel))
         .route("/playback/program/{id}", post(play_program))
@@ -3242,9 +3257,39 @@ async fn search_programs(
 async fn list_favorites(
     State(state): State<AppState>,
     headers: HeaderMap,
-) -> ApiResult<Vec<GuideChannelEntryResponse>> {
+) -> ApiResult<Vec<FavoriteEntryResponse>> {
     let auth = require_auth(&state, &headers).await?;
     let request_base_url = request_base_url(&state.config, &headers)?;
+    let category_favorites = sqlx::query_as::<_, GuideCategorySummaryRow>(
+        r#"
+        SELECT
+          cc.id::text AS id,
+          cc.name AS name,
+          COUNT(DISTINCT c.id) AS channel_count,
+          COUNT(DISTINCT c.id) FILTER (
+            WHERE p.start_at <= NOW() AND p.end_at > NOW()
+          ) AS live_now_count,
+          TRUE AS is_favorite
+        FROM favorite_channel_categories fcc
+        JOIN channel_categories cc ON cc.id = fcc.category_id
+        LEFT JOIN channels c
+          ON c.user_id = fcc.user_id
+         AND c.category_id = cc.id
+        LEFT JOIN programs p
+          ON p.user_id = c.user_id
+         AND p.channel_id = c.id
+         AND p.end_at > NOW() - ($2 * INTERVAL '1 hour')
+         AND p.start_at < NOW() + ($3 * INTERVAL '1 day')
+        WHERE fcc.user_id = $1
+        GROUP BY cc.id, cc.name, fcc.created_at
+        ORDER BY fcc.created_at DESC, cc.name ASC
+        "#,
+    )
+    .bind(auth.user_id)
+    .bind(EPG_RETENTION_PAST_HOURS)
+    .bind(EPG_RETENTION_FUTURE_DAYS)
+    .fetch_all(&state.pool)
+    .await?;
     let favorites = sqlx::query_as::<_, GuideCategoryEntryRow>(
         r#"
         SELECT
@@ -3319,10 +3364,24 @@ async fn list_favorites(
     .await?;
 
     Ok(Json(
-        favorites
+        category_favorites
             .into_iter()
-            .map(|row| map_guide_category_entry(&state, &request_base_url, auth.user_id, row))
-            .collect::<Result<Vec<_>, _>>()?,
+            .map(|row| FavoriteEntryResponse::Category {
+                category: map_guide_category_summary(row),
+            })
+            .chain(
+                favorites
+                    .into_iter()
+                    .map(|row| {
+                        map_guide_category_entry(&state, &request_base_url, auth.user_id, row)
+                            .map(|entry| FavoriteEntryResponse::Channel {
+                                channel: entry.channel,
+                                program: entry.program,
+                            })
+                    })
+                    .collect::<Result<Vec<_>, _>>()?,
+            )
+            .collect(),
     ))
 }
 
@@ -3355,6 +3414,43 @@ async fn remove_favorite(
     sqlx::query("DELETE FROM favorites WHERE user_id = $1 AND channel_id = $2")
         .bind(auth.user_id)
         .bind(channel_id)
+        .execute(&state.pool)
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn add_category_favorite(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(category_id): Path<Uuid>,
+) -> Result<StatusCode, AppError> {
+    let auth = require_auth(&state, &headers).await?;
+    sqlx::query(
+        r#"
+        INSERT INTO favorite_channel_categories (user_id, category_id)
+        SELECT $1, cc.id
+        FROM channel_categories cc
+        WHERE cc.user_id = $1
+          AND cc.id = $2
+        ON CONFLICT (user_id, category_id) DO NOTHING
+        "#,
+    )
+    .bind(auth.user_id)
+    .bind(category_id)
+    .execute(&state.pool)
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn remove_category_favorite(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(category_id): Path<Uuid>,
+) -> Result<StatusCode, AppError> {
+    let auth = require_auth(&state, &headers).await?;
+    sqlx::query("DELETE FROM favorite_channel_categories WHERE user_id = $1 AND category_id = $2")
+        .bind(auth.user_id)
+        .bind(category_id)
         .execute(&state.pool)
         .await?;
     Ok(StatusCode::NO_CONTENT)
@@ -4426,9 +4522,13 @@ async fn fetch_guide_categories(
           COUNT(DISTINCT c.id) AS channel_count,
           COUNT(DISTINCT c.id) FILTER (
             WHERE p.start_at <= NOW() AND p.end_at > NOW()
-          ) AS live_now_count
+          ) AS live_now_count,
+          COALESCE(BOOL_OR(fcc.category_id IS NOT NULL), FALSE) AS is_favorite
         FROM channels c
         LEFT JOIN channel_categories cc ON cc.id = c.category_id
+        LEFT JOIN favorite_channel_categories fcc
+          ON fcc.user_id = c.user_id
+         AND fcc.category_id = c.category_id
         LEFT JOIN programs p
           ON p.user_id = c.user_id
          AND p.channel_id = c.id
@@ -4447,12 +4547,7 @@ async fn fetch_guide_categories(
 
     Ok(rows
         .into_iter()
-        .map(|row| GuideCategorySummaryResponse {
-            id: row.id,
-            name: row.name,
-            channel_count: row.channel_count,
-            live_now_count: row.live_now_count,
-        })
+        .map(map_guide_category_summary)
         .collect())
 }
 
@@ -4469,9 +4564,13 @@ async fn fetch_guide_category_summary(
           COUNT(DISTINCT c.id) AS channel_count,
           COUNT(DISTINCT c.id) FILTER (
             WHERE p.start_at <= NOW() AND p.end_at > NOW()
-          ) AS live_now_count
+          ) AS live_now_count,
+          COALESCE(BOOL_OR(fcc.category_id IS NOT NULL), FALSE) AS is_favorite
         FROM channels c
         LEFT JOIN channel_categories cc ON cc.id = c.category_id
+        LEFT JOIN favorite_channel_categories fcc
+          ON fcc.user_id = c.user_id
+         AND fcc.category_id = c.category_id
         LEFT JOIN programs p
           ON p.user_id = c.user_id
          AND p.channel_id = c.id
@@ -4492,12 +4591,7 @@ async fn fetch_guide_category_summary(
     .fetch_optional(pool)
     .await?;
 
-    Ok(row.map(|row| GuideCategorySummaryResponse {
-        id: row.id,
-        name: row.name,
-        channel_count: row.channel_count,
-        live_now_count: row.live_now_count,
-    }))
+    Ok(row.map(map_guide_category_summary))
 }
 
 async fn fetch_guide_category_total_count(
@@ -5819,6 +5913,16 @@ async fn search_programs_meili(
 fn next_page_offset(offset: i64, limit: i64, total_count: i64) -> Option<i64> {
     let next_offset = offset + limit;
     (next_offset < total_count).then_some(next_offset)
+}
+
+fn map_guide_category_summary(row: GuideCategorySummaryRow) -> GuideCategorySummaryResponse {
+    GuideCategorySummaryResponse {
+        id: row.id,
+        name: row.name,
+        channel_count: row.channel_count,
+        live_now_count: row.live_now_count,
+        is_favorite: row.is_favorite,
+    }
 }
 
 fn map_guide_category_entry(
@@ -9507,6 +9611,7 @@ struct GuideCategorySummaryRow {
     name: String,
     channel_count: i64,
     live_now_count: i64,
+    is_favorite: bool,
 }
 
 #[derive(Debug, FromRow)]
@@ -10438,6 +10543,23 @@ mod tests {
         let normalized = normalize_category_ids(Vec::new());
 
         assert!(normalized.is_empty());
+    }
+
+    #[test]
+    fn maps_guide_category_summary_favorite_state() {
+        let summary = map_guide_category_summary(GuideCategorySummaryRow {
+            id: "sports".to_string(),
+            name: "Sports".to_string(),
+            channel_count: 12,
+            live_now_count: 3,
+            is_favorite: true,
+        });
+
+        assert_eq!(summary.id, "sports");
+        assert_eq!(summary.name, "Sports");
+        assert_eq!(summary.channel_count, 12);
+        assert_eq!(summary.live_now_count, 3);
+        assert!(summary.is_favorite);
     }
 
     #[tokio::test]

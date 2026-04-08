@@ -3,6 +3,7 @@ import type {
   Channel,
   ChannelSearchResults,
   FavoriteEntry,
+  FavoriteChannelEntry,
   GuideCategoryResponse,
   RecentChannel,
 } from "@euripus/shared";
@@ -10,6 +11,15 @@ import { addFavorite, removeFavorite } from "@/lib/api";
 
 function withFavorite(channel: Channel, isFavorite: boolean): Channel {
   return { ...channel, isFavorite };
+}
+
+function splitFavorites(entries: FavoriteEntry[]) {
+  const categoryEntries = entries.filter((entry) => entry.kind === "category");
+  const channelEntries = entries.filter(
+    (entry): entry is FavoriteChannelEntry => entry.kind === "channel",
+  );
+
+  return { categoryEntries, channelEntries };
 }
 
 export function useChannelFavoriteMutation() {
@@ -33,18 +43,27 @@ export function useChannelFavoriteMutation() {
           return current;
         }
 
+        const { categoryEntries, channelEntries } = splitFavorites(current);
+
         if (nextIsFavorite) {
-          const existing = current.some((favorite) => favorite.channel.id === channel.id);
-          return existing
-            ? current.map((favorite) =>
+          const existing = channelEntries.some(
+            (favorite) => favorite.channel.id === channel.id,
+          );
+          const nextChannelEntries = existing
+            ? channelEntries.map((favorite) =>
                 favorite.channel.id === channel.id
                   ? { ...favorite, channel: nextChannel }
                   : favorite,
               )
-            : [{ channel: nextChannel, program: null }, ...current];
+            : [{ kind: "channel" as const, channel: nextChannel, program: null }, ...channelEntries];
+
+          return [...categoryEntries, ...nextChannelEntries];
         }
 
-        return current.filter((favorite) => favorite.channel.id !== channel.id);
+        return [
+          ...categoryEntries,
+          ...channelEntries.filter((favorite) => favorite.channel.id !== channel.id),
+        ];
       });
 
       queryClient.setQueriesData<InfiniteData<GuideCategoryResponse, number>>(
