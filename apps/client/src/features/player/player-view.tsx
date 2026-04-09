@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import {
   ChevronDown,
   ChevronUp,
@@ -11,6 +11,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { PlyrSurface } from "@/components/player/plyr-surface";
 import {
   Empty,
   EmptyHeader,
@@ -22,7 +23,6 @@ import {
   resumeRemotePlayback,
   stopRemotePlayback,
 } from "@/lib/api";
-import { createIptvHls, isIptvHlsSupported } from "@/lib/hls";
 import { usePlayerStore } from "@/store/player-store";
 import { useRemoteControllerStore } from "@/store/remote-controller-store";
 import { cn, formatRelativeTime } from "@/lib/utils";
@@ -32,29 +32,6 @@ export function PlayerView() {
   const setSource = usePlayerStore((state) => state.setSource);
   const remoteTarget = useRemoteControllerStore((state) => state.target);
   const [minimized, setMinimized] = useState(false);
-  const videoRef = useRef<HTMLVideoElement | null>(null);
-
-  useEffect(() => {
-    const video = videoRef.current;
-    if (!video || !source || source.kind === "unsupported" || minimized) {
-      return;
-    }
-
-    video.removeAttribute("src");
-    video.load();
-
-    if (source.kind === "hls" && isIptvHlsSupported()) {
-      const hls = createIptvHls(video, source.url, { live: source.live });
-      return () => hls.destroy();
-    }
-
-    video.src = source.url;
-    return () => {
-      video.removeAttribute("src");
-      video.load();
-    };
-  }, [source, minimized]);
-
   if (!source) {
     if (remoteTarget?.currentPlayback) {
       return (
@@ -248,15 +225,13 @@ export function PlayerView() {
                   "This provider stream is not browser-compatible in v1."}
               </div>
             ) : (
-              <div className="overflow-hidden rounded-2xl border border-border/40 bg-black/90 w-full ring-1 ring-white/10 shadow-[0_8px_32px_rgba(0,0,0,0.5)]">
-                <video
-                  ref={videoRef}
-                  controls
-                  autoPlay
-                  playsInline
-                  tabIndex={0}
-                  className="aspect-video w-full bg-black object-contain max-md:min-h-[220px]"
-                  aria-label={`Playing ${source.title}`}
+              <div className="euripus-plyr-shell euripus-plyr-shell--local overflow-hidden rounded-2xl border border-border/40 bg-black/90 w-full ring-1 ring-white/10 shadow-[0_8px_32px_rgba(0,0,0,0.5)]">
+                <PlyrSurface
+                  ariaLabel={`Playing ${source.title}`}
+                  className="contents"
+                  source={source}
+                  uiMode="local"
+                  videoClassName="euripus-plyr-media aspect-video w-full bg-black object-contain max-md:min-h-[220px]"
                 />
               </div>
             )}
