@@ -36,7 +36,6 @@ const LOCAL_VOD_CONTROLS = [
 const LOCAL_LIVE_CONTROLS = [
   "play-large",
   "play",
-  "current-time",
   "mute",
   "volume",
   "pip",
@@ -183,9 +182,14 @@ export function bindPlaybackSource(
   video: HTMLVideoElement,
   source: PlaybackSource,
   {
+    playbackSessionId,
     uiMode = "local",
     onRecoveryNeeded,
-  }: { uiMode?: PlayerUiMode; onRecoveryNeeded?: () => void | Promise<void> } = {},
+  }: {
+    playbackSessionId?: string;
+    uiMode?: PlayerUiMode;
+    onRecoveryNeeded?: () => void | Promise<void>;
+  } = {},
 ): BoundPlaybackSession {
   resetMediaElement(video);
 
@@ -208,6 +212,16 @@ export function bindPlaybackSource(
       return;
     }
 
+    logPlaybackDiagnostic("warn", "playback-session-recovery-requested", {
+      playbackSessionId,
+      ownershipHint: inferPlaybackOwnershipHint(source.url),
+      sourceKind: source.kind,
+      sourceUrl: source.url,
+      live: source.live,
+      currentTime: video.currentTime,
+      readyState: video.readyState,
+    });
+
     recoveryInFlight = true;
     void Promise.resolve(onRecoveryNeeded()).finally(() => {
       recoveryInFlight = false;
@@ -220,6 +234,7 @@ export function bindPlaybackSource(
     }
 
     logPlaybackDiagnostic("warn", "video-stall-detected", {
+      playbackSessionId,
       ownershipHint: inferPlaybackOwnershipHint(source.url),
       sourceKind: source.kind,
       sourceUrl: source.url,
@@ -245,6 +260,7 @@ export function bindPlaybackSource(
       }
 
       logPlaybackDiagnostic("warn", "video-stall-recovery-requested", {
+        playbackSessionId,
         ownershipHint: inferPlaybackOwnershipHint(source.url),
         sourceKind: source.kind,
         sourceUrl: source.url,
@@ -266,6 +282,7 @@ export function bindPlaybackSource(
 
   const handlePlaybackError = () => {
     logPlaybackDiagnostic("error", "video-element-error", {
+      playbackSessionId,
       ownershipHint: inferPlaybackOwnershipHint(source.url),
       sourceKind: source.kind,
       sourceUrl: source.url,
@@ -284,6 +301,7 @@ export function bindPlaybackSource(
   const handlePlaybackEnded = () => {
     if (source.live) {
       logPlaybackDiagnostic("warn", "live-video-ended-unexpectedly", {
+        playbackSessionId,
         ownershipHint: inferPlaybackOwnershipHint(source.url),
         sourceKind: source.kind,
         sourceUrl: source.url,
@@ -303,10 +321,28 @@ export function bindPlaybackSource(
   video.addEventListener("error", handlePlaybackError);
   video.addEventListener("ended", handlePlaybackEnded);
 
+  logPlaybackDiagnostic("info", "playback-session-created", {
+    playbackSessionId,
+    ownershipHint: inferPlaybackOwnershipHint(source.url),
+    sourceKind: source.kind,
+    sourceUrl: source.url,
+    live: source.live,
+    uiMode,
+  });
+
   const session: BoundPlaybackSession = {
     plyr: null,
     destroy() {
       destroyed = true;
+      logPlaybackDiagnostic("info", "playback-session-destroyed", {
+        playbackSessionId,
+        ownershipHint: inferPlaybackOwnershipHint(source.url),
+        sourceKind: source.kind,
+        sourceUrl: source.url,
+        live: source.live,
+        currentTime: video.currentTime,
+        readyState: video.readyState,
+      });
       clearStallRecovery();
       unsubscribeFromQualities?.();
       hlsSession?.destroy();
@@ -343,6 +379,7 @@ export function bindPlaybackSource(
   if (source.kind === "hls" && isIptvHlsSupported()) {
     hlsSession = createIptvHls(video, source.url, {
       live: source.live,
+      playbackSessionId,
       onRecoveryNeeded: triggerRecovery,
     });
     unsubscribeFromQualities = hlsSession.onQualitiesChanged(() => {

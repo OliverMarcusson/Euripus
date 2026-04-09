@@ -75,6 +75,11 @@ fun ReceiverRoot(
                         title = state.source.title,
                         message = state.errorMessage ?: "This stream is not supported on the receiver.",
                     )
+                } else if (state.source != null && !state.errorMessage.isNullOrBlank()) {
+                    UnsupportedScreen(
+                        title = state.source.title,
+                        message = state.errorMessage,
+                    )
                 } else {
                     ErrorScreen(
                         message = state.errorMessage ?: "Receiver error",
@@ -126,7 +131,7 @@ private fun ServerSetupScreen(
         ) {
             Eyebrow("Euripus Receiver")
             Title("Connect this TV")
-            Body("Enter the public Euripus server URL. The native receiver will reuse the same /api receiver protocol as the web receiver.")
+            Body("Enter your Euripus server URL. For local testing you can use a LAN address like http://192.168.1.42:5173, and the receiver will connect to the same /api receiver endpoints.")
             OutlinedTextField(
                 value = state.serverInput,
                 onValueChange = onUrlChange,

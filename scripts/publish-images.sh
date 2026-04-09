@@ -75,7 +75,10 @@ invoke_ghcr_login_if_configured() {
     return
   fi
 
-  printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GHCR_USERNAME" --password-stdin
+  echo "Attempting GHCR login with configured credentials..."
+  if ! printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GHCR_USERNAME" --password-stdin; then
+    echo "Configured GHCR credentials were rejected. Continuing with any existing Docker credential store entry for ghcr.io." >&2
+  fi
 }
 
 publish_image() {

@@ -1,6 +1,14 @@
 import { useEffect, useRef, type MutableRefObject } from "react";
 import type { PlaybackSource } from "@euripus/shared";
 import { bindPlaybackSource } from "@/lib/plyr-player";
+import { attachPlaybackSeekDebugging } from "@/lib/playback-diagnostics";
+
+let nextPlaybackSessionSequence = 0;
+
+function createPlaybackSessionId() {
+  nextPlaybackSessionSequence += 1;
+  return `playback-session-${nextPlaybackSessionSequence}`;
+}
 
 type PlyrSurfaceProps = {
   ariaLabel: string;
@@ -22,6 +30,11 @@ export function PlyrSurface({
   videoRef,
 }: PlyrSurfaceProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const onRecoveryNeededRef = useRef<typeof onRecoveryNeeded>(onRecoveryNeeded);
+
+  useEffect(() => {
+    onRecoveryNeededRef.current = onRecoveryNeeded;
+  }, [onRecoveryNeeded]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -45,18 +58,27 @@ export function PlyrSurface({
       videoRef.current = video;
     }
 
+    const playbackSessionId = createPlaybackSessionId();
+    const detachSeekDebugging = attachPlaybackSeekDebugging(container, video, {
+      playbackSessionId,
+      sourceKind: source.kind,
+      sourceUrl: source.url,
+      live: source.live,
+    });
     const session = bindPlaybackSource(video, source, {
+      playbackSessionId,
       uiMode,
-      onRecoveryNeeded,
+      onRecoveryNeeded: () => onRecoveryNeededRef.current?.(),
     });
     return () => {
+      detachSeekDebugging();
       session.destroy();
       if (videoRef?.current === video) {
         videoRef.current = null;
       }
       container.replaceChildren();
     };
-  }, [ariaLabel, onRecoveryNeeded, source, uiMode, videoClassName, videoRef]);
+  }, [ariaLabel, source, uiMode, videoClassName, videoRef]);
 
   return <div ref={containerRef} className={className} />;
 }

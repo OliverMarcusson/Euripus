@@ -399,6 +399,8 @@ const CSRF_HEADER_NAME: &str = "x-csrf-token";
 const RELAY_PLAYLIST_MAX_BYTES: usize = 1024 * 1024;
 const PUBLIC_IP_LOOKUP_URL: &str = "https://api.ipify.org";
 const PUBLIC_IP_LOOKUP_TIMEOUT_SECONDS: u64 = 5;
+const RELAY_UPSTREAM_CONNECT_TIMEOUT_SECONDS: u64 = 10;
+const RELAY_UPSTREAM_READ_TIMEOUT_SECONDS: u64 = 25;
 const INTERRUPTED_SYNC_MESSAGE: &str =
     "Sync was interrupted when the server restarted. Start a new sync.";
 const DATABASE_STARTUP_TIMEOUT: Duration = Duration::from_secs(180);

@@ -19,6 +19,11 @@ import { PlyrSurface } from "@/components/player/plyr-surface";
 
 const RECEIVER_STORAGE_KEY = "euripus-receiver-device";
 const RECEIVER_HEARTBEAT_MS = 15_000;
+const SEEK_COMPLETION_TOLERANCE_SECONDS = 1.5;
+
+type PendingCommand =
+  | { id: string; kind: "playback_source" | "play" | "pause" | "stop" }
+  | { id: string; kind: "seek"; positionSeconds: number | null };
 
 type ReceiverPersistedState = {
   deviceKey: string;
@@ -67,13 +72,35 @@ function formatPairingCode(code: string) {
   return code.split("").join(" ");
 }
 
+function describeVideoError(video: HTMLVideoElement | null) {
+  const mediaError = video?.error;
+  if (!mediaError) {
+    return null;
+  }
+  switch (mediaError.code) {
+    case MediaError.MEDIA_ERR_ABORTED:
+      return "Playback was interrupted before the stream finished loading.";
+    case MediaError.MEDIA_ERR_NETWORK:
+      return "The receiver lost connection while streaming.";
+    case MediaError.MEDIA_ERR_DECODE:
+      return "The receiver could not decode this stream.";
+    case MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED:
+      return "This stream is not supported on the receiver.";
+    default:
+      return "Playback failed on the receiver.";
+  }
+}
+
 export function ReceiverPage() {
   const initial = useMemo(loadPersistedState, []);
   const [session, setSession] = useState<ReceiverSession | null>(null);
   const [pairingCode, setPairingCode] = useState<string | null>(null);
   const [source, setSource] = useState<PlaybackSource | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [buffering, setBuffering] = useState(false);
+  const [playbackError, setPlaybackError] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const pendingCommandRef = useRef<PendingCommand | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -86,6 +113,8 @@ export function ReceiverPage() {
           platform: "web",
           formFactorHint: detectFormFactorHint(),
           appKind: "receiver-web",
+          publicOrigin:
+            typeof window === "undefined" ? null : window.location.origin,
           receiverCredential: initial.receiverCredential,
         });
         if (!active) {
@@ -131,27 +160,72 @@ export function ReceiverPage() {
     const events = new EventSource(buildEventsUrl(session.sessionToken), { withCredentials: true });
     events.addEventListener("playback_command", (event) => {
       const payload = JSON.parse((event as MessageEvent<string>).data) as RemoteDeviceEventPayload;
-      if (payload.source) {
-        setSource(payload.source);
+      if (!payload.source) {
+        return;
       }
-      void acknowledgeReceiverCommand(session.sessionToken, payload.command.id, { status: "acknowledged" }).catch(() => undefined);
+      if (payload.source.kind === "unsupported") {
+        setPlaybackError(
+          payload.source.unsupportedReason ??
+            "This stream is not supported on the receiver.",
+        );
+        setSource(payload.source);
+        pendingCommandRef.current = null;
+        void acknowledgeReceiverCommand(session.sessionToken, payload.command.id, {
+          status: "failed",
+          errorMessage:
+            payload.source.unsupportedReason ??
+            "This stream is not supported on the receiver.",
+        }).catch(() => undefined);
+        return;
+      }
+      setPlaybackError(null);
+      setBuffering(true);
+      pendingCommandRef.current = {
+        id: payload.command.id,
+        kind: "playback_source",
+      };
+      void acknowledgeReceiverCommand(session.sessionToken, payload.command.id, {
+        status: "executing",
+      }).catch(() => undefined);
+      setSource(payload.source);
     });
     events.addEventListener("transport_command", (event) => {
       const payload = JSON.parse((event as MessageEvent<string>).data) as RemoteDeviceEventPayload;
       const video = videoRef.current;
+      const commandType = payload.command.commandType;
+      pendingCommandRef.current =
+        commandType === "seek"
+          ? {
+              id: payload.command.id,
+              kind: "seek",
+              positionSeconds: payload.positionSeconds ?? null,
+            }
+          : {
+              id: payload.command.id,
+              kind:
+                commandType === "pause" ||
+                commandType === "play" ||
+                commandType === "stop"
+                  ? commandType
+                  : "stop",
+            };
+      void acknowledgeReceiverCommand(session.sessionToken, payload.command.id, {
+        status: "executing",
+      }).catch(() => undefined);
       if (video) {
-        if (payload.command.commandType === "pause") {
+        if (commandType === "pause") {
           void video.pause();
-        } else if (payload.command.commandType === "play") {
+        } else if (commandType === "play") {
+          setPlaybackError(null);
           void video.play().catch(() => undefined);
-        } else if (payload.command.commandType === "seek" && typeof payload.positionSeconds === "number") {
+        } else if (commandType === "seek" && typeof payload.positionSeconds === "number") {
           video.currentTime = payload.positionSeconds;
-        } else if (payload.command.commandType === "stop") {
+        } else if (commandType === "stop") {
           video.pause();
           setSource(null);
+          setBuffering(false);
         }
       }
-      void acknowledgeReceiverCommand(session.sessionToken, payload.command.id, { status: "acknowledged" }).catch(() => undefined);
     });
     events.addEventListener("pairing_complete", (event) => {
       const payload = JSON.parse((event as MessageEvent<string>).data) as RemoteDeviceEventPayload;
@@ -174,6 +248,14 @@ export function ReceiverPage() {
     }
 
     const video = videoRef.current;
+    const isBuffering =
+      !!source &&
+      source.kind !== "unsupported" &&
+      !playbackError &&
+      !!video &&
+      !video.paused &&
+      !video.ended &&
+      video.readyState < HTMLMediaElement.HAVE_FUTURE_DATA;
     const sync = () =>
       void updateReceiverPlaybackState(session.sessionToken, {
         title: source?.title ?? null,
@@ -181,23 +263,131 @@ export function ReceiverPage() {
         live: source?.live ?? null,
         catchup: source?.catchup ?? null,
         paused: video ? video.paused : true,
+        buffering: isBuffering || buffering,
         positionSeconds: video ? video.currentTime : null,
         durationSeconds: video && Number.isFinite(video.duration) ? video.duration : null,
+        errorMessage: playbackError,
       }).catch(() => undefined);
 
+    const maybeCompletePendingCommand = () => {
+      const pending = pendingCommandRef.current;
+      if (!pending) {
+        return;
+      }
+      if (playbackError) {
+        pendingCommandRef.current = null;
+        void acknowledgeReceiverCommand(session.sessionToken, pending.id, {
+          status: "failed",
+          errorMessage: playbackError,
+        }).catch(() => undefined);
+        return;
+      }
+      if (pending.kind === "stop" && !source) {
+        pendingCommandRef.current = null;
+        void acknowledgeReceiverCommand(session.sessionToken, pending.id, {
+          status: "succeeded",
+        }).catch(() => undefined);
+        return;
+      }
+      if (!video) {
+        return;
+      }
+      if (pending.kind === "playback_source" && video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
+        pendingCommandRef.current = null;
+        void acknowledgeReceiverCommand(session.sessionToken, pending.id, {
+          status: "succeeded",
+        }).catch(() => undefined);
+        return;
+      }
+      if (
+        pending.kind === "play" &&
+        !video.paused &&
+        video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA
+      ) {
+        pendingCommandRef.current = null;
+        void acknowledgeReceiverCommand(session.sessionToken, pending.id, {
+          status: "succeeded",
+        }).catch(() => undefined);
+        return;
+      }
+      if (pending.kind === "pause" && video.paused) {
+        pendingCommandRef.current = null;
+        void acknowledgeReceiverCommand(session.sessionToken, pending.id, {
+          status: "succeeded",
+        }).catch(() => undefined);
+        return;
+      }
+      if (
+        pending.kind === "seek" &&
+        pending.positionSeconds != null &&
+        Math.abs(video.currentTime - pending.positionSeconds) <= SEEK_COMPLETION_TOLERANCE_SECONDS &&
+        !video.seeking
+      ) {
+        pendingCommandRef.current = null;
+        void acknowledgeReceiverCommand(session.sessionToken, pending.id, {
+          status: "succeeded",
+        }).catch(() => undefined);
+      }
+    };
+
     sync();
+    maybeCompletePendingCommand();
     if (!video) {
       return;
     }
-    video.addEventListener("pause", sync);
-    video.addEventListener("play", sync);
-    video.addEventListener("timeupdate", sync);
-    return () => {
-      video.removeEventListener("pause", sync);
-      video.removeEventListener("play", sync);
-      video.removeEventListener("timeupdate", sync);
+    const handleWaiting = () => {
+      setBuffering(true);
+      sync();
+      maybeCompletePendingCommand();
     };
-  }, [session?.sessionToken, source]);
+    const handlePlaying = () => {
+      setBuffering(false);
+      setPlaybackError(null);
+      sync();
+      maybeCompletePendingCommand();
+    };
+    const handleCanPlay = () => {
+      setBuffering(false);
+      sync();
+      maybeCompletePendingCommand();
+    };
+    const handlePause = () => {
+      setBuffering(false);
+      sync();
+      maybeCompletePendingCommand();
+    };
+    const handleError = () => {
+      const nextError = describeVideoError(video);
+      setBuffering(false);
+      setPlaybackError(nextError);
+      sync();
+      maybeCompletePendingCommand();
+    };
+    video.addEventListener("pause", handlePause);
+    video.addEventListener("play", sync);
+    video.addEventListener("playing", handlePlaying);
+    video.addEventListener("canplay", handleCanPlay);
+    video.addEventListener("loadeddata", handleCanPlay);
+    video.addEventListener("timeupdate", sync);
+    video.addEventListener("waiting", handleWaiting);
+    video.addEventListener("seeking", handleWaiting);
+    video.addEventListener("seeked", handleCanPlay);
+    video.addEventListener("ended", handlePause);
+    video.addEventListener("error", handleError);
+    return () => {
+      video.removeEventListener("pause", handlePause);
+      video.removeEventListener("play", sync);
+      video.removeEventListener("playing", handlePlaying);
+      video.removeEventListener("canplay", handleCanPlay);
+      video.removeEventListener("loadeddata", handleCanPlay);
+      video.removeEventListener("timeupdate", sync);
+      video.removeEventListener("waiting", handleWaiting);
+      video.removeEventListener("seeking", handleWaiting);
+      video.removeEventListener("seeked", handleCanPlay);
+      video.removeEventListener("ended", handlePause);
+      video.removeEventListener("error", handleError);
+    };
+  }, [buffering, playbackError, session?.sessionToken, source]);
 
   if (pairingCode) {
     return (
@@ -254,10 +444,12 @@ export function ReceiverPage() {
   return (
     <div className="min-h-screen bg-black text-white">
       <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(168,85,247,0.14),transparent_30%),linear-gradient(180deg,rgba(10,10,15,0.24),rgba(10,10,15,0.4))]" />
-      {source.kind === "unsupported" ? (
+      {source.kind === "unsupported" || playbackError ? (
         <main className="relative grid min-h-screen place-items-center px-6 py-10">
           <div className="max-w-2xl rounded-lg border border-amber-400/30 bg-amber-400/10 p-6 text-amber-100">
-            {source.unsupportedReason ?? "This stream is not supported on the receiver."}
+            {playbackError ??
+              source.unsupportedReason ??
+              "This stream is not supported on the receiver."}
           </div>
         </main>
       ) : (

@@ -9,8 +9,7 @@ use super::*;
 pub(super) mod relay_tokens;
 pub(super) mod resolve;
 
-const BROWSER_HLS_UNSUPPORTED_REASON: &str =
-    "This provider stream could not be verified for browser HLS playback. Try a receiver/native target instead.";
+const BROWSER_HLS_UNSUPPORTED_REASON: &str = "This provider stream could not be verified for browser HLS playback. Try a receiver/native target instead.";
 
 #[derive(Debug, FromRow)]
 struct ChannelPlaybackRecord {
@@ -60,8 +59,15 @@ async fn resolve_channel_playback_source(
     user_id: Uuid,
     id: Uuid,
 ) -> Result<PlaybackSourceResponse, AppError> {
-    resolve_channel_playback_source_for_target(state, headers, user_id, id, PlaybackTarget::Browser)
-        .await
+    resolve_channel_playback_source_for_target(
+        state,
+        headers,
+        None,
+        user_id,
+        id,
+        PlaybackTarget::Browser,
+    )
+    .await
 }
 
 pub(in crate::server_main) async fn resolve_channel_playback_source_for_receiver(
@@ -70,10 +76,12 @@ pub(in crate::server_main) async fn resolve_channel_playback_source_for_receiver
     user_id: Uuid,
     id: Uuid,
     receiver_app_kind: &str,
+    receiver_public_origin: Option<&str>,
 ) -> Result<PlaybackSourceResponse, AppError> {
     resolve_channel_playback_source_for_target(
         state,
         headers,
+        receiver_public_origin,
         user_id,
         id,
         playback_target_for_receiver_app(receiver_app_kind),
@@ -84,6 +92,7 @@ pub(in crate::server_main) async fn resolve_channel_playback_source_for_receiver
 async fn resolve_channel_playback_source_for_target(
     state: &AppState,
     headers: &HeaderMap,
+    target_public_origin: Option<&str>,
     user_id: Uuid,
     id: Uuid,
     target: PlaybackTarget,
@@ -133,6 +142,7 @@ async fn resolve_channel_playback_source_for_target(
     finalize_playback_source(
         state,
         headers,
+        target_public_origin,
         user_id,
         record.profile_id,
         target,
@@ -154,8 +164,15 @@ async fn resolve_program_playback_source(
     user_id: Uuid,
     id: Uuid,
 ) -> Result<PlaybackSourceResponse, AppError> {
-    resolve_program_playback_source_for_target(state, headers, user_id, id, PlaybackTarget::Browser)
-        .await
+    resolve_program_playback_source_for_target(
+        state,
+        headers,
+        None,
+        user_id,
+        id,
+        PlaybackTarget::Browser,
+    )
+    .await
 }
 
 pub(in crate::server_main) async fn resolve_program_playback_source_for_receiver(
@@ -164,10 +181,12 @@ pub(in crate::server_main) async fn resolve_program_playback_source_for_receiver
     user_id: Uuid,
     id: Uuid,
     receiver_app_kind: &str,
+    receiver_public_origin: Option<&str>,
 ) -> Result<PlaybackSourceResponse, AppError> {
     resolve_program_playback_source_for_target(
         state,
         headers,
+        receiver_public_origin,
         user_id,
         id,
         playback_target_for_receiver_app(receiver_app_kind),
@@ -178,6 +197,7 @@ pub(in crate::server_main) async fn resolve_program_playback_source_for_receiver
 async fn resolve_program_playback_source_for_target(
     state: &AppState,
     headers: &HeaderMap,
+    target_public_origin: Option<&str>,
     user_id: Uuid,
     id: Uuid,
     target: PlaybackTarget,
@@ -249,6 +269,7 @@ async fn resolve_program_playback_source_for_target(
             finalize_playback_source(
                 state,
                 headers,
+                target_public_origin,
                 user_id,
                 row.profile_id,
                 target,
@@ -291,6 +312,7 @@ async fn resolve_program_playback_source_for_target(
             finalize_playback_source(
                 state,
                 headers,
+                target_public_origin,
                 user_id,
                 row.profile_id,
                 target,
@@ -346,6 +368,7 @@ fn target_requires_browser_hls_preflight(
 async fn finalize_playback_source(
     state: &AppState,
     headers: &HeaderMap,
+    target_public_origin: Option<&str>,
     user_id: Uuid,
     profile_id: Uuid,
     target: PlaybackTarget,
@@ -380,6 +403,7 @@ async fn finalize_playback_source(
     playback_source_for_mode(
         state,
         headers,
+        target_public_origin,
         user_id,
         profile_id,
         target,
@@ -470,6 +494,7 @@ mod tests {
         let response = playback_source_for_mode(
             &state,
             &HeaderMap::new(),
+            None,
             Uuid::from_u128(1),
             Uuid::from_u128(2),
             PlaybackTarget::Browser,
@@ -494,6 +519,7 @@ mod tests {
         let response = playback_source_for_mode(
             &state,
             &HeaderMap::new(),
+            None,
             Uuid::from_u128(3),
             Uuid::from_u128(4),
             PlaybackTarget::Browser,
@@ -535,6 +561,7 @@ mod tests {
         let response = playback_source_for_mode(
             &state,
             &HeaderMap::new(),
+            None,
             Uuid::from_u128(31),
             Uuid::from_u128(32),
             PlaybackTarget::Browser,
@@ -581,6 +608,7 @@ mod tests {
         let response = playback_source_for_mode(
             &state,
             &headers,
+            None,
             Uuid::from_u128(33),
             Uuid::from_u128(34),
             PlaybackTarget::Browser,
@@ -607,6 +635,7 @@ mod tests {
         let response = playback_source_for_mode(
             &state,
             &headers,
+            None,
             Uuid::from_u128(43),
             Uuid::from_u128(44),
             PlaybackTarget::Browser,
@@ -631,6 +660,7 @@ mod tests {
         let response = playback_source_for_mode(
             &state,
             &HeaderMap::new(),
+            None,
             Uuid::from_u128(35),
             Uuid::from_u128(36),
             PlaybackTarget::ReceiverWeb,
@@ -655,6 +685,7 @@ mod tests {
         let response = playback_source_for_mode(
             &state,
             &HeaderMap::new(),
+            None,
             Uuid::from_u128(45),
             Uuid::from_u128(46),
             PlaybackTarget::ReceiverAndroidTv,
@@ -725,6 +756,7 @@ mod tests {
         let response = finalize_playback_source(
             &state,
             &local_request_headers(),
+            None,
             Uuid::from_u128(1),
             Uuid::from_u128(2),
             PlaybackTarget::Browser,
@@ -761,10 +793,7 @@ mod tests {
                 get(|| async move {
                     Response::builder()
                         .status(StatusCode::OK)
-                        .header(
-                            header::CONTENT_TYPE,
-                            "application/vnd.apple.mpegurl",
-                        )
+                        .header(header::CONTENT_TYPE, "application/vnd.apple.mpegurl")
                         .body(Body::from("#EXTM3U\n#EXT-X-VERSION:3\n"))
                         .expect("response")
                 }),
@@ -777,6 +806,7 @@ mod tests {
         let response = finalize_playback_source(
             &state,
             &local_request_headers(),
+            None,
             Uuid::from_u128(11),
             Uuid::from_u128(12),
             PlaybackTarget::Browser,
@@ -796,5 +826,34 @@ mod tests {
         assert_eq!(response.url, format!("http://{addr}/stream.m3u8"));
 
         server.abort();
+    }
+
+    #[tokio::test]
+    async fn playback_source_for_mode_prefers_receiver_public_origin_for_receiver_targets() {
+        let state = sample_app_state_without_public_origin();
+        let headers = local_request_headers();
+
+        let response = playback_source_for_mode(
+            &state,
+            &headers,
+            Some("http://192.168.0.67:5173"),
+            Uuid::from_u128(51),
+            Uuid::from_u128(52),
+            PlaybackTarget::ReceiverAndroidTv,
+            "direct",
+            "Arena 1",
+            "https://provider.example.com/live/42.m3u8".to_string(),
+            true,
+            false,
+            PlaybackStreamFormat::Hls,
+            None,
+        )
+        .expect("receiver playback source");
+
+        assert!(
+            response
+                .url
+                .starts_with("http://192.168.0.67:5173/api/relay/hls?token=")
+        );
     }
 }

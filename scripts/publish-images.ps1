@@ -63,7 +63,12 @@ function Invoke-GhcrLoginIfConfigured {
         return
     }
 
+    Write-Host "Attempting GHCR login with configured credentials..." -ForegroundColor Cyan
     $env:GHCR_TOKEN | docker login ghcr.io --username $env:GHCR_USERNAME --password-stdin | Out-Host
+
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning "Configured GHCR credentials were rejected. Continuing with any existing Docker credential store entry for ghcr.io."
+    }
 }
 
 function Publish-Image {

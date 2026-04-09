@@ -32,6 +32,7 @@ import {
   logout,
   selectRemoteControllerTarget,
 } from "@/lib/api";
+import { formatReceiverPlaybackSummary } from "@/lib/receiver-playback";
 import { cn } from "@/lib/utils";
 import { useAuthStore } from "@/store/auth-store";
 import { usePlayerStore } from "@/store/player-store";
@@ -143,11 +144,7 @@ export function AppShell() {
               <div className="flex min-w-0 flex-col">
                 <span className="truncate font-medium">{device.name}</span>
                 <span className="truncate text-xs text-muted-foreground">
-                  {device.currentPlayback
-                    ? `Now playing ${device.currentPlayback.title}`
-                    : device.online
-                      ? device.platform
-                      : "Offline"}
+                  {formatReceiverPlaybackSummary(device)}
                 </span>
               </div>
             </DropdownMenuItem>
@@ -312,7 +309,7 @@ export function AppShell() {
                 Controlling{" "}
                 <span className="font-semibold">{remoteTarget.name}</span>
                 {remoteTarget.currentPlayback
-                  ? ` - ${remoteTarget.currentPlayback.title}`
+                  ? ` - ${formatReceiverPlaybackSummary(remoteTarget)}`
                   : ""}
               </div>
             </div>

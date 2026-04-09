@@ -27,6 +27,7 @@ import {
   pairReceiver,
   unpairReceiver,
 } from "@/lib/api";
+import { formatReceiverPlaybackSummary } from "@/lib/receiver-playback";
 import { formatDateTime, formatRelativeTime } from "@/lib/utils";
 import type { ThemePreference } from "@/store/theme-store";
 import { useThemeStore } from "@/store/theme-store";
@@ -329,13 +330,7 @@ export function SettingsPage() {
                     </Badge>
                   </div>
                   <p className="text-sm text-muted-foreground">
-                    {device.currentPlayback
-                      ? `Now playing ${device.currentPlayback.title}`
-                      : device.playbackStateStale
-                        ? `Playback state expired ${formatRelativeTime(device.lastSeenAt)}`
-                        : device.online
-                          ? device.platform
-                          : `Last seen ${formatRelativeTime(device.lastSeenAt)}`}
+                    {formatReceiverPlaybackSummary(device)}
                   </p>
                 </div>
                 <Button

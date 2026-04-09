@@ -30,6 +30,18 @@ function Resolve-CommandPath {
     return $command.Source
 }
 
+function Get-LocalIpv4Addresses {
+    $addresses = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+        Where-Object {
+            $_.IPAddress -notlike "127.*" -and
+            $_.IPAddress -notlike "169.254.*" -and
+            $_.PrefixOrigin -ne "WellKnown"
+        } |
+        Select-Object -ExpandProperty IPAddress -Unique
+
+    return @($addresses)
+}
+
 function Wait-ForHttpEndpoint {
     param(
         [string]$Name,
@@ -191,7 +203,7 @@ try {
     $clientProcess = Start-TrackedProcess `
         -Name "client" `
         -FilePath "bun" `
-        -ArgumentList @("--cwd", "apps/client", "dev", "--host", "127.0.0.1") `
+        -ArgumentList @("--cwd", "apps/client", "dev", "--host", "0.0.0.0") `
         -WorkingDirectory $repoRoot
 
     Write-Host "Waiting for frontend dev server..." -ForegroundColor Cyan
@@ -219,6 +231,13 @@ try {
     Write-Host "Dev stack is ready." -ForegroundColor Green
     Write-Host "API: http://127.0.0.1:8080"
     Write-Host "Web: http://127.0.0.1:5173"
+    $lanAddresses = Get-LocalIpv4Addresses
+    if ($lanAddresses.Count -gt 0) {
+        Write-Host "LAN URLs:" -ForegroundColor Cyan
+        foreach ($address in $lanAddresses) {
+            Write-Host "  Web: http://$address:5173"
+        }
+    }
     Write-Host "Logs:"
     foreach ($processInfo in $processes) {
         Write-Host "  $($processInfo.name): $($processInfo.stdout)"

@@ -5,6 +5,22 @@ plugins {
     id("org.jetbrains.kotlin.plugin.serialization")
 }
 
+val supportedTargetAbis = setOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
+val configuredTargetAbis = providers.gradleProperty("euripus.targetAbis")
+    .orNull
+    ?.split(',')
+    ?.map(String::trim)
+    ?.filter(String::isNotEmpty)
+    ?.distinct()
+    ?.also { targetAbis ->
+        val invalidAbis = targetAbis.filterNot(supportedTargetAbis::contains)
+        require(invalidAbis.isEmpty()) {
+            "Unsupported target ABI(s): ${invalidAbis.joinToString(", ")}. Supported values: ${
+                supportedTargetAbis.joinToString(", ")
+            }"
+        }
+    }
+
 android {
     namespace = "se.olivermarcusson.euripus.receiver"
     compileSdk = 35
@@ -17,6 +33,11 @@ android {
         versionName = "1.0.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
+        configuredTargetAbis?.takeIf { it.isNotEmpty() }?.let { targetAbis ->
+            ndk {
+                abiFilters += targetAbis
+            }
+        }
     }
 
     buildTypes {
@@ -26,6 +47,7 @@ android {
         }
         release {
             isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName("debug")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",

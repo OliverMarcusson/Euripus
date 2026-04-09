@@ -16,6 +16,7 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import okhttp3.logging.HttpLoggingInterceptor
+import se.olivermarcusson.euripus.receiver.BuildConfig
 import se.olivermarcusson.euripus.receiver.config.ReceiverEndpointConfig
 
 private const val TAG = "ReceiverApiService"
@@ -36,7 +37,11 @@ class ReceiverApiService(
     val client: OkHttpClient = OkHttpClient.Builder()
         .addInterceptor(
             HttpLoggingInterceptor { message -> Log.d(TAG, message) }.apply {
-                level = HttpLoggingInterceptor.Level.BASIC
+                level = if (BuildConfig.DEBUG) {
+                    HttpLoggingInterceptor.Level.BASIC
+                } else {
+                    HttpLoggingInterceptor.Level.NONE
+                }
             },
         )
         .build()

@@ -20,7 +20,9 @@ Euripus is a self-hostable IPTV application with a Rust API, a React web client,
 
 The Vite dev server proxies `/api` and `/health` to `http://127.0.0.1:8080`, so the browser client uses the same same-origin API shape in development and production.
 
-`bun run dev:start` builds and starts PostgreSQL + the API in Docker, launches the frontend dev server, and waits for both the API and frontend to become ready before returning.
+`bun run dev:start` builds and starts PostgreSQL + the API in Docker, launches the frontend dev server on `0.0.0.0`, and waits for both the API and frontend to become ready before returning.
+
+For Android TV receiver testing on your local network, use the LAN URL that `bun run dev:start` prints, such as `http://192.168.1.42:5173`, rather than `http://127.0.0.1:5173`.
 
 ## Self-Hosted Deployment
 

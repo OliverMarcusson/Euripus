@@ -24,3 +24,15 @@ Implemented in this pass:
 - The app expects Java 17.
 - The project includes Gradle wrapper scripts and wrapper properties.
 - If `gradle/wrapper/gradle-wrapper.jar` is missing in your checkout, regenerate or restore it before building.
+- For local-network testing, the receiver accepts LAN and localhost-style dev URLs such as `http://192.168.1.42:5173` and automatically targets the same `/api` receiver endpoints on that host.
+- You can build a universal APK or restrict native dependencies to specific ABI targets with `-Peuripus.targetAbis=<abi[,abi...]>`.
+- Supported ABI values are `armeabi-v7a`, `arm64-v8a`, `x86`, and `x86_64`.
+- Helper scripts support this directly:
+  - PowerShell: `.\scripts\build-apk.ps1 -Architecture x86_64`
+  - Bash: `./scripts/build-apk.sh --architecture x86_64`
+- Root workspace command:
+  - `bun run build:apk` opens an interactive radio picker for `x86 (x86_64)` or `arm64`
+  - `bun run build:apk --architecture x86_64` skips the picker
+- Direct Gradle examples:
+  - PowerShell: `& .\gradlew.bat 'assembleDebug' '-Peuripus.targetAbis=x86_64'`
+  - Bash: `./gradlew assembleDebug -Peuripus.targetAbis=x86_64`

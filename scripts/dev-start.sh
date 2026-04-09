@@ -156,6 +156,26 @@ open_browser_url() {
     fi
 }
 
+get_local_ipv4_addresses() {
+    if command -v hostname >/dev/null 2>&1; then
+        local hostname_output
+        hostname_output="$(hostname -I 2>/dev/null || true)"
+        if [[ -n "$hostname_output" ]]; then
+            printf '%s\n' "$hostname_output" | tr ' ' '\n' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | grep -v '^127\.' | awk '!seen[$0]++'
+            return 0
+        fi
+    fi
+
+    if command -v ip >/dev/null 2>&1; then
+        ip -o -4 addr show scope global | awk '{print $4}' | cut -d/ -f1 | awk '!seen[$0]++'
+        return 0
+    fi
+
+    if command -v ifconfig >/dev/null 2>&1; then
+        ifconfig 2>/dev/null | awk '/inet / { print $2 }' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | grep -v '^127\.' | awk '!seen[$0]++'
+    fi
+}
+
 cleanup() {
     rm -f "$bootstrap_state_path"
 }
@@ -197,7 +217,7 @@ echo "Waiting for API health..."
 wait_for_api_health 180
 
 echo "Starting web client..."
-client_process="$(start_tracked_process client "$repo_root" bun --cwd apps/client dev --host 127.0.0.1)"
+client_process="$(start_tracked_process client "$repo_root" bun --cwd apps/client dev --host 0.0.0.0)"
 
 echo "Waiting for frontend dev server..."
 wait_for_http_endpoint "Frontend" "http://127.0.0.1:5173" 180
@@ -231,6 +251,11 @@ echo
 echo "Dev stack is ready."
 echo "API: http://127.0.0.1:8080"
 echo "Web: http://127.0.0.1:5173"
+while IFS= read -r address; do
+    if [[ -n "$address" ]]; then
+        echo "Web: http://$address:5173"
+    fi
+done < <(get_local_ipv4_addresses)
 echo "Logs:"
 for process_json in "${processes[@]}"; do
     name="$(printf '%s' "$process_json" | sed -n 's/.*"name":"\([^"]*\)".*/\1/p')"
