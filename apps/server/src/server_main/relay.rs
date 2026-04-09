@@ -4,6 +4,18 @@ use super::playback::relay_tokens::{
 };
 use super::*;
 
+fn playback_diag_id(value: &str) -> String {
+    let digest = Sha256::digest(value.as_bytes());
+    digest[..6]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>()
+}
+
+fn relay_upstream_host(url: &Url) -> String {
+    url.host_str().unwrap_or("unknown").to_string()
+}
+
 pub(super) fn router() -> Router<AppState> {
     Router::new()
         .route("/relay/hls", get(relay_hls_playlist))
@@ -16,8 +28,21 @@ async fn relay_hls_playlist(
     headers: HeaderMap,
     Query(query): Query<RelayTokenQuery>,
 ) -> Result<Response, AppError> {
-    let relay = validate_relay_token(&state, &query.token, RelayAssetKind::Hls).await?;
+    let relay_token_id = playback_diag_id(&query.token);
+    let relay = match validate_relay_token(&state, &query.token, RelayAssetKind::Hls).await {
+        Ok(relay) => relay,
+        Err(error) => {
+            warn!(
+                component = "euripus-relay",
+                asset = "hls-playlist",
+                relay_token_id = %relay_token_id,
+                "relay token validation failed before contacting the IPTV provider"
+            );
+            return Err(error);
+        }
+    };
     let public_base_url = request_base_url(&state.config, &headers)?;
+    let upstream_host = relay_upstream_host(&relay.upstream_url);
 
     let response = relay_upstream_request(
         &state.relay_http_client,
@@ -27,7 +52,17 @@ async fn relay_hls_playlist(
     )
     .send()
     .await
-    .map_err(|error| AppError::Internal(anyhow!(error)))?;
+    .map_err(|error| {
+        warn!(
+            component = "iptv-provider",
+            asset = "hls-playlist",
+            relay_token_id = %relay_token_id,
+            upstream_host = %upstream_host,
+            error = ?error,
+            "upstream HLS playlist request failed before a response"
+        );
+        AppError::Internal(anyhow!(error))
+    })?;
     let status = StatusCode::from_u16(response.status().as_u16())
         .map_err(|error| AppError::Internal(anyhow!(error)))?;
     let response_url = response.url().clone();
@@ -39,8 +74,26 @@ async fn relay_hls_playlist(
     let bytes = response
         .bytes()
         .await
-        .map_err(|error| AppError::Internal(anyhow!(error)))?;
+        .map_err(|error| {
+            warn!(
+                component = "iptv-provider",
+                asset = "hls-playlist",
+                relay_token_id = %relay_token_id,
+                upstream_host = %upstream_host,
+                error = ?error,
+                "failed to read upstream HLS playlist body"
+            );
+            AppError::Internal(anyhow!(error))
+        })?;
     if !status.is_success() {
+        warn!(
+            component = "iptv-provider",
+            asset = "hls-playlist",
+            relay_token_id = %relay_token_id,
+            upstream_host = %upstream_host,
+            status = %status,
+            "IPTV provider returned a non-success HLS playlist response"
+        );
         return relay_response_headers(
             Response::builder().status(status),
             &upstream_headers,
@@ -51,12 +104,27 @@ async fn relay_hls_playlist(
     }
 
     if bytes.len() > RELAY_PLAYLIST_MAX_BYTES {
+        warn!(
+            component = "euripus-relay",
+            asset = "hls-playlist",
+            relay_token_id = %relay_token_id,
+            upstream_host = %upstream_host,
+            bytes = bytes.len(),
+            "upstream playlist exceeded the Euripus relay size limit"
+        );
         return Err(AppError::BadRequest(
             "The upstream playlist exceeded the relay size limit.".to_string(),
         ));
     }
 
     let manifest = String::from_utf8(bytes.to_vec()).map_err(|_| {
+        warn!(
+            component = "iptv-provider",
+            asset = "hls-playlist",
+            relay_token_id = %relay_token_id,
+            upstream_host = %upstream_host,
+            "upstream playlist body was not valid UTF-8"
+        );
         AppError::BadRequest("The upstream playlist could not be decoded as UTF-8.".to_string())
     })?;
     let rewritten = rewrite_hls_manifest(
@@ -67,7 +135,18 @@ async fn relay_hls_playlist(
         &public_base_url,
         &response_url,
         &manifest,
-    )?;
+    )
+    .map_err(|error| {
+        warn!(
+            component = "euripus-relay",
+            asset = "hls-playlist",
+            relay_token_id = %relay_token_id,
+            upstream_host = %upstream_host,
+            error = ?error,
+            "failed to rewrite upstream HLS playlist into relay URLs"
+        );
+        error
+    })?;
 
     Response::builder()
         .status(StatusCode::OK)
@@ -82,9 +161,21 @@ async fn relay_raw_stream(
     headers: HeaderMap,
     Query(query): Query<RelayTokenQuery>,
 ) -> Result<Response, AppError> {
-    let relay = validate_relay_token(&state, &query.token, RelayAssetKind::Raw).await?;
+    let relay_token_id = playback_diag_id(&query.token);
+    let relay = match validate_relay_token(&state, &query.token, RelayAssetKind::Raw).await {
+        Ok(relay) => relay,
+        Err(error) => {
+            warn!(
+                component = "euripus-relay",
+                asset = "raw-stream",
+                relay_token_id = %relay_token_id,
+                "relay token validation failed before contacting the IPTV provider"
+            );
+            return Err(error);
+        }
+    };
 
-    relay_stream_response(&state, relay.upstream_url, &headers).await
+    relay_stream_response(&state, relay.upstream_url, &headers, "raw-stream", &relay_token_id).await
 }
 
 async fn relay_asset(
@@ -92,16 +183,31 @@ async fn relay_asset(
     headers: HeaderMap,
     Query(query): Query<RelayTokenQuery>,
 ) -> Result<Response, AppError> {
-    let relay = validate_relay_token(&state, &query.token, RelayAssetKind::Asset).await?;
+    let relay_token_id = playback_diag_id(&query.token);
+    let relay = match validate_relay_token(&state, &query.token, RelayAssetKind::Asset).await {
+        Ok(relay) => relay,
+        Err(error) => {
+            warn!(
+                component = "euripus-relay",
+                asset = "hls-asset",
+                relay_token_id = %relay_token_id,
+                "relay token validation failed before contacting the IPTV provider"
+            );
+            return Err(error);
+        }
+    };
 
-    relay_stream_response(&state, relay.upstream_url, &headers).await
+    relay_stream_response(&state, relay.upstream_url, &headers, "hls-asset", &relay_token_id).await
 }
 
 pub(super) async fn relay_stream_response(
     state: &AppState,
     upstream_url: Url,
     headers: &HeaderMap,
+    asset: &str,
+    relay_token_id: &str,
 ) -> Result<Response, AppError> {
+    let upstream_host = relay_upstream_host(&upstream_url);
     let response = relay_upstream_request(
         &state.relay_http_client,
         upstream_url,
@@ -110,10 +216,30 @@ pub(super) async fn relay_stream_response(
     )
     .send()
     .await
-    .map_err(|error| AppError::Internal(anyhow!(error)))?;
+    .map_err(|error| {
+        warn!(
+            component = "iptv-provider",
+            asset = asset,
+            relay_token_id = %relay_token_id,
+            upstream_host = %upstream_host,
+            error = ?error,
+            "upstream stream request failed before a response"
+        );
+        AppError::Internal(anyhow!(error))
+    })?;
     let status = StatusCode::from_u16(response.status().as_u16())
         .map_err(|error| AppError::Internal(anyhow!(error)))?;
     let upstream_headers = response.headers().clone();
+    if !status.is_success() {
+        warn!(
+            component = "iptv-provider",
+            asset = asset,
+            relay_token_id = %relay_token_id,
+            upstream_host = %upstream_host,
+            status = %status,
+            "IPTV provider returned a non-success stream response"
+        );
+    }
     let body = Body::from_stream(response.bytes_stream());
 
     let builder = relay_response_headers(
@@ -556,6 +682,8 @@ mod tests {
             &state,
             Url::parse(&format!("http://{addr}/video.ts")).expect("upstream url"),
             &headers,
+            "raw-stream",
+            "test-relay-token",
         )
         .await
         .expect("relay response");

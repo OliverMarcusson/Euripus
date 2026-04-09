@@ -7,6 +7,10 @@ import {
   type HlsQualityOption,
   type HlsSession,
 } from "@/lib/hls";
+import {
+  inferPlaybackOwnershipHint,
+  logPlaybackDiagnostic,
+} from "@/lib/playback-diagnostics";
 
 type PlayerUiMode = "local" | "receiver";
 
@@ -14,6 +18,8 @@ type BoundPlaybackSession = {
   plyr: Plyr | null;
   destroy: () => void;
 };
+
+const LIVE_STALL_RECOVERY_DELAY_MS = 12_000;
 
 const LOCAL_VOD_CONTROLS = [
   "play-large",
@@ -176,20 +182,143 @@ function createPlyrInstance(
 export function bindPlaybackSource(
   video: HTMLVideoElement,
   source: PlaybackSource,
-  { uiMode = "local" }: { uiMode?: PlayerUiMode } = {},
+  {
+    uiMode = "local",
+    onRecoveryNeeded,
+  }: { uiMode?: PlayerUiMode; onRecoveryNeeded?: () => void | Promise<void> } = {},
 ): BoundPlaybackSession {
   resetMediaElement(video);
 
   let destroyed = false;
+  let recoveryInFlight = false;
   let hlsSession: HlsSession | undefined;
   let qualitySignature = "";
   let unsubscribeFromQualities: (() => void) | undefined;
+  let stallRecoveryTimeout: number | undefined;
+
+  const clearStallRecovery = () => {
+    if (stallRecoveryTimeout != null) {
+      window.clearTimeout(stallRecoveryTimeout);
+      stallRecoveryTimeout = undefined;
+    }
+  };
+
+  const triggerRecovery = () => {
+    if (destroyed || recoveryInFlight || !onRecoveryNeeded) {
+      return;
+    }
+
+    recoveryInFlight = true;
+    void Promise.resolve(onRecoveryNeeded()).finally(() => {
+      recoveryInFlight = false;
+    });
+  };
+
+  const scheduleStallRecovery = () => {
+    if (!source.live || !onRecoveryNeeded || video.paused || video.ended) {
+      return;
+    }
+
+    logPlaybackDiagnostic("warn", "video-stall-detected", {
+      ownershipHint: inferPlaybackOwnershipHint(source.url),
+      sourceKind: source.kind,
+      sourceUrl: source.url,
+      currentTime: video.currentTime,
+      readyState: video.readyState,
+    });
+    clearStallRecovery();
+    stallRecoveryTimeout = window.setTimeout(() => {
+      stallRecoveryTimeout = undefined;
+      if (destroyed || video.paused || video.ended) {
+        return;
+      }
+
+      const bufferedEnd = video.buffered.length
+        ? video.buffered.end(video.buffered.length - 1)
+        : video.currentTime;
+      const forwardBufferSeconds = bufferedEnd - video.currentTime;
+      if (
+        video.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA ||
+        forwardBufferSeconds > 1
+      ) {
+        return;
+      }
+
+      logPlaybackDiagnostic("warn", "video-stall-recovery-requested", {
+        ownershipHint: inferPlaybackOwnershipHint(source.url),
+        sourceKind: source.kind,
+        sourceUrl: source.url,
+        currentTime: video.currentTime,
+        readyState: video.readyState,
+        forwardBufferSeconds,
+      });
+      triggerRecovery();
+    }, LIVE_STALL_RECOVERY_DELAY_MS);
+  };
+
+  const handlePlaybackProgress = () => {
+    clearStallRecovery();
+  };
+
+  const handlePlaybackStall = () => {
+    scheduleStallRecovery();
+  };
+
+  const handlePlaybackError = () => {
+    logPlaybackDiagnostic("error", "video-element-error", {
+      ownershipHint: inferPlaybackOwnershipHint(source.url),
+      sourceKind: source.kind,
+      sourceUrl: source.url,
+      currentTime: video.currentTime,
+      readyState: video.readyState,
+      mediaErrorCode: video.error?.code ?? null,
+      mediaErrorMessage: video.error?.message ?? null,
+    });
+    triggerRecovery();
+  };
+
+  const handlePlaybackPause = () => {
+    clearStallRecovery();
+  };
+
+  const handlePlaybackEnded = () => {
+    if (source.live) {
+      logPlaybackDiagnostic("warn", "live-video-ended-unexpectedly", {
+        ownershipHint: inferPlaybackOwnershipHint(source.url),
+        sourceKind: source.kind,
+        sourceUrl: source.url,
+        currentTime: video.currentTime,
+      });
+      triggerRecovery();
+    }
+  };
+
+  video.addEventListener("playing", handlePlaybackProgress);
+  video.addEventListener("progress", handlePlaybackProgress);
+  video.addEventListener("timeupdate", handlePlaybackProgress);
+  video.addEventListener("loadeddata", handlePlaybackProgress);
+  video.addEventListener("pause", handlePlaybackPause);
+  video.addEventListener("waiting", handlePlaybackStall);
+  video.addEventListener("stalled", handlePlaybackStall);
+  video.addEventListener("error", handlePlaybackError);
+  video.addEventListener("ended", handlePlaybackEnded);
+
   const session: BoundPlaybackSession = {
     plyr: null,
     destroy() {
       destroyed = true;
+      clearStallRecovery();
       unsubscribeFromQualities?.();
       hlsSession?.destroy();
+      video.removeEventListener("playing", handlePlaybackProgress);
+      video.removeEventListener("progress", handlePlaybackProgress);
+      video.removeEventListener("timeupdate", handlePlaybackProgress);
+      video.removeEventListener("loadeddata", handlePlaybackProgress);
+      video.removeEventListener("pause", handlePlaybackPause);
+      video.removeEventListener("waiting", handlePlaybackStall);
+      video.removeEventListener("stalled", handlePlaybackStall);
+      video.removeEventListener("error", handlePlaybackError);
+      video.removeEventListener("ended", handlePlaybackEnded);
       resetMediaElement(video);
       session.plyr?.destroy();
       session.plyr = null;
@@ -212,7 +341,10 @@ export function bindPlaybackSource(
   };
 
   if (source.kind === "hls" && isIptvHlsSupported()) {
-    hlsSession = createIptvHls(video, source.url, { live: source.live });
+    hlsSession = createIptvHls(video, source.url, {
+      live: source.live,
+      onRecoveryNeeded: triggerRecovery,
+    });
     unsubscribeFromQualities = hlsSession.onQualitiesChanged(() => {
       syncPlyr();
     });

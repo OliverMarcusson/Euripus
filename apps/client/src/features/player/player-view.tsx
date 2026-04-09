@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import {
   ChevronDown,
   ChevronUp,
@@ -19,19 +19,67 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty";
 import {
+  startChannelPlayback,
+  startProgramPlayback,
   pauseRemotePlayback,
   resumeRemotePlayback,
   stopRemotePlayback,
 } from "@/lib/api";
+import { logPlaybackDiagnostic } from "@/lib/playback-diagnostics";
 import { usePlayerStore } from "@/store/player-store";
 import { useRemoteControllerStore } from "@/store/remote-controller-store";
 import { cn, formatRelativeTime } from "@/lib/utils";
 
 export function PlayerView() {
+  const currentRequest = usePlayerStore((state) => state.currentRequest);
+  const loading = usePlayerStore((state) => state.loading);
   const source = usePlayerStore((state) => state.source);
+  const setLoading = usePlayerStore((state) => state.setLoading);
+  const setPlayback = usePlayerStore((state) => state.setPlayback);
   const setSource = usePlayerStore((state) => state.setSource);
   const remoteTarget = useRemoteControllerStore((state) => state.target);
   const [minimized, setMinimized] = useState(false);
+  const recoveryInFlightRef = useRef(false);
+
+  const handleRecoveryNeeded = useCallback(async () => {
+    if (!currentRequest || recoveryInFlightRef.current || loading) {
+      return;
+    }
+
+    recoveryInFlightRef.current = true;
+    setLoading(true);
+    logPlaybackDiagnostic("warn", "playback-recovery-started", {
+      ownershipHint: "client-player",
+      requestKind: currentRequest.kind,
+      requestId: currentRequest.id,
+      previousSourceKind: source?.kind ?? null,
+      previousSourceUrl: source?.url ?? null,
+    });
+    try {
+      const nextSource =
+        currentRequest.kind === "channel"
+          ? await startChannelPlayback(currentRequest.id)
+          : await startProgramPlayback(currentRequest.id);
+      setPlayback(nextSource, currentRequest);
+      logPlaybackDiagnostic("info", "playback-recovery-succeeded", {
+        ownershipHint: "client-player",
+        requestKind: currentRequest.kind,
+        requestId: currentRequest.id,
+        nextSourceKind: nextSource.kind,
+        nextSourceUrl: nextSource.url,
+      });
+    } catch {
+      logPlaybackDiagnostic("error", "playback-recovery-failed", {
+        ownershipHint: "client-player",
+        requestKind: currentRequest.kind,
+        requestId: currentRequest.id,
+      });
+      setLoading(false);
+    } finally {
+      recoveryInFlightRef.current = false;
+    }
+  }, [currentRequest, loading, setLoading, setPlayback]);
+
   if (!source) {
     if (remoteTarget?.currentPlayback) {
       return (
@@ -229,6 +277,7 @@ export function PlayerView() {
                 <PlyrSurface
                   ariaLabel={`Playing ${source.title}`}
                   className="contents"
+                  onRecoveryNeeded={handleRecoveryNeeded}
                   source={source}
                   uiMode="local"
                   videoClassName="euripus-plyr-media aspect-video w-full bg-black object-contain max-md:min-h-[220px]"
