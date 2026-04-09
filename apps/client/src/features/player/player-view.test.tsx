@@ -40,6 +40,8 @@ vi.mock("@/components/player/plyr-surface", () => ({
 }));
 
 vi.mock("@/lib/api", () => ({
+  startChannelPlayback: vi.fn(),
+  startProgramPlayback: vi.fn(),
   pauseRemotePlayback: vi.fn(),
   resumeRemotePlayback: vi.fn(),
   stopRemotePlayback: vi.fn(),
@@ -59,7 +61,7 @@ const SOURCE: PlaybackSource = {
 describe("PlayerView", () => {
   beforeEach(() => {
     plyrSurface.mockClear();
-    usePlayerStore.setState({ source: null, loading: false });
+    usePlayerStore.setState({ currentRequest: null, source: null, loading: false });
     useRemoteControllerStore.setState({ target: null, selectedAt: null });
   });
 
@@ -76,6 +78,7 @@ describe("PlayerView", () => {
 
   it("renders unsupported playback without creating a Plyr session", () => {
     usePlayerStore.setState({
+      currentRequest: { kind: "channel", id: "channel-1" },
       source: {
         ...SOURCE,
         kind: "unsupported",
@@ -90,7 +93,10 @@ describe("PlayerView", () => {
   });
 
   it("creates a Plyr session for playable sources", () => {
-    usePlayerStore.setState({ source: SOURCE });
+    usePlayerStore.setState({
+      currentRequest: { kind: "channel", id: "channel-1" },
+      source: SOURCE,
+    });
 
     render(<PlayerView />);
 
@@ -98,6 +104,7 @@ describe("PlayerView", () => {
     expect(plyrSurface).toHaveBeenCalledWith(
       expect.objectContaining({
         ariaLabel: "Playing Arena Live",
+        onRecoveryNeeded: expect.any(Function),
         source: SOURCE,
         uiMode: "local",
       }),
@@ -108,7 +115,10 @@ describe("PlayerView", () => {
   });
 
   it("destroys the playback session when minimized", () => {
-    usePlayerStore.setState({ source: SOURCE });
+    usePlayerStore.setState({
+      currentRequest: { kind: "channel", id: "channel-1" },
+      source: SOURCE,
+    });
 
     render(<PlayerView />);
 

@@ -17,7 +17,7 @@ export function useChannelPlaybackMutation() {
   const queryClient = useQueryClient();
   const target = useRemoteControllerStore((state) => state.target);
   const setLoading = usePlayerStore((state) => state.setLoading);
-  const setSource = usePlayerStore((state) => state.setSource);
+  const setPlayback = usePlayerStore((state) => state.setPlayback);
 
   return useMutation<PlaybackSource | RemotePlaybackCommand, Error, string>({
     mutationFn: (channelId: string) =>
@@ -27,13 +27,13 @@ export function useChannelPlaybackMutation() {
         setLoading(true);
       }
     },
-    onSuccess: (result) => {
+    onSuccess: (result, channelId) => {
       if (isRemotePlaybackCommand(result)) {
         void queryClient.invalidateQueries({ queryKey: ["remote"] });
         return;
       }
 
-      setSource(result);
+      setPlayback(result, { kind: "channel", id: channelId });
     },
     onSettled: () => {
       if (!target) {
@@ -47,7 +47,7 @@ export function useProgramPlaybackMutation() {
   const queryClient = useQueryClient();
   const target = useRemoteControllerStore((state) => state.target);
   const setLoading = usePlayerStore((state) => state.setLoading);
-  const setSource = usePlayerStore((state) => state.setSource);
+  const setPlayback = usePlayerStore((state) => state.setPlayback);
 
   return useMutation<PlaybackSource | RemotePlaybackCommand, Error, string>({
     mutationFn: (programId: string) =>
@@ -57,13 +57,13 @@ export function useProgramPlaybackMutation() {
         setLoading(true);
       }
     },
-    onSuccess: (result) => {
+    onSuccess: (result, programId) => {
       if (isRemotePlaybackCommand(result)) {
         void queryClient.invalidateQueries({ queryKey: ["remote"] });
         return;
       }
 
-      setSource(result);
+      setPlayback(result, { kind: "program", id: programId });
     },
     onSettled: () => {
       if (!target) {

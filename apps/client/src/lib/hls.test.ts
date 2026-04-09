@@ -63,20 +63,23 @@ describe("IPTV HLS helpers", () => {
     expect(controller.destroy).toHaveBeenCalledTimes(1);
   });
 
-  it("destroys the instance on fatal errors", () => {
+  it("requests external recovery on fatal errors", () => {
     const controller = {
       destroy: vi.fn(),
       recoverMediaError: vi.fn(),
       startLoad: vi.fn(),
     };
+    const onFatalRecoveryNeeded = vi.fn();
 
     handleIptvHlsError(
       controller,
       { type: Hls.ErrorTypes.NETWORK_ERROR, fatal: true } as ErrorData,
       { mediaRecoveryAttempts: 0 },
+      { onFatalRecoveryNeeded },
     );
 
-    expect(controller.destroy).toHaveBeenCalledTimes(1);
+    expect(onFatalRecoveryNeeded).toHaveBeenCalledTimes(1);
+    expect(controller.destroy).not.toHaveBeenCalled();
     expect(controller.startLoad).not.toHaveBeenCalled();
     expect(controller.recoverMediaError).not.toHaveBeenCalled();
   });

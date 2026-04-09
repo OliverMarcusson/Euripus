@@ -1,4 +1,8 @@
 import Hls, { type ErrorData, type HlsConfig, type Level } from "hls.js";
+import {
+  inferPlaybackOwnershipHint,
+  logPlaybackDiagnostic,
+} from "@/lib/playback-diagnostics";
 
 export const IPTV_HLS_CONFIG = {
   lowLatencyMode: false,
@@ -89,9 +93,14 @@ export function handleIptvHlsError(
   hls: HlsErrorController,
   data: ErrorData,
   recoveryState: HlsErrorRecoveryState,
+  {
+    onFatalRecoveryNeeded,
+  }: {
+    onFatalRecoveryNeeded?: () => void;
+  } = {},
 ) {
   if (data.fatal) {
-    hls.destroy();
+    onFatalRecoveryNeeded?.();
     return;
   }
 
@@ -178,7 +187,10 @@ export function updateLivePlaybackRate(
 export function createIptvHls(
   video: HTMLVideoElement,
   sourceUrl: string,
-  { live = false }: { live?: boolean } = {},
+  {
+    live = false,
+    onRecoveryNeeded,
+  }: { live?: boolean; onRecoveryNeeded?: () => void } = {},
 ): HlsSession {
   const hls = new Hls(IPTV_HLS_CONFIG);
   const recoveryState: HlsErrorRecoveryState = { mediaRecoveryAttempts: 0 };
@@ -204,7 +216,29 @@ export function createIptvHls(
   };
 
   const handleError = (_event: string, data: ErrorData) => {
-    handleIptvHlsError(hls, data, recoveryState);
+    const failingUrl =
+      data.context?.url ??
+      data.url ??
+      sourceUrl;
+    const ownershipHint = inferPlaybackOwnershipHint(failingUrl);
+    const responseCode =
+      data.response?.code;
+
+    logPlaybackDiagnostic(data.fatal ? "error" : "warn", "hls-error", {
+      ownershipHint,
+      sourceUrl,
+      failingUrl,
+      live,
+      fatal: data.fatal,
+      errorType: data.type,
+      errorDetails: data.details,
+      responseCode,
+      mediaErrorRecoveryAttempts: recoveryState.mediaRecoveryAttempts,
+    });
+
+    handleIptvHlsError(hls, data, recoveryState, {
+      onFatalRecoveryNeeded: onRecoveryNeeded,
+    });
   };
 
   const handleLiveUpdate = () => {
@@ -232,6 +266,12 @@ export function createIptvHls(
   };
 
   const handleManifestParsed = () => {
+    logPlaybackDiagnostic("info", "hls-manifest-parsed", {
+      ownershipHint: inferPlaybackOwnershipHint(sourceUrl),
+      sourceUrl,
+      live,
+      levelCount: hls.levels.length,
+    });
     publishQualityOptions();
     if (!live) {
       return;

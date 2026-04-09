@@ -5,6 +5,7 @@ import { bindPlaybackSource } from "@/lib/plyr-player";
 type PlyrSurfaceProps = {
   ariaLabel: string;
   className?: string;
+  onRecoveryNeeded?: () => void | Promise<void>;
   source: PlaybackSource;
   uiMode: "local" | "receiver";
   videoClassName?: string;
@@ -14,6 +15,7 @@ type PlyrSurfaceProps = {
 export function PlyrSurface({
   ariaLabel,
   className,
+  onRecoveryNeeded,
   source,
   uiMode,
   videoClassName,
@@ -43,7 +45,10 @@ export function PlyrSurface({
       videoRef.current = video;
     }
 
-    const session = bindPlaybackSource(video, source, { uiMode });
+    const session = bindPlaybackSource(video, source, {
+      uiMode,
+      onRecoveryNeeded,
+    });
     return () => {
       session.destroy();
       if (videoRef?.current === video) {
@@ -51,7 +56,7 @@ export function PlyrSurface({
       }
       container.replaceChildren();
     };
-  }, [ariaLabel, source, uiMode, videoClassName, videoRef]);
+  }, [ariaLabel, onRecoveryNeeded, source, uiMode, videoClassName, videoRef]);
 
   return <div ref={containerRef} className={className} />;
 }

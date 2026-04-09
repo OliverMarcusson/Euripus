@@ -49,12 +49,17 @@ describe("bindPlaybackSource", () => {
 
   it("creates Plyr and Hls.js sessions for HLS playback", () => {
     const video = document.createElement("video");
+    const onRecoveryNeeded = vi.fn();
 
-    const session = bindPlaybackSource(video, HLS_SOURCE, { uiMode: "local" });
+    const session = bindPlaybackSource(video, HLS_SOURCE, {
+      uiMode: "local",
+      onRecoveryNeeded,
+    });
 
     expect(Plyr).toHaveBeenCalledTimes(1);
     expect(createIptvHls).toHaveBeenCalledWith(video, HLS_SOURCE.url, {
       live: true,
+      onRecoveryNeeded: expect.any(Function),
     });
     expect(onQualitiesChanged).toHaveBeenCalledTimes(1);
     expect(session.plyr).toBeDefined();
