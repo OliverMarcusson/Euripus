@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
@@ -20,6 +21,11 @@ pub struct XtreamCredentials {
 pub struct XtreamValidation {
     pub valid: bool,
     pub message: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct BrowserHlsSupportProbe {
+    pub warning_message: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -66,6 +72,14 @@ struct XtreamChannelPayload {
     tv_archive: Option<serde_json::Value>,
     tv_archive_duration: Option<serde_json::Value>,
     container_extension: Option<String>,
+}
+
+const BROWSER_HLS_PROBE_TIMEOUT: Duration = Duration::from_secs(8);
+const BROWSER_HLS_WARNING_MESSAGE: &str =
+    "Provider credentials validated, but Euripus could not verify browser HLS playback. Web playback may be unavailable while receiver/native playback can still work.";
+
+pub fn browser_hls_warning_message() -> &'static str {
+    BROWSER_HLS_WARNING_MESSAGE
 }
 
 pub async fn validate_profile(
@@ -156,6 +170,40 @@ pub async fn fetch_live_streams(
         .collect())
 }
 
+pub async fn probe_browser_hls_support(
+    client: &Client,
+    credentials: &XtreamCredentials,
+) -> Result<BrowserHlsSupportProbe> {
+    let streams = fetch_live_streams(client, credentials).await?;
+    let Some(stream) = streams.first() else {
+        return Ok(BrowserHlsSupportProbe {
+            warning_message: Some(BROWSER_HLS_WARNING_MESSAGE.to_string()),
+        });
+    };
+
+    let hls_url = build_live_stream_url(credentials, stream.remote_stream_id, Some("m3u8"))?;
+    let supported = probe_hls_playlist_url(client, &hls_url).await?;
+
+    Ok(BrowserHlsSupportProbe {
+        warning_message: (!supported).then(|| BROWSER_HLS_WARNING_MESSAGE.to_string()),
+    })
+}
+
+pub async fn probe_hls_playlist_url(client: &Client, url: &str) -> Result<bool> {
+    let response = client
+        .get(url)
+        .timeout(BROWSER_HLS_PROBE_TIMEOUT)
+        .send()
+        .await?;
+    if !response.status().is_success() {
+        return Ok(false);
+    }
+
+    let body = response.bytes().await?;
+    let manifest = String::from_utf8_lossy(&body);
+    Ok(looks_like_hls_playlist(&manifest))
+}
+
 pub async fn fetch_xmltv(client: &Client, credentials: &XtreamCredentials) -> Result<XmltvFeed> {
     let url = build_xmltv_url(credentials)?;
     xmltv::fetch_xmltv(client, &url).await
@@ -223,6 +271,14 @@ fn player_api_url(credentials: &XtreamCredentials, action: Option<(&str, &str)>)
     Ok(url)
 }
 
+fn looks_like_hls_playlist(body: &str) -> bool {
+    let trimmed = body.trim_start();
+    trimmed.starts_with("#EXTM3U")
+        || trimmed.contains("\n#EXTM3U")
+        || trimmed.contains("#EXT-X-")
+        || trimmed.contains("#EXTINF:")
+}
+
 fn normalized_base_url(raw: &str) -> Result<Url> {
     let mut url = Url::parse(raw).with_context(|| format!("invalid base url {raw}"))?;
     if url.path() == "/" {
@@ -276,5 +332,12 @@ mod tests {
         .expect("catchup url");
 
         assert!(url.contains("timeshift/user/pass/60/2026-04-04:12-00/7.m3u8"));
+    }
+
+    #[test]
+    fn detects_hls_playlists_from_manifest_markers() {
+        assert!(looks_like_hls_playlist("#EXTM3U\n#EXT-X-VERSION:3\n"));
+        assert!(looks_like_hls_playlist("#EXTINF:6,\nsegment001.ts\n"));
+        assert!(!looks_like_hls_playlist("not a playlist"));
     }
 }

@@ -61,6 +61,7 @@ export type ProviderProfile = {
   lastSyncError: string | null;
   createdAt: string;
   updatedAt: string;
+  browserPlaybackWarning?: string | null;
   epgSources: EpgSource[];
 };
 

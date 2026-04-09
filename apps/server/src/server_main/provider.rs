@@ -24,6 +24,7 @@ struct ProviderProfileResponse {
     last_sync_error: Option<String>,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
+    browser_playback_warning: Option<String>,
     epg_sources: Vec<EpgSourceResponse>,
 }
 
@@ -136,8 +137,29 @@ async fn load_provider_profile_response(
         last_sync_error: provider.last_sync_error,
         created_at: provider.created_at,
         updated_at: provider.updated_at,
+        browser_playback_warning: None,
         epg_sources: load_epg_sources(pool, provider.id).await?,
     }))
+}
+
+fn combine_provider_validation_message(message: &str, warning: Option<&str>) -> String {
+    match warning {
+        Some(warning) => format!("{message}\n\n{warning}"),
+        None => message.to_string(),
+    }
+}
+
+async fn browser_hls_warning_for_credentials(
+    state: &AppState,
+    credentials: &XtreamCredentials,
+) -> Option<String> {
+    match xtreme::probe_browser_hls_support(&state.provider_http_client, credentials).await {
+        Ok(probe) => probe.warning_message,
+        Err(error) => {
+            warn!(error = ?error, "browser HLS support probe failed");
+            Some(xtreme::browser_hls_warning_message().to_string())
+        }
+    }
 }
 
 fn normalize_epg_source_payloads(
@@ -281,11 +303,16 @@ async fn validate_provider(
         output_format: output_format_as_str(output_format).to_string(),
     };
     let result = xtreme::validate_profile(&state.provider_http_client, &credentials).await?;
+    let browser_warning = if result.valid {
+        browser_hls_warning_for_credentials(&state, &credentials).await
+    } else {
+        None
+    };
 
     Ok(Json(ValidateProviderResponse {
         valid: result.valid,
         status: if result.valid { "valid" } else { "error" }.to_string(),
-        message: result.message,
+        message: combine_provider_validation_message(&result.message, browser_warning.as_deref()),
     }))
 }
 
@@ -336,6 +363,7 @@ async fn save_provider(
     if !validation.valid {
         return Err(AppError::BadRequest(validation.message));
     }
+    let browser_playback_warning = browser_hls_warning_for_credentials(&state, &credentials).await;
 
     let encrypted_password = encrypt_secret(&state.config.encryption_key, &effective_password)?;
     let profile_id = sqlx::query_scalar::<_, Uuid>(
@@ -376,7 +404,10 @@ async fn save_provider(
             AppError::NotFound("Provider profile was not found after saving.".to_string())
         })?;
 
-    Ok(Json(provider))
+    Ok(Json(ProviderProfileResponse {
+        browser_playback_warning: browser_playback_warning,
+        ..provider
+    }))
 }
 
 async fn trigger_sync(

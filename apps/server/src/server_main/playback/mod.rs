@@ -1,12 +1,16 @@
 use self::resolve::{
-    PlaybackSourceResponse, PlaybackTarget, ProgramPlaybackBehavior, ProgramPlaybackRow,
-    determine_program_playback_behavior, output_format_as_str, playback_source_for_mode,
-    resolve_effective_playback_format, unsupported_playback,
+    PlaybackSourceResponse, PlaybackStreamFormat, PlaybackTarget, ProgramPlaybackBehavior,
+    ProgramPlaybackRow, determine_program_playback_behavior, output_format_as_str,
+    playback_source_for_mode, resolve_effective_playback_format,
+    resolve_effective_playback_format_for_target, unsupported_playback,
 };
 use super::*;
 
 pub(super) mod relay_tokens;
 pub(super) mod resolve;
+
+const BROWSER_HLS_UNSUPPORTED_REASON: &str =
+    "This provider stream could not be verified for browser HLS playback. Try a receiver/native target instead.";
 
 #[derive(Debug, FromRow)]
 struct ChannelPlaybackRecord {
@@ -109,7 +113,13 @@ async fn resolve_channel_playback_source_for_target(
     .ok_or_else(|| AppError::NotFound("Channel not found".to_string()))?;
 
     let credentials = playback_credentials(state, &record)?;
-    let format = resolve_effective_playback_format(
+    let browser_hls_preflight_required = target_requires_browser_hls_preflight(
+        target,
+        &record.output_format,
+        record.stream_extension.as_deref(),
+    );
+    let format = resolve_effective_playback_format_for_target(
+        target,
         &record.output_format,
         record.stream_extension.as_deref(),
     )?;
@@ -120,7 +130,7 @@ async fn resolve_channel_playback_source_for_target(
     )?;
     touch_recent(&state.pool, user_id, record.id).await?;
 
-    playback_source_for_mode(
+    finalize_playback_source(
         state,
         headers,
         user_id,
@@ -133,7 +143,9 @@ async fn resolve_channel_playback_source_for_target(
         false,
         format,
         None,
+        browser_hls_preflight_required,
     )
+    .await
 }
 
 async fn resolve_program_playback_source(
@@ -218,7 +230,13 @@ async fn resolve_program_playback_source_for_target(
                 password: decrypt_secret(&state.config.encryption_key, &row.password_encrypted)?,
                 output_format: row.output_format,
             };
-            let format = resolve_effective_playback_format(
+            let browser_hls_preflight_required = target_requires_browser_hls_preflight(
+                target,
+                &credentials.output_format,
+                row.stream_extension.as_deref(),
+            );
+            let format = resolve_effective_playback_format_for_target(
+                target,
                 &credentials.output_format,
                 row.stream_extension.as_deref(),
             )?;
@@ -228,7 +246,7 @@ async fn resolve_program_playback_source_for_target(
                 Some(output_format_as_str(format)),
             )?;
 
-            playback_source_for_mode(
+            finalize_playback_source(
                 state,
                 headers,
                 user_id,
@@ -241,7 +259,9 @@ async fn resolve_program_playback_source_for_target(
                 false,
                 format,
                 None,
+                browser_hls_preflight_required,
             )
+            .await
         }
         ProgramPlaybackBehavior::Catchup => {
             let credentials = XtreamCredentials {
@@ -250,7 +270,13 @@ async fn resolve_program_playback_source_for_target(
                 password: decrypt_secret(&state.config.encryption_key, &row.password_encrypted)?,
                 output_format: row.output_format,
             };
-            let format = resolve_effective_playback_format(
+            let browser_hls_preflight_required = target_requires_browser_hls_preflight(
+                target,
+                &credentials.output_format,
+                row.stream_extension.as_deref(),
+            );
+            let format = resolve_effective_playback_format_for_target(
+                target,
                 &credentials.output_format,
                 row.stream_extension.as_deref(),
             )?;
@@ -262,7 +288,7 @@ async fn resolve_program_playback_source_for_target(
                 row.end_at,
             )?;
 
-            playback_source_for_mode(
+            finalize_playback_source(
                 state,
                 headers,
                 user_id,
@@ -275,7 +301,9 @@ async fn resolve_program_playback_source_for_target(
                 true,
                 format,
                 None,
+                browser_hls_preflight_required,
             )
+            .await
         }
         ProgramPlaybackBehavior::Unsupported(reason) => {
             Ok(unsupported_playback(&row.title, reason))
@@ -301,6 +329,68 @@ fn playback_target_for_receiver_app(app_kind: &str) -> PlaybackTarget {
     } else {
         PlaybackTarget::ReceiverWeb
     }
+}
+
+fn target_requires_browser_hls_preflight(
+    target: PlaybackTarget,
+    output_format: &str,
+    legacy_stream_extension: Option<&str>,
+) -> bool {
+    matches!(target, PlaybackTarget::Browser)
+        && matches!(
+            resolve_effective_playback_format(output_format, legacy_stream_extension),
+            Ok(PlaybackStreamFormat::Ts)
+        )
+}
+
+async fn finalize_playback_source(
+    state: &AppState,
+    headers: &HeaderMap,
+    user_id: Uuid,
+    profile_id: Uuid,
+    target: PlaybackTarget,
+    raw_playback_mode: &str,
+    title: &str,
+    upstream_url: String,
+    live: bool,
+    catchup: bool,
+    format: PlaybackStreamFormat,
+    expires_at: Option<DateTime<Utc>>,
+    browser_hls_preflight_required: bool,
+) -> Result<PlaybackSourceResponse, AppError> {
+    if browser_hls_preflight_required {
+        match xtreme::probe_hls_playlist_url(&state.provider_http_client, &upstream_url).await {
+            Ok(true) => {}
+            Ok(false) => {
+                warn!(title = %title, upstream_url = %upstream_url, "browser HLS preflight failed");
+                return Ok(unsupported_playback(title, BROWSER_HLS_UNSUPPORTED_REASON));
+            }
+            Err(error) => {
+                warn!(
+                    title = %title,
+                    upstream_url = %upstream_url,
+                    error = ?error,
+                    "browser HLS preflight errored"
+                );
+                return Ok(unsupported_playback(title, BROWSER_HLS_UNSUPPORTED_REASON));
+            }
+        }
+    }
+
+    playback_source_for_mode(
+        state,
+        headers,
+        user_id,
+        profile_id,
+        target,
+        raw_playback_mode,
+        title,
+        upstream_url,
+        live,
+        catchup,
+        format,
+        expires_at,
+    )
 }
 
 #[cfg(test)]
@@ -362,6 +452,16 @@ mod tests {
             .query_pairs()
             .find_map(|(key, value)| (key == "token").then(|| value.into_owned()))
             .expect("token query parameter")
+    }
+
+    fn local_request_headers() -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, HeaderValue::from_static("127.0.0.1:8080"));
+        headers.insert(
+            HeaderName::from_static("x-forwarded-proto"),
+            HeaderValue::from_static("http"),
+        );
+        headers
     }
 
     #[tokio::test]
@@ -502,12 +602,7 @@ mod tests {
     #[tokio::test]
     async fn playback_source_for_mode_bypasses_relay_in_local_dev() {
         let state = sample_app_state_without_public_origin();
-        let mut headers = HeaderMap::new();
-        headers.insert(header::HOST, HeaderValue::from_static("127.0.0.1:8080"));
-        headers.insert(
-            HeaderName::from_static("x-forwarded-proto"),
-            HeaderValue::from_static("http"),
-        );
+        let headers = local_request_headers();
 
         let response = playback_source_for_mode(
             &state,
@@ -579,5 +674,127 @@ mod tests {
                 .starts_with("https://app.example.com/api/relay/hls?token=")
         );
         assert!(response.expires_at.is_some());
+    }
+
+    #[test]
+    fn browser_targets_require_hls_preflight_for_ts_streams() {
+        assert!(target_requires_browser_hls_preflight(
+            PlaybackTarget::Browser,
+            "m3u8",
+            Some("ts"),
+        ));
+        assert!(target_requires_browser_hls_preflight(
+            PlaybackTarget::Browser,
+            "ts",
+            None,
+        ));
+        assert!(!target_requires_browser_hls_preflight(
+            PlaybackTarget::Browser,
+            "m3u8",
+            Some("m3u8"),
+        ));
+        assert!(!target_requires_browser_hls_preflight(
+            PlaybackTarget::ReceiverWeb,
+            "ts",
+            None,
+        ));
+    }
+
+    #[tokio::test]
+    async fn finalize_playback_source_returns_unsupported_when_browser_hls_preflight_fails() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind listener");
+        let addr = listener.local_addr().expect("listener addr");
+        let server = tokio::spawn(async move {
+            let app = Router::new().route(
+                "/stream.m3u8",
+                get(|| async move {
+                    Response::builder()
+                        .status(StatusCode::OK)
+                        .header(header::CONTENT_TYPE, "video/mp2t")
+                        .body(Body::from("not a playlist"))
+                        .expect("response")
+                }),
+            );
+
+            axum::serve(listener, app).await.expect("serve test app");
+        });
+
+        let state = sample_app_state_without_public_origin();
+        let response = finalize_playback_source(
+            &state,
+            &local_request_headers(),
+            Uuid::from_u128(1),
+            Uuid::from_u128(2),
+            PlaybackTarget::Browser,
+            "direct",
+            "Arena 1",
+            format!("http://{addr}/stream.m3u8"),
+            true,
+            false,
+            PlaybackStreamFormat::Hls,
+            None,
+            true,
+        )
+        .await
+        .expect("playback response");
+
+        assert_eq!(response.kind, "unsupported");
+        assert_eq!(
+            response.unsupported_reason.as_deref(),
+            Some(BROWSER_HLS_UNSUPPORTED_REASON)
+        );
+
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn finalize_playback_source_returns_hls_when_browser_hls_preflight_succeeds() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind listener");
+        let addr = listener.local_addr().expect("listener addr");
+        let server = tokio::spawn(async move {
+            let app = Router::new().route(
+                "/stream.m3u8",
+                get(|| async move {
+                    Response::builder()
+                        .status(StatusCode::OK)
+                        .header(
+                            header::CONTENT_TYPE,
+                            "application/vnd.apple.mpegurl",
+                        )
+                        .body(Body::from("#EXTM3U\n#EXT-X-VERSION:3\n"))
+                        .expect("response")
+                }),
+            );
+
+            axum::serve(listener, app).await.expect("serve test app");
+        });
+
+        let state = sample_app_state_without_public_origin();
+        let response = finalize_playback_source(
+            &state,
+            &local_request_headers(),
+            Uuid::from_u128(11),
+            Uuid::from_u128(12),
+            PlaybackTarget::Browser,
+            "direct",
+            "Arena 1",
+            format!("http://{addr}/stream.m3u8"),
+            true,
+            false,
+            PlaybackStreamFormat::Hls,
+            None,
+            true,
+        )
+        .await
+        .expect("playback response");
+
+        assert_eq!(response.kind, "hls");
+        assert_eq!(response.url, format!("http://{addr}/stream.m3u8"));
+
+        server.abort();
     }
 }

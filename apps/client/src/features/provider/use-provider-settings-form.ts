@@ -5,7 +5,7 @@ import type {
   SaveProviderPayload,
   SyncJob,
 } from "@euripus/shared"
-import { useEffect } from "react"
+import { useEffect, useState } from "react"
 import { useForm } from "react-hook-form"
 import { z } from "zod"
 import {
@@ -85,6 +85,7 @@ export function getSyncProgressValue(syncJob: SyncJob) {
 
 export function useProviderSettingsForm() {
   const queryClient = useQueryClient()
+  const [feedbackMessage, setFeedbackMessage] = useState<string | null>(null)
   const providerQuery = useQuery({
     queryKey: ["provider"],
     queryFn: getProvider,
@@ -120,6 +121,7 @@ export function useProviderSettingsForm() {
   const saveMutation = useMutation({
     mutationFn: saveProvider,
     onSuccess: async (provider) => {
+      setFeedbackMessage(provider.browserPlaybackWarning ?? null)
       queryClient.setQueryData(["provider"], provider)
       form.reset(createProviderFormValues(provider))
       await queryClient.invalidateQueries({ queryKey: ["provider"] })
@@ -173,6 +175,8 @@ export function useProviderSettingsForm() {
       return
     }
 
+    setFeedbackMessage(null)
+    validateMutation.reset()
     saveMutation.mutate(toSaveProviderPayload(values))
   })
 
@@ -181,11 +185,18 @@ export function useProviderSettingsForm() {
       return
     }
 
+    setFeedbackMessage(null)
+    validateMutation.reset()
     validateMutation.mutate(toSaveProviderPayload(values))
   })
 
   return {
     displayedEpgSourceCount,
+    feedbackMessage:
+      feedbackMessage ??
+      validateMutation.data?.message ??
+      provider?.browserPlaybackWarning ??
+      null,
     form,
     latestJob,
     provider,

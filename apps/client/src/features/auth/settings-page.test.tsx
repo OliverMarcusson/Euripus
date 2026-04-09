@@ -102,6 +102,7 @@ describe("SettingsPage", () => {
       lastSyncError: null,
       createdAt: "2026-04-04T10:00:00.000Z",
       updatedAt: "2026-04-04T12:00:00.000Z",
+      browserPlaybackWarning: null,
       epgSources: payload.epgSources.map((source, index) => ({
         id: source.id ?? `epg-source-${index + 1}`,
         url: source.url,
@@ -232,6 +233,12 @@ describe("SettingsPage", () => {
     expect(
       screen.getByTestId("recent-channels-scroll-area"),
     ).toBeInTheDocument();
+    expect(
+      screen.getByText(/receiver\/native output format/i),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/browser playback always uses hls/i),
+    ).toBeInTheDocument();
   });
 
   it("saves a newly added external epg source", async () => {
@@ -358,5 +365,46 @@ describe("SettingsPage", () => {
     expect(
       await screen.findByRole("button", { name: /trigger full sync/i }),
     ).toBeDisabled();
+  });
+
+  it("shows browser playback warnings returned after saving a provider", async () => {
+    mockedSaveProvider.mockResolvedValue({
+      id: "provider-1",
+      providerType: "xtreme",
+      baseUrl: "https://provider.example.com",
+      username: "demo",
+      outputFormat: "ts",
+      playbackMode: "direct",
+      status: "valid",
+      lastValidatedAt: "2026-04-04T12:00:00.000Z",
+      lastSyncAt: null,
+      lastSyncError: null,
+      createdAt: "2026-04-04T10:00:00.000Z",
+      updatedAt: "2026-04-04T12:00:00.000Z",
+      browserPlaybackWarning:
+        "Provider credentials validated, but Euripus could not verify browser HLS playback.",
+      epgSources: [],
+    });
+
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <SettingsPage />
+      </QueryClientProvider>,
+    );
+
+    fireEvent.change(await screen.findByLabelText(/base url/i), {
+      target: { value: "https://provider.example.com" },
+    });
+    fireEvent.change(screen.getByLabelText(/provider username/i), {
+      target: { value: "demo" },
+    });
+    fireEvent.change(screen.getByLabelText(/provider password/i), {
+      target: { value: "secret" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /save profile/i }));
+
+    expect(
+      await screen.findByText(/could not verify browser hls playback/i),
+    ).toBeInTheDocument();
   });
 });

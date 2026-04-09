@@ -23,7 +23,7 @@ export function ProviderSettingsSection() {
         latestJob={state.latestJob}
         savePending={state.saveMutation.isPending}
         validatePending={state.validateMutation.isPending}
-        validationMessage={state.validateMutation.data?.message}
+        validationMessage={state.feedbackMessage ?? undefined}
         onSubmit={state.submitSave}
         onValidate={state.submitValidate}
       />

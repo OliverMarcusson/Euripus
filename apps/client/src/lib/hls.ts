@@ -6,19 +6,14 @@ import {
 
 export const IPTV_HLS_CONFIG = {
   lowLatencyMode: false,
-  liveSyncDurationCount: 2,
-  liveMaxLatencyDurationCount: 4,
-  maxBufferLength: 10,
-  backBufferLength: 16,
-  manifestLoadingTimeOut: 12_000,
-  fragLoadingTimeOut: 20_000,
+  liveSyncDurationCount: 10,
+  liveMaxLatencyDurationCount: 20,
+  maxBufferLength: 60,
+  backBufferLength: 90,
+  nudgeOnVideoHole: true,
+  manifestLoadingTimeOut: 15_000,
+  fragLoadingTimeOut: 25_000,
 } satisfies Partial<HlsConfig>;
-
-const LIVE_EDGE_HARD_RESYNC_SECONDS = 4;
-const LIVE_EDGE_PLAYBACK_RATE_DRIFT_SECONDS = 1.5;
-const LIVE_EDGE_PLAYBACK_RATE_FAST_DRIFT_SECONDS = 4;
-const LIVE_EDGE_MIN_FORWARD_BUFFER_SECONDS = 1.5;
-const LIVE_EDGE_SNAP_BACKOFF_SECONDS = 0.5;
 
 type HlsErrorRecoveryState = {
   mediaRecoveryAttempts: number;
@@ -126,59 +121,53 @@ function getBufferedEnd(video: HTMLVideoElement) {
     : null;
 }
 
+function getBufferedRanges(video: HTMLVideoElement) {
+  return Array.from({ length: video.buffered.length }, (_, index) => ({
+    start: video.buffered.start(index),
+    end: video.buffered.end(index),
+  }));
+}
+
+function describeFrag(data: {
+  frag?: {
+    cc?: number;
+    duration?: number;
+    level?: number;
+    sn?: number | "initSegment";
+    start?: number;
+    type?: string;
+    url?: string;
+  };
+  part?: {
+    duration?: number;
+    index?: number;
+  } | null;
+}) {
+  return {
+    fragSn: data.frag?.sn ?? null,
+    fragLevel: data.frag?.level ?? null,
+    fragCc: data.frag?.cc ?? null,
+    fragStart: data.frag?.start ?? null,
+    fragDuration: data.frag?.duration ?? null,
+    fragType: data.frag?.type ?? null,
+    fragUrl: data.frag?.url ?? null,
+    partIndex: data.part?.index ?? null,
+    partDuration: data.part?.duration ?? null,
+  };
+}
+
 export function syncLivePlaybackPosition(
-  video: HTMLVideoElement,
-  hls: HlsLiveSyncController,
-  { force = false }: { force?: boolean } = {},
+  _video: HTMLVideoElement,
+  _hls: HlsLiveSyncController,
 ) {
-  const liveSyncPosition = hls.liveSyncPosition;
-  if (liveSyncPosition == null || !Number.isFinite(liveSyncPosition)) {
-    return;
-  }
-
-  const driftSeconds = liveSyncPosition - video.currentTime;
-  if (!force && driftSeconds <= LIVE_EDGE_HARD_RESYNC_SECONDS) {
-    return;
-  }
-
-  const nextTime = Math.max(
-    0,
-    liveSyncPosition - LIVE_EDGE_SNAP_BACKOFF_SECONDS,
-  );
-  if (Math.abs(video.currentTime - nextTime) < 0.25) {
-    return;
-  }
-
-  video.currentTime = nextTime;
+  // Avoid snapping live playback forward automatically. In practice this
+  // proved too aggressive and made jittery live streams feel worse.
 }
 
 export function updateLivePlaybackRate(
   video: HTMLVideoElement,
-  hls: HlsLiveSyncController,
+  _hls: HlsLiveSyncController,
 ) {
-  const liveSyncPosition = hls.liveSyncPosition;
-  if (liveSyncPosition == null || !Number.isFinite(liveSyncPosition)) {
-    if (video.playbackRate !== 1) {
-      video.playbackRate = 1;
-    }
-    return;
-  }
-
-  const bufferedEnd = getBufferedEnd(video);
-  const forwardBufferSeconds =
-    bufferedEnd == null ? 0 : bufferedEnd - video.currentTime;
-  const driftSeconds = liveSyncPosition - video.currentTime;
-
-  if (
-    !video.paused &&
-    driftSeconds > LIVE_EDGE_PLAYBACK_RATE_DRIFT_SECONDS &&
-    forwardBufferSeconds > LIVE_EDGE_MIN_FORWARD_BUFFER_SECONDS
-  ) {
-    video.playbackRate =
-      driftSeconds > LIVE_EDGE_PLAYBACK_RATE_FAST_DRIFT_SECONDS ? 1.1 : 1.05;
-    return;
-  }
-
   if (video.playbackRate !== 1) {
     video.playbackRate = 1;
   }
@@ -189,14 +178,26 @@ export function createIptvHls(
   sourceUrl: string,
   {
     live = false,
+    playbackSessionId,
     onRecoveryNeeded,
-  }: { live?: boolean; onRecoveryNeeded?: () => void } = {},
+  }: {
+    live?: boolean;
+    playbackSessionId?: string;
+    onRecoveryNeeded?: () => void;
+  } = {},
 ): HlsSession {
   const hls = new Hls(IPTV_HLS_CONFIG);
   const recoveryState: HlsErrorRecoveryState = { mediaRecoveryAttempts: 0 };
   const qualityListeners = new Set<(options: HlsQualityOption[]) => void>();
   let currentQuality = AUTO_HLS_QUALITY;
   let qualityOptions = getIptvHlsQualityOptions(hls.levels);
+  let previousFrag:
+    | {
+        cc: number | null;
+        sn: number | "initSegment" | null;
+        start: number | null;
+      }
+    | null = null;
 
   const notifyQualityListeners = () => {
     qualityListeners.forEach((listener) => {
@@ -225,6 +226,7 @@ export function createIptvHls(
       data.response?.code;
 
     logPlaybackDiagnostic(data.fatal ? "error" : "warn", "hls-error", {
+      playbackSessionId,
       ownershipHint,
       sourceUrl,
       failingUrl,
@@ -234,6 +236,11 @@ export function createIptvHls(
       errorDetails: data.details,
       responseCode,
       mediaErrorRecoveryAttempts: recoveryState.mediaRecoveryAttempts,
+      currentTime: video.currentTime,
+      bufferedRanges: getBufferedRanges(video),
+      readyState: video.readyState,
+      paused: video.paused,
+      liveSyncPosition: hls.liveSyncPosition,
     });
 
     handleIptvHlsError(hls, data, recoveryState, {
@@ -254,7 +261,6 @@ export function createIptvHls(
       return;
     }
     queueMicrotask(() => {
-      syncLivePlaybackPosition(video, hls, { force: true });
       updateLivePlaybackRate(video, hls);
     });
   };
@@ -267,6 +273,7 @@ export function createIptvHls(
 
   const handleManifestParsed = () => {
     logPlaybackDiagnostic("info", "hls-manifest-parsed", {
+      playbackSessionId,
       ownershipHint: inferPlaybackOwnershipHint(sourceUrl),
       sourceUrl,
       live,
@@ -277,7 +284,6 @@ export function createIptvHls(
       return;
     }
 
-    syncLivePlaybackPosition(video, hls, { force: true });
     updateLivePlaybackRate(video, hls);
   };
 
@@ -285,9 +291,170 @@ export function createIptvHls(
     publishQualityOptions();
   };
 
+  const logFragEvent = (
+    eventName:
+      | "hls-frag-loading"
+      | "hls-frag-loaded"
+      | "hls-frag-buffered"
+      | "hls-frag-changed"
+      | "hls-level-switching"
+      | "hls-level-switched"
+      | "hls-buffer-flushing"
+      | "hls-buffer-flushed"
+      | "hls-frag-load-emergency-aborted",
+    data: {
+      frag?: {
+        cc?: number;
+        duration?: number;
+        level?: number;
+        sn?: number | "initSegment";
+        start?: number;
+        type?: string;
+        url?: string;
+      };
+      part?: {
+        duration?: number;
+        index?: number;
+      } | null;
+      level?: number;
+      stats?: Record<string, number | undefined>;
+      endOffset?: number;
+      startOffset?: number;
+      type?: string;
+    },
+  ) => {
+    if (!import.meta.env.DEV) {
+      return;
+    }
+
+    const stats = data.stats;
+    logPlaybackDiagnostic("info", eventName, {
+      playbackSessionId,
+      ownershipHint: inferPlaybackOwnershipHint(sourceUrl),
+      sourceUrl,
+      live,
+      currentTime: video.currentTime,
+      bufferedRanges: getBufferedRanges(video),
+      ...describeFrag(data),
+      level: data.level ?? null,
+      startOffset: data.startOffset ?? null,
+      endOffset: data.endOffset ?? null,
+      bufferType: data.type ?? null,
+      requestToFirstByteMs:
+        typeof stats?.tfirst === "number" && typeof stats?.trequest === "number"
+          ? stats.tfirst - stats.trequest
+          : null,
+      requestToLoadMs:
+        typeof stats?.tload === "number" && typeof stats?.trequest === "number"
+          ? stats.tload - stats.trequest
+          : null,
+    });
+  };
+
+  const handleFragLoading = (
+    _event: string,
+    data: any,
+  ) => logFragEvent("hls-frag-loading", data);
+
+  const handleFragLoaded = (
+    _event: string,
+    data: any,
+  ) => logFragEvent("hls-frag-loaded", data);
+
+  const handleFragBuffered = (
+    _event: string,
+    data: any,
+  ) => logFragEvent("hls-frag-buffered", data);
+  const handleLevelSwitching = (
+    _event: string,
+    data: any,
+  ) => logFragEvent("hls-level-switching", data);
+  const handleLevelSwitched = (
+    _event: string,
+    data: any,
+  ) => logFragEvent("hls-level-switched", data);
+  const handleBufferFlushing = (
+    _event: string,
+    data: any,
+  ) => logFragEvent("hls-buffer-flushing", data);
+  const handleBufferFlushed = (
+    _event: string,
+    data: any,
+  ) => logFragEvent("hls-buffer-flushed", data);
+  const handleFragLoadEmergencyAborted = (
+    _event: string,
+    data: any,
+  ) => logFragEvent("hls-frag-load-emergency-aborted", data);
+
+  const handleFragChanged = (
+    _event: string,
+    data: any,
+  ) => {
+    logFragEvent("hls-frag-changed", data);
+
+    const nextFrag = {
+      cc: typeof data?.frag?.cc === "number" ? data.frag.cc : null,
+      sn:
+        typeof data?.frag?.sn === "number" || data?.frag?.sn === "initSegment"
+          ? data.frag.sn
+          : null,
+      start: typeof data?.frag?.start === "number" ? data.frag.start : null,
+    };
+
+    const repeatedFragment =
+      previousFrag != null &&
+      nextFrag.sn != null &&
+      previousFrag.sn != null &&
+      nextFrag.cc === previousFrag.cc &&
+      nextFrag.sn === previousFrag.sn;
+    const rewoundFragment =
+      previousFrag != null &&
+      typeof nextFrag.sn === "number" &&
+      typeof previousFrag.sn === "number" &&
+      nextFrag.cc === previousFrag.cc &&
+      nextFrag.sn < previousFrag.sn;
+
+    if (repeatedFragment || rewoundFragment) {
+      logPlaybackDiagnostic("warn", "hls-frag-sequence-anomaly", {
+        playbackSessionId,
+        ownershipHint: inferPlaybackOwnershipHint(sourceUrl),
+        sourceUrl,
+        live,
+        currentTime: video.currentTime,
+        bufferedRanges: getBufferedRanges(video),
+        previousFragSn: previousFrag?.sn ?? null,
+        previousFragStart: previousFrag?.start ?? null,
+        nextFragSn: nextFrag.sn,
+        nextFragStart: nextFrag.start,
+        anomaly: repeatedFragment ? "repeated-frag" : "rewound-frag",
+      });
+    }
+
+    previousFrag = nextFrag;
+  };
+
   hls.on(Hls.Events.ERROR, handleError);
   hls.on(Hls.Events.MANIFEST_PARSED, handleManifestParsed);
   hls.on(Hls.Events.LEVELS_UPDATED, handleLevelsUpdated);
+  hls.on(Hls.Events.FRAG_LOADING, handleFragLoading);
+  hls.on(Hls.Events.FRAG_LOADED, handleFragLoaded);
+  hls.on(Hls.Events.FRAG_BUFFERED, handleFragBuffered);
+  hls.on(Hls.Events.FRAG_CHANGED, handleFragChanged);
+  hls.on(Hls.Events.LEVEL_SWITCHING, handleLevelSwitching);
+  hls.on(Hls.Events.LEVEL_SWITCHED, handleLevelSwitched);
+  hls.on(Hls.Events.BUFFER_FLUSHING, handleBufferFlushing);
+  hls.on(Hls.Events.BUFFER_FLUSHED, handleBufferFlushed);
+  hls.on(
+    Hls.Events.FRAG_LOAD_EMERGENCY_ABORTED,
+    handleFragLoadEmergencyAborted,
+  );
+
+  logPlaybackDiagnostic("info", "hls-session-created", {
+    playbackSessionId,
+    ownershipHint: inferPlaybackOwnershipHint(sourceUrl),
+    sourceUrl,
+    live,
+  });
 
   if (live) {
     hls.on(Hls.Events.LEVEL_UPDATED, handleLiveUpdate);
@@ -329,10 +496,30 @@ export function createIptvHls(
       hls.currentLevel = nextQuality.level;
     },
     destroy() {
+      logPlaybackDiagnostic("info", "hls-session-destroyed", {
+        playbackSessionId,
+        ownershipHint: inferPlaybackOwnershipHint(sourceUrl),
+        sourceUrl,
+        live,
+        currentTime: video.currentTime,
+        bufferedRanges: getBufferedRanges(video),
+      });
       qualityListeners.clear();
       hls.off(Hls.Events.ERROR, handleError);
       hls.off(Hls.Events.MANIFEST_PARSED, handleManifestParsed);
       hls.off(Hls.Events.LEVELS_UPDATED, handleLevelsUpdated);
+      hls.off(Hls.Events.FRAG_LOADING, handleFragLoading);
+      hls.off(Hls.Events.FRAG_LOADED, handleFragLoaded);
+      hls.off(Hls.Events.FRAG_BUFFERED, handleFragBuffered);
+      hls.off(Hls.Events.FRAG_CHANGED, handleFragChanged);
+      hls.off(Hls.Events.LEVEL_SWITCHING, handleLevelSwitching);
+      hls.off(Hls.Events.LEVEL_SWITCHED, handleLevelSwitched);
+      hls.off(Hls.Events.BUFFER_FLUSHING, handleBufferFlushing);
+      hls.off(Hls.Events.BUFFER_FLUSHED, handleBufferFlushed);
+      hls.off(
+        Hls.Events.FRAG_LOAD_EMERGENCY_ABORTED,
+        handleFragLoadEmergencyAborted,
+      );
       if (live) {
         video.removeEventListener("timeupdate", handleLiveUpdate);
         video.removeEventListener("seeking", handleLiveSeek);

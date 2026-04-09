@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import {
   Field,
+  FieldDescription,
   FieldError,
   FieldGroup,
   FieldLabel,
@@ -114,8 +115,12 @@ export function ProviderSettingsForm({
               data-invalid={form.formState.errors.outputFormat ? true : undefined}
             >
               <FieldLabel htmlFor="outputFormat">
-                Preferred output format
+                Receiver/native output format
               </FieldLabel>
+              <FieldDescription>
+                Browser playback always uses HLS. This setting is reserved for
+                receiver/native compatibility when a provider prefers TS.
+              </FieldDescription>
               <Controller
                 control={form.control}
                 name="outputFormat"
