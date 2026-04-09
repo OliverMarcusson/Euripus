@@ -38,7 +38,7 @@ use base64::{
     Engine as _,
     engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
 };
-use chrono::{DateTime, Duration as ChronoDuration, Utc};
+use chrono::{DateTime, Datelike, Duration as ChronoDuration, NaiveDate, Utc};
 use cookie::time::Duration as CookieDuration;
 use dashmap::{DashMap, DashSet};
 use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation, decode, encode};
@@ -105,6 +105,12 @@ struct ChannelResponse {
     archive_duration_hours: Option<i32>,
     stream_extension: Option<String>,
     is_favorite: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ChannelVisibility {
+    is_hidden: bool,
+    is_placeholder: bool,
 }
 
 #[derive(Debug, Serialize, FromRow, Clone)]
@@ -283,6 +289,7 @@ struct MeiliChannelDoc {
     event_keywords: Vec<String>,
     is_event_channel: bool,
     is_placeholder_channel: bool,
+    is_hidden: bool,
     has_catchup: bool,
     archive_duration_hours: Option<i32>,
     epg_channel_id: Option<String>,
@@ -310,6 +317,7 @@ struct MeiliProgramDoc {
     ends_at: i64,
     can_catchup: bool,
     channel_id: Option<String>,
+    is_hidden: bool,
     sort_priority: i32,
 }
 
@@ -320,6 +328,7 @@ struct ChannelProgramMetadata {
     provider_key: Option<String>,
     provider_labels: Vec<String>,
     broad_categories: Vec<String>,
+    is_hidden: bool,
 }
 
 #[derive(Debug)]
@@ -362,6 +371,13 @@ struct ChannelEventTitlesRow {
     titles: Vec<String>,
 }
 
+#[derive(Debug, FromRow)]
+struct ChannelVisibilityRow {
+    id: Uuid,
+    name: String,
+    category_name: Option<String>,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 enum RelayAssetKind {
@@ -399,7 +415,7 @@ const MEILI_MAX_IN_FLIGHT_TASKS: usize = 2;
 const MEILI_TASK_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const MEILI_TASK_TIMEOUT: Duration = Duration::from_secs(300);
 const MEILI_SCHEMA_VERSION_KEY: &str = "__euripus_schema_version__";
-const MEILI_SCHEMA_VERSION: &str = "v2";
+const MEILI_SCHEMA_VERSION: &str = "v3";
 const RECEIVER_TTL: Duration = Duration::from_secs(45);
 const RECEIVER_SESSION_TTL_HOURS: i64 = 12;
 const RECEIVER_PAIRING_CODE_MINUTES: i64 = 5;
@@ -487,6 +503,286 @@ async fn fetch_channels(pool: &PgPool, user_id: Uuid) -> Result<Vec<ChannelRespo
     .await?;
 
     Ok(channels)
+}
+
+fn normalize_visibility_text(value: &str) -> String {
+    let mut normalized = String::with_capacity(value.len());
+    let mut previous_was_space = true;
+
+    for ch in value.chars().flat_map(|ch| ch.to_lowercase()) {
+        if ch.is_ascii_alphanumeric() {
+            normalized.push(ch);
+            previous_was_space = false;
+        } else if !previous_was_space {
+            normalized.push(' ');
+            previous_was_space = true;
+        }
+    }
+
+    normalized.trim().to_string()
+}
+
+fn contains_visibility_phrase(text: &str, phrase: &str) -> bool {
+    if text == phrase {
+        return true;
+    }
+
+    text.starts_with(&format!("{phrase} "))
+        || text.ends_with(&format!(" {phrase}"))
+        || text.contains(&format!(" {phrase} "))
+}
+
+fn text_has_placeholder_marker(value: &str) -> bool {
+    if value.contains('#') {
+        return true;
+    }
+
+    let normalized = normalize_visibility_text(value);
+    [
+        "ended",
+        "no event streaming",
+        "event only",
+        "streaming now",
+        "no live event",
+    ]
+    .iter()
+    .any(|phrase| contains_visibility_phrase(&normalized, phrase))
+}
+
+fn text_has_ppv_branding(value: &str) -> bool {
+    let normalized = normalize_visibility_text(value);
+    contains_visibility_phrase(&normalized, "ppv")
+        || contains_visibility_phrase(&normalized, "pay per view")
+}
+
+fn token_has_numeric_suffix(token: &str) -> bool {
+    let digit_start = token.find(|ch: char| ch.is_ascii_digit());
+    let Some(digit_start) = digit_start else {
+        return false;
+    };
+
+    let (prefix, suffix) = token.split_at(digit_start);
+    !suffix.is_empty()
+        && suffix.chars().all(|ch| ch.is_ascii_digit())
+        && prefix.chars().all(|ch| ch.is_ascii_alphabetic())
+        && prefix.len() <= 4
+}
+
+fn looks_like_generic_numbered_ppv(channel_name: &str) -> bool {
+    let normalized = normalize_visibility_text(channel_name);
+    let tokens = normalized.split_whitespace().collect::<Vec<_>>();
+    let Some(last_token) = tokens.last().copied() else {
+        return false;
+    };
+
+    let has_numbered_suffix =
+        last_token.chars().all(|ch| ch.is_ascii_digit()) || token_has_numeric_suffix(last_token);
+    has_numbered_suffix && tokens.len() <= 4
+}
+
+fn has_meaningful_event_title(event_titles: &[String]) -> bool {
+    event_titles.iter().any(|title| {
+        let normalized = normalize_visibility_text(title);
+        !normalized.is_empty()
+            && !text_has_placeholder_marker(title)
+            && normalized != "ppv"
+            && normalized != "event"
+            && normalized != "live event"
+    })
+}
+
+fn channel_name_has_event_prefix(channel_name: &str) -> bool {
+    let normalized = normalize_visibility_text(channel_name);
+    let tokens = normalized.split_whitespace().collect::<Vec<_>>();
+    if tokens.len() < 3 {
+        return false;
+    }
+
+    matches!(tokens.first().copied(), Some("live" | "next"))
+}
+
+fn month_token_to_number(token: &str) -> Option<u32> {
+    match token {
+        "jan" | "january" => Some(1),
+        "feb" | "february" => Some(2),
+        "mar" | "march" => Some(3),
+        "apr" | "april" => Some(4),
+        "may" => Some(5),
+        "jun" | "june" => Some(6),
+        "jul" | "july" => Some(7),
+        "aug" | "august" => Some(8),
+        "sep" | "sept" | "september" => Some(9),
+        "oct" | "october" => Some(10),
+        "nov" | "november" => Some(11),
+        "dec" | "december" => Some(12),
+        _ => None,
+    }
+}
+
+fn parse_day_token(token: &str) -> Option<u32> {
+    let day = token.parse::<u32>().ok()?;
+    (1..=31).contains(&day).then_some(day)
+}
+
+fn extract_channel_event_date(channel_name: &str, year: i32) -> Option<NaiveDate> {
+    let normalized = normalize_visibility_text(channel_name);
+    let tokens = normalized.split_whitespace().collect::<Vec<_>>();
+
+    for (index, token) in tokens.iter().enumerate() {
+        let Some(month) = month_token_to_number(token) else {
+            continue;
+        };
+
+        if let Some(day) = tokens
+            .get(index + 1)
+            .and_then(|value| parse_day_token(value))
+        {
+            if let Some(date) = NaiveDate::from_ymd_opt(year, month, day) {
+                return Some(date);
+            }
+        }
+
+        if let Some(day) = index
+            .checked_sub(1)
+            .and_then(|day_index| tokens.get(day_index))
+            .and_then(|value| parse_day_token(value))
+        {
+            if let Some(date) = NaiveDate::from_ymd_opt(year, month, day) {
+                return Some(date);
+            }
+        }
+    }
+
+    None
+}
+
+fn classify_channel_visibility_at(
+    channel_name: &str,
+    category_name: Option<&str>,
+    event_titles: &[String],
+    today: NaiveDate,
+) -> ChannelVisibility {
+    let is_placeholder = text_has_placeholder_marker(channel_name)
+        || category_name
+            .map(text_has_placeholder_marker)
+            .unwrap_or(false);
+    if is_placeholder {
+        return ChannelVisibility {
+            is_hidden: true,
+            is_placeholder: true,
+        };
+    }
+
+    let is_ppv = text_has_ppv_branding(channel_name)
+        || category_name.map(text_has_ppv_branding).unwrap_or(false);
+    let has_past_event_date = extract_channel_event_date(channel_name, today.year())
+        .map(|event_date| event_date < today)
+        .unwrap_or(false);
+    let is_hidden = is_ppv
+        && ((looks_like_generic_numbered_ppv(channel_name)
+            && !has_meaningful_event_title(event_titles)
+            && !channel_name_has_event_prefix(channel_name))
+            || has_past_event_date);
+
+    ChannelVisibility {
+        is_hidden,
+        is_placeholder: false,
+    }
+}
+
+fn classify_channel_visibility(
+    channel_name: &str,
+    category_name: Option<&str>,
+    event_titles: &[String],
+) -> ChannelVisibility {
+    classify_channel_visibility_at(
+        channel_name,
+        category_name,
+        event_titles,
+        Utc::now().date_naive(),
+    )
+}
+
+async fn load_channel_visibility_map(
+    pool: &PgPool,
+    user_id: Uuid,
+    profile_id: Option<Uuid>,
+) -> Result<HashMap<Uuid, ChannelVisibility>> {
+    let rows = sqlx::query_as::<_, ChannelVisibilityRow>(
+        r#"
+        SELECT
+          c.id,
+          c.name,
+          cc.name AS category_name
+        FROM channels c
+        LEFT JOIN channel_categories cc ON cc.id = c.category_id
+        WHERE c.user_id = $1
+          AND ($2::uuid IS NULL OR c.profile_id = $2)
+        "#,
+    )
+    .bind(user_id)
+    .bind(profile_id)
+    .fetch_all(pool)
+    .await?;
+
+    let titles = sqlx::query_as::<_, ChannelEventTitlesRow>(
+        r#"
+        WITH ranked AS (
+          SELECT
+            p.channel_id,
+            p.title,
+            ROW_NUMBER() OVER (
+              PARTITION BY p.channel_id
+              ORDER BY
+                CASE
+                  WHEN p.start_at <= NOW() AND p.end_at >= NOW() THEN 0
+                  WHEN p.start_at > NOW() THEN 1
+                  ELSE 2
+                END,
+                p.start_at ASC,
+                p.title ASC
+            ) AS rank
+          FROM programs p
+          WHERE p.user_id = $1
+            AND p.channel_id IS NOT NULL
+            AND ($2::uuid IS NULL OR p.profile_id = $2)
+            AND p.end_at > NOW() - ($3 * INTERVAL '1 hour')
+            AND p.start_at < NOW() + ($4 * INTERVAL '1 day')
+        )
+        SELECT channel_id, array_agg(title ORDER BY rank) AS titles
+        FROM ranked
+        WHERE rank <= 3
+        GROUP BY channel_id
+        "#,
+    )
+    .bind(user_id)
+    .bind(profile_id)
+    .bind(EPG_RETENTION_PAST_HOURS)
+    .bind(EPG_RETENTION_FUTURE_DAYS)
+    .fetch_all(pool)
+    .await?;
+    let titles_by_channel = titles
+        .into_iter()
+        .map(|row| (row.channel_id, row.titles))
+        .collect::<HashMap<_, _>>();
+
+    Ok(rows
+        .into_iter()
+        .map(|row| {
+            let event_titles = titles_by_channel.get(&row.id).cloned().unwrap_or_default();
+            (
+                row.id,
+                classify_channel_visibility(&row.name, row.category_name.as_deref(), &event_titles),
+            )
+        })
+        .collect())
+}
+
+fn visible_channel_ids_from_map(visibility: &HashMap<Uuid, ChannelVisibility>) -> Vec<Uuid> {
+    visibility
+        .iter()
+        .filter_map(|(id, visibility)| (!visibility.is_hidden).then_some(*id))
+        .collect()
 }
 
 fn rewrite_channel_logo_urls(
@@ -826,5 +1122,88 @@ mod tests {
         let second = hash_refresh_token("same-token");
         assert_eq!(first, second);
         assert_eq!(first.len(), 64);
+    }
+
+    #[test]
+    fn classify_channel_visibility_hides_placeholder_ppv_channels() {
+        let visibility = classify_channel_visibility(
+            "ENDED | GOLF MAJOR ON THE RANGE | Wed 08 Apr 15:00 CEST (SE) | 8K EXCLUSIVE | SE: VIAPLAY PPV 2",
+            Some("SE| VIAPLAY PPV"),
+            &["Golf Major On The Range".to_string()],
+        );
+
+        assert!(visibility.is_hidden);
+        assert!(visibility.is_placeholder);
+    }
+
+    #[test]
+    fn classify_channel_visibility_hides_generic_numbered_ppv_channels_without_events() {
+        let visibility =
+            classify_channel_visibility(":Viaplay SE 13", Some("SE| VIAPLAY PPV"), &[]);
+
+        assert!(visibility.is_hidden);
+        assert!(!visibility.is_placeholder);
+    }
+
+    #[test]
+    fn classify_channel_visibility_keeps_event_specific_ppv_channels_visible() {
+        let visibility = classify_channel_visibility(
+            "SE: VIAPLAY PPV 5",
+            Some("SE| VIAPLAY PPV"),
+            &["Golf Major Par 3 Contest".to_string()],
+        );
+
+        assert!(!visibility.is_hidden);
+        assert!(!visibility.is_placeholder);
+    }
+
+    #[test]
+    fn classify_channel_visibility_keeps_live_prefixed_ppv_channels_visible() {
+        let visibility = classify_channel_visibility(
+            "LIVE | GOLF MAJOR PAR 3 CONTEST | SE: VIAPLAY PPV 5",
+            Some("SE| VIAPLAY PPV"),
+            &[],
+        );
+
+        assert!(!visibility.is_hidden);
+        assert!(!visibility.is_placeholder);
+    }
+
+    #[test]
+    fn classify_channel_visibility_keeps_next_prefixed_ppv_channels_visible() {
+        let visibility = classify_channel_visibility(
+            "NEXT | NHL ON THE FLY | SE: VIAPLAY PPV 1",
+            Some("SE| VIAPLAY PPV"),
+            &[],
+        );
+
+        assert!(!visibility.is_hidden);
+        assert!(!visibility.is_placeholder);
+    }
+
+    #[test]
+    fn classify_channel_visibility_hides_ppv_channels_with_past_month_day_marker() {
+        let visibility = classify_channel_visibility_at(
+            "PSG vs Liverpool @ Apr 8 20:55 : TeliaPlay SE 26",
+            Some("SE| PLAY+ PPV VIP"),
+            &[],
+            NaiveDate::from_ymd_opt(2026, 4, 9).expect("valid date"),
+        );
+
+        assert!(visibility.is_hidden);
+        assert!(!visibility.is_placeholder);
+    }
+
+    #[test]
+    fn classify_channel_visibility_keeps_same_day_ppv_channels_visible() {
+        let visibility = classify_channel_visibility_at(
+            "PSG vs Liverpool @ Apr 9 20:55 : TeliaPlay SE 26",
+            Some("SE| PLAY+ PPV VIP"),
+            &[],
+            NaiveDate::from_ymd_opt(2026, 4, 9).expect("valid date"),
+        );
+
+        assert!(!visibility.is_hidden);
+        assert!(!visibility.is_placeholder);
     }
 }

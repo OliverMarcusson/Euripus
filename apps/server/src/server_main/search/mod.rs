@@ -71,6 +71,9 @@ async fn search_channels(
 ) -> ApiResult<ChannelSearchResponse> {
     let auth = require_auth(&state, &headers).await?;
     let (term, offset, limit) = parse_search_pagination(query)?;
+    let visibility = load_channel_visibility_map(&state.pool, auth.user_id, None).await?;
+    let visible_channel_ids = visible_channel_ids_from_map(&visibility);
+    let visible_channel_set = visible_channel_ids.iter().copied().collect::<HashSet<_>>();
     if indexing::meili_is_ready_for_user(&state, auth.user_id).await {
         let meili = state
             .meili
@@ -87,6 +90,7 @@ async fn search_channels(
                     offset,
                     limit,
                     lexicon.as_ref(),
+                    &visible_channel_set,
                 )
                 .await
                 {
@@ -105,7 +109,16 @@ async fn search_channels(
     }
 
     Ok(Json(
-        search_channels_postgres(&state, &headers, auth.user_id, &term, offset, limit).await?,
+        search_channels_postgres(
+            &state,
+            &headers,
+            auth.user_id,
+            &term,
+            offset,
+            limit,
+            &visible_channel_ids,
+        )
+        .await?,
     ))
 }
 
@@ -116,6 +129,9 @@ async fn search_programs(
 ) -> ApiResult<ProgramSearchResponse> {
     let auth = require_auth(&state, &headers).await?;
     let (term, offset, limit) = parse_search_pagination(query)?;
+    let visibility = load_channel_visibility_map(&state.pool, auth.user_id, None).await?;
+    let visible_channel_ids = visible_channel_ids_from_map(&visibility);
+    let visible_channel_set = visible_channel_ids.iter().copied().collect::<HashSet<_>>();
     if indexing::meili_is_ready_for_user(&state, auth.user_id).await {
         let meili = state
             .meili
@@ -131,6 +147,7 @@ async fn search_programs(
                     offset,
                     limit,
                     lexicon.as_ref(),
+                    &visible_channel_set,
                 )
                 .await
                 {
@@ -149,7 +166,15 @@ async fn search_programs(
     }
 
     Ok(Json(
-        search_programs_postgres(&state.pool, auth.user_id, &term, offset, limit).await?,
+        search_programs_postgres(
+            &state.pool,
+            auth.user_id,
+            &term,
+            offset,
+            limit,
+            &visible_channel_ids,
+        )
+        .await?,
     ))
 }
 
@@ -188,7 +213,8 @@ async fn execute_meili_channel_search(
     offset: usize,
     apply_sort: bool,
 ) -> std::result::Result<SearchResults<MeiliChannelDoc>, AppError> {
-    let filter = lexicon::build_meili_search_filter(user_id, parsed.filter.as_deref());
+    let base_filter = lexicon::build_meili_search_filter(user_id, parsed.filter.as_deref());
+    let filter = format!("({base_filter}) AND is_hidden = false");
     let index = meili.index("channels");
     let mut search = index.search();
     search
@@ -215,6 +241,7 @@ async fn search_channels_meili(
     offset: i64,
     limit: i64,
     lexicon: &lexicon::SearchLexicon,
+    visible_channel_ids: &HashSet<Uuid>,
 ) -> std::result::Result<ChannelSearchResponse, AppError> {
     let parsed = lexicon::parse_search_query(query, lexicon);
     if parsed.search.is_empty() {
@@ -235,11 +262,14 @@ async fn search_channels_meili(
                 Uuid::parse_str(&hit.result.entity_id)
                     .map_err(|error| AppError::Internal(anyhow!(error)))
             })
+            .filter(|result| {
+                result
+                    .as_ref()
+                    .map(|id| visible_channel_ids.contains(id))
+                    .unwrap_or(true)
+            })
             .collect::<std::result::Result<Vec<_>, _>>()?;
-        let total_count = results
-            .estimated_total_hits
-            .map(|value| value as i64)
-            .unwrap_or(ids.len() as i64);
+        let total_count = ids.len() as i64;
         let mut items = load_channels_by_ids(&state.pool, &ids, user_id)
             .await
             .map_err(AppError::from)?;
@@ -265,11 +295,6 @@ async fn search_channels_meili(
         false,
     )
     .await?;
-    let total_count = primary_results
-        .estimated_total_hits
-        .map(|value| value as i64)
-        .unwrap_or(primary_results.hits.len() as i64);
-
     let significant_terms = lexicon::extract_significant_search_terms(&parsed.search);
     let missing_terms = significant_terms
         .into_iter()
@@ -334,7 +359,11 @@ async fn search_channels_meili(
         }
     }
 
-    let total_count = total_count.max(ordered_entity_ids.len() as i64);
+    let ordered_entity_ids = ordered_entity_ids
+        .into_iter()
+        .filter(|id| visible_channel_ids.contains(id))
+        .collect::<Vec<_>>();
+    let total_count = ordered_entity_ids.len() as i64;
     let page_ids = ordered_entity_ids
         .into_iter()
         .skip(offset as usize)
@@ -363,9 +392,11 @@ async fn search_programs_meili(
     offset: i64,
     limit: i64,
     lexicon: &lexicon::SearchLexicon,
+    visible_channel_ids: &HashSet<Uuid>,
 ) -> std::result::Result<ProgramSearchResponse, AppError> {
     let parsed = lexicon::parse_search_query(query, lexicon);
-    let filter = lexicon::build_meili_search_filter(user_id, parsed.filter.as_deref());
+    let base_filter = lexicon::build_meili_search_filter(user_id, parsed.filter.as_deref());
+    let filter = format!("({base_filter}) AND is_hidden = false");
     let results = meili
         .index("programs")
         .search()
@@ -387,13 +418,18 @@ async fn search_programs_meili(
                 .map_err(|error| AppError::Internal(anyhow!(error)))
         })
         .collect::<std::result::Result<Vec<_>, _>>()?;
-    let total_count = results
-        .estimated_total_hits
-        .map(|value| value as i64)
-        .unwrap_or(ids.len() as i64);
     let items = load_programs_by_ids(pool, user_id, &ids)
         .await
-        .map_err(AppError::from)?;
+        .map_err(AppError::from)?
+        .into_iter()
+        .filter(|program| {
+            program
+                .channel_id
+                .map(|channel_id| visible_channel_ids.contains(&channel_id))
+                .unwrap_or(true)
+        })
+        .collect::<Vec<_>>();
+    let total_count = items.len() as i64;
 
     Ok(ProgramSearchResponse {
         query: query.to_string(),

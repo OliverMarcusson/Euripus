@@ -5,6 +5,9 @@ pub(in crate::server_main) async fn rebuild_search_documents(
     pool: &PgPool,
     user_id: Uuid,
 ) -> Result<()> {
+    let visibility = load_channel_visibility_map(pool, user_id, None).await?;
+    let visible_channel_ids = visible_channel_ids_from_map(&visibility);
+
     sqlx::query(
         r#"
         DELETE FROM search_documents
@@ -36,9 +39,11 @@ pub(in crate::server_main) async fn rebuild_search_documents(
         FROM channels c
         LEFT JOIN channel_categories cc ON cc.id = c.category_id
         WHERE c.user_id = $1
+          AND c.id = ANY($2)
         "#,
     )
     .bind(user_id)
+    .bind(&visible_channel_ids)
     .execute(pool)
     .await?;
 
@@ -56,9 +61,14 @@ pub(in crate::server_main) async fn rebuild_search_documents(
           p.end_at
         FROM programs p
         WHERE p.user_id = $1
+          AND (
+            p.channel_id IS NULL
+            OR p.channel_id = ANY($2)
+          )
         "#,
     )
     .bind(user_id)
+    .bind(&visible_channel_ids)
     .execute(pool)
     .await?;
 
@@ -871,6 +881,7 @@ mod tests {
             event_keywords: vec!["masters".to_string()],
             is_event_channel: true,
             is_placeholder_channel: false,
+            is_hidden: false,
             has_catchup: false,
             archive_duration_hours: None,
             epg_channel_id: None,
@@ -973,6 +984,7 @@ pub(in crate::server_main) async fn configure_meili_indexes(
             "has_catchup",
             "is_event_channel",
             "is_placeholder_channel",
+            "is_hidden",
         ],
         &[
             "channel_name",
@@ -997,6 +1009,7 @@ pub(in crate::server_main) async fn configure_meili_indexes(
             "provider_key",
             "broad_categories",
             "can_catchup",
+            "is_hidden",
         ],
         &[
             "title",
@@ -1265,6 +1278,11 @@ pub(in crate::server_main) async fn rebuild_meili_indexes(
                     row.category_name.as_deref(),
                     &event_titles,
                 );
+                let visibility = classify_channel_visibility(
+                    &row.name,
+                    row.category_name.as_deref(),
+                    &event_titles,
+                );
                 let provider_label_text = provider_labels.join(" ");
 
                 MeiliChannelDoc {
@@ -1284,6 +1302,7 @@ pub(in crate::server_main) async fn rebuild_meili_indexes(
                     event_keywords: event_keywords.clone(),
                     is_event_channel,
                     is_placeholder_channel,
+                    is_hidden: visibility.is_hidden,
                     has_catchup: row.has_catchup,
                     archive_duration_hours: row.archive_duration_hours,
                     epg_channel_id: row.epg_channel_id.clone(),
@@ -1316,6 +1335,7 @@ pub(in crate::server_main) async fn rebuild_meili_indexes(
                     provider_key: doc.provider_key.clone(),
                     provider_labels: doc.provider_labels.clone(),
                     broad_categories: doc.broad_categories.clone(),
+                    is_hidden: doc.is_hidden,
                 },
             );
         }
@@ -1384,43 +1404,52 @@ pub(in crate::server_main) async fn rebuild_meili_indexes(
         let docs = rows
             .iter()
             .map(|row| {
-                let (country_code, region_code, provider_key, provider_labels, broad_categories) =
-                    row.channel_id
-                        .and_then(|channel_id| channel_program_metadata.get(&channel_id))
-                        .map(|metadata| {
-                            (
-                                metadata.country_code.clone(),
-                                metadata.region_code.clone(),
-                                metadata.provider_key.clone(),
-                                metadata.provider_labels.clone(),
-                                metadata.broad_categories.clone(),
-                            )
-                        })
-                        .unwrap_or_else(|| {
-                            let (
-                                country_code,
-                                region_code,
-                                provider_key,
-                                provider_labels,
-                                broad_categories,
-                                _event_keywords,
-                                _is_event_channel,
-                                _is_placeholder_channel,
-                                _sort_rank,
-                            ) = derive_search_metadata(
-                                lexicon.as_ref(),
-                                row.channel_name.as_deref().unwrap_or(&row.title),
-                                row.category_name.as_deref(),
-                                std::slice::from_ref(&row.title),
-                            );
-                            (
-                                country_code,
-                                region_code,
-                                provider_key,
-                                provider_labels,
-                                broad_categories,
-                            )
-                        });
+                let (
+                    country_code,
+                    region_code,
+                    provider_key,
+                    provider_labels,
+                    broad_categories,
+                    is_hidden,
+                ) = row
+                    .channel_id
+                    .and_then(|channel_id| channel_program_metadata.get(&channel_id))
+                    .map(|metadata| {
+                        (
+                            metadata.country_code.clone(),
+                            metadata.region_code.clone(),
+                            metadata.provider_key.clone(),
+                            metadata.provider_labels.clone(),
+                            metadata.broad_categories.clone(),
+                            metadata.is_hidden,
+                        )
+                    })
+                    .unwrap_or_else(|| {
+                        let (
+                            country_code,
+                            region_code,
+                            provider_key,
+                            provider_labels,
+                            broad_categories,
+                            _event_keywords,
+                            _is_event_channel,
+                            _is_placeholder_channel,
+                            _sort_rank,
+                        ) = derive_search_metadata(
+                            lexicon.as_ref(),
+                            row.channel_name.as_deref().unwrap_or(&row.title),
+                            row.category_name.as_deref(),
+                            std::slice::from_ref(&row.title),
+                        );
+                        (
+                            country_code,
+                            region_code,
+                            provider_key,
+                            provider_labels,
+                            broad_categories,
+                            false,
+                        )
+                    });
 
                 MeiliProgramDoc {
                     id: format!("{}_{}", user_id, row.id),
@@ -1449,6 +1478,7 @@ pub(in crate::server_main) async fn rebuild_meili_indexes(
                     ends_at: row.end_at.timestamp(),
                     can_catchup: row.can_catchup,
                     channel_id: row.channel_id.map(|value| value.to_string()),
+                    is_hidden,
                     sort_priority: if row.channel_id.is_some()
                         && row.start_at <= now
                         && row.end_at >= now
@@ -1581,6 +1611,8 @@ pub(in crate::server_main) async fn refresh_meili_channels_delta(
                 row.category_name.as_deref(),
                 &event_titles,
             );
+            let visibility =
+                classify_channel_visibility(&row.name, row.category_name.as_deref(), &event_titles);
             let provider_label_text = provider_labels.join(" ");
 
             MeiliChannelDoc {
@@ -1600,6 +1632,7 @@ pub(in crate::server_main) async fn refresh_meili_channels_delta(
                 event_keywords: event_keywords.clone(),
                 is_event_channel,
                 is_placeholder_channel,
+                is_hidden: visibility.is_hidden,
                 has_catchup: row.has_catchup,
                 archive_duration_hours: row.archive_duration_hours,
                 epg_channel_id: row.epg_channel_id.clone(),

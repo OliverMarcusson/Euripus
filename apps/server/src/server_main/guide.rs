@@ -108,7 +108,13 @@ async fn list_channels(
     headers: HeaderMap,
 ) -> ApiResult<Vec<ChannelResponse>> {
     let auth = require_auth(&state, &headers).await?;
+    let visibility = load_channel_visibility_map(&state.pool, auth.user_id, None).await?;
+    let visible_channel_ids = visibility
+        .iter()
+        .filter_map(|(id, visibility)| (!visibility.is_hidden).then_some(*id))
+        .collect::<HashSet<_>>();
     let mut channels = fetch_channels(&state.pool, auth.user_id).await?;
+    channels.retain(|channel| visible_channel_ids.contains(&channel.id));
     rewrite_channel_logo_urls(&state, &headers, auth.user_id, &mut channels)?;
     Ok(Json(channels))
 }
@@ -169,7 +175,13 @@ async fn get_channel(
 
 async fn get_guide(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<GuideResponse> {
     let auth = require_auth(&state, &headers).await?;
-    let categories = fetch_guide_categories(&state.pool, auth.user_id).await?;
+    let visibility = load_channel_visibility_map(&state.pool, auth.user_id, None).await?;
+    let categories = fetch_guide_categories(
+        &state.pool,
+        auth.user_id,
+        &visible_channel_ids_from_map(&visibility),
+    )
+    .await?;
     Ok(Json(GuideResponse { categories }))
 }
 
@@ -221,13 +233,32 @@ async fn get_guide_category(
 ) -> ApiResult<GuideCategoryResponse> {
     let auth = require_auth(&state, &headers).await?;
     let (offset, limit) = parse_guide_category_pagination(query)?;
-    let category = fetch_guide_category_summary(&state.pool, auth.user_id, &category_id)
-        .await?
-        .ok_or_else(|| AppError::NotFound("Guide category not found".to_string()))?;
-    let total_count =
-        fetch_guide_category_total_count(&state.pool, auth.user_id, &category_id).await?;
-    let rows =
-        fetch_guide_category_rows(&state.pool, auth.user_id, &category_id, offset, limit).await?;
+    let visibility = load_channel_visibility_map(&state.pool, auth.user_id, None).await?;
+    let visible_channel_ids = visible_channel_ids_from_map(&visibility);
+    let category = fetch_guide_category_summary(
+        &state.pool,
+        auth.user_id,
+        &category_id,
+        &visible_channel_ids,
+    )
+    .await?
+    .ok_or_else(|| AppError::NotFound("Guide category not found".to_string()))?;
+    let total_count = fetch_guide_category_total_count(
+        &state.pool,
+        auth.user_id,
+        &category_id,
+        &visible_channel_ids,
+    )
+    .await?;
+    let rows = fetch_guide_category_rows(
+        &state.pool,
+        auth.user_id,
+        &category_id,
+        offset,
+        limit,
+        &visible_channel_ids,
+    )
+    .await?;
     let request_base_url = request_base_url(&state.config, &headers)?;
     let entries = rows
         .into_iter()
@@ -734,7 +765,12 @@ pub(super) const GUIDE_MAX_LIMIT: i64 = 100;
 pub(super) async fn fetch_guide_categories(
     pool: &PgPool,
     user_id: Uuid,
+    visible_channel_ids: &[Uuid],
 ) -> Result<Vec<GuideCategorySummaryResponse>> {
+    if visible_channel_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
     let rows = sqlx::query_as::<_, GuideCategorySummaryRow>(
         r#"
         SELECT
@@ -756,6 +792,7 @@ pub(super) async fn fetch_guide_categories(
          AND p.end_at > NOW() - ($2 * INTERVAL '1 hour')
          AND p.start_at < NOW() + ($3 * INTERVAL '1 day')
         WHERE c.user_id = $1
+          AND c.id = ANY($4)
         GROUP BY COALESCE(c.category_id::text, 'uncategorized'), COALESCE(cc.name, 'Uncategorized')
         ORDER BY live_now_count DESC, channel_count DESC, name ASC
         "#,
@@ -763,6 +800,7 @@ pub(super) async fn fetch_guide_categories(
     .bind(user_id)
     .bind(EPG_RETENTION_PAST_HOURS)
     .bind(EPG_RETENTION_FUTURE_DAYS)
+    .bind(visible_channel_ids)
     .fetch_all(pool)
     .await?;
 
@@ -773,7 +811,12 @@ pub(super) async fn fetch_guide_category_summary(
     pool: &PgPool,
     user_id: Uuid,
     category_id: &str,
+    visible_channel_ids: &[Uuid],
 ) -> Result<Option<GuideCategorySummaryResponse>> {
+    if visible_channel_ids.is_empty() {
+        return Ok(None);
+    }
+
     let row = sqlx::query_as::<_, GuideCategorySummaryRow>(
         r#"
         SELECT
@@ -795,6 +838,7 @@ pub(super) async fn fetch_guide_category_summary(
          AND p.end_at > NOW() - ($3 * INTERVAL '1 hour')
          AND p.start_at < NOW() + ($4 * INTERVAL '1 day')
         WHERE c.user_id = $1
+          AND c.id = ANY($5)
           AND (
             ($2 = 'uncategorized' AND c.category_id IS NULL)
             OR c.category_id::text = $2
@@ -806,6 +850,7 @@ pub(super) async fn fetch_guide_category_summary(
     .bind(category_id)
     .bind(EPG_RETENTION_PAST_HOURS)
     .bind(EPG_RETENTION_FUTURE_DAYS)
+    .bind(visible_channel_ids)
     .fetch_optional(pool)
     .await?;
 
@@ -816,12 +861,18 @@ pub(super) async fn fetch_guide_category_total_count(
     pool: &PgPool,
     user_id: Uuid,
     category_id: &str,
+    visible_channel_ids: &[Uuid],
 ) -> Result<i64> {
+    if visible_channel_ids.is_empty() {
+        return Ok(0);
+    }
+
     let total_count = sqlx::query_scalar::<_, i64>(
         r#"
         SELECT COUNT(*)
         FROM channels c
         WHERE c.user_id = $1
+          AND c.id = ANY($3)
           AND (
             ($2 = 'uncategorized' AND c.category_id IS NULL)
             OR c.category_id::text = $2
@@ -830,6 +881,7 @@ pub(super) async fn fetch_guide_category_total_count(
     )
     .bind(user_id)
     .bind(category_id)
+    .bind(visible_channel_ids)
     .fetch_one(pool)
     .await?;
 
@@ -842,7 +894,12 @@ pub(super) async fn fetch_guide_category_rows(
     category_id: &str,
     offset: i64,
     limit: i64,
+    visible_channel_ids: &[Uuid],
 ) -> Result<Vec<GuideCategoryEntryRow>> {
+    if visible_channel_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
     let rows = sqlx::query_as::<_, GuideCategoryEntryRow>(
         r#"
         SELECT
@@ -899,6 +956,7 @@ pub(super) async fn fetch_guide_category_rows(
           LIMIT 1
         ) p ON TRUE
         WHERE c.user_id = $1
+          AND c.id = ANY($7)
           AND (
             ($2 = 'uncategorized' AND c.category_id IS NULL)
             OR c.category_id::text = $2
@@ -923,6 +981,7 @@ pub(super) async fn fetch_guide_category_rows(
     .bind(limit)
     .bind(EPG_RETENTION_PAST_HOURS)
     .bind(EPG_RETENTION_FUTURE_DAYS)
+    .bind(visible_channel_ids)
     .fetch_all(pool)
     .await?;
 
