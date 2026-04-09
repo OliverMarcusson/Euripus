@@ -195,8 +195,10 @@ export type ReceiverPlaybackState = {
   catchup: boolean;
   updatedAt: string;
   paused: boolean;
+  buffering: boolean;
   positionSeconds: number | null;
   durationSeconds: number | null;
+  errorMessage: string | null;
 };
 
 export type ReceiverDevice = {
@@ -235,6 +237,7 @@ export type ReceiverSessionPayload = {
   platform: string;
   formFactorHint: string | null;
   appKind: string;
+  publicOrigin?: string | null;
   receiverCredential?: string | null;
 };
 
@@ -244,8 +247,10 @@ export type ReceiverPlaybackStatePayload = {
   live?: boolean | null;
   catchup?: boolean | null;
   paused?: boolean | null;
+  buffering?: boolean | null;
   positionSeconds?: number | null;
   durationSeconds?: number | null;
+  errorMessage?: string | null;
 };
 
 export type RemoteControllerTarget = {
@@ -258,13 +263,18 @@ export type RemotePlaybackCommand = {
   targetDeviceId: string;
   targetDeviceName: string;
   commandType: string;
-  status: "queued" | "delivered" | "acknowledged" | "failed";
+  status: "queued" | "delivered" | "executing" | "succeeded" | "failed";
   sourceTitle: string;
   createdAt: string;
 };
 
 export type RemotePlaybackCommandAck = {
-  status: "delivered" | "acknowledged" | "failed";
+  status:
+    | "delivered"
+    | "executing"
+    | "succeeded"
+    | "failed"
+    | "acknowledged";
   errorMessage?: string | null;
 };
 

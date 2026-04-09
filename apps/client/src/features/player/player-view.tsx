@@ -26,6 +26,7 @@ import {
   stopRemotePlayback,
 } from "@/lib/api";
 import { logPlaybackDiagnostic } from "@/lib/playback-diagnostics";
+import { receiverPlaybackBadgeLabel } from "@/lib/receiver-playback";
 import { usePlayerStore } from "@/store/player-store";
 import { useRemoteControllerStore } from "@/store/remote-controller-store";
 import { cn, formatRelativeTime } from "@/lib/utils";
@@ -89,16 +90,25 @@ export function PlayerView() {
               <div className="flex flex-wrap items-center gap-2">
                 <Badge
                   variant={
-                    remoteTarget.currentPlayback.live ? "live" : "outline"
+                    remoteTarget.currentPlayback.errorMessage
+                      ? "outline"
+                      : remoteTarget.currentPlayback.live
+                        ? "live"
+                        : "outline"
                   }
                 >
-                  {remoteTarget.currentPlayback.live ? "Live" : "Archive"}
+                  {receiverPlaybackBadgeLabel(remoteTarget.currentPlayback)}
                 </Badge>
                 <Badge variant="outline">{remoteTarget.name}</Badge>
               </div>
               <h2 className="mt-3 text-lg font-semibold">
                 {remoteTarget.currentPlayback.title}
               </h2>
+              {remoteTarget.currentPlayback.errorMessage ? (
+                <p className="mt-2 text-sm text-amber-200/90">
+                  {remoteTarget.currentPlayback.errorMessage}
+                </p>
+              ) : null}
               <div className="mt-4 flex flex-wrap gap-2">
                 <Button
                   size="sm"

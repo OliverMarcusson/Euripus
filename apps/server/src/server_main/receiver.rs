@@ -49,8 +49,10 @@ pub(super) struct ReceiverPlaybackStateResponse {
     pub(super) catchup: bool,
     pub(super) updated_at: DateTime<Utc>,
     pub(super) paused: bool,
+    pub(super) buffering: bool,
     pub(super) position_seconds: Option<f64>,
     pub(super) duration_seconds: Option<f64>,
+    pub(super) error_message: Option<String>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -113,6 +115,7 @@ pub(super) struct ReceiverSessionPayload {
     pub(super) platform: String,
     pub(super) form_factor_hint: Option<String>,
     pub(super) app_kind: String,
+    pub(super) public_origin: Option<String>,
     pub(super) receiver_credential: Option<String>,
 }
 
@@ -151,8 +154,10 @@ pub(super) struct ReceiverPlaybackStatePayload {
     pub(super) live: Option<bool>,
     pub(super) catchup: Option<bool>,
     pub(super) paused: Option<bool>,
+    pub(super) buffering: Option<bool>,
     pub(super) position_seconds: Option<f64>,
     pub(super) duration_seconds: Option<f64>,
+    pub(super) error_message: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -190,8 +195,11 @@ pub(super) struct ReceiverDeviceRecord {
     pub(super) current_playback_catchup: Option<bool>,
     pub(super) current_playback_updated_at: Option<DateTime<Utc>>,
     pub(super) current_playback_paused: Option<bool>,
+    pub(super) current_playback_buffering: Option<bool>,
     pub(super) current_playback_position_seconds: Option<f64>,
     pub(super) current_playback_duration_seconds: Option<f64>,
+    pub(super) current_playback_error_message: Option<String>,
+    pub(super) last_public_origin: Option<String>,
     pub(super) revoked_at: Option<DateTime<Utc>>,
     pub(super) updated_at: DateTime<Utc>,
 }
@@ -227,8 +235,11 @@ pub(super) struct ReceiverControllerTargetRecord {
     pub(super) current_playback_catchup: Option<bool>,
     pub(super) current_playback_updated_at: Option<DateTime<Utc>>,
     pub(super) current_playback_paused: Option<bool>,
+    pub(super) current_playback_buffering: Option<bool>,
     pub(super) current_playback_position_seconds: Option<f64>,
     pub(super) current_playback_duration_seconds: Option<f64>,
+    pub(super) current_playback_error_message: Option<String>,
+    pub(super) last_public_origin: Option<String>,
     pub(super) revoked_at: Option<DateTime<Utc>>,
     pub(super) updated_at: DateTime<Utc>,
 }
@@ -241,6 +252,11 @@ async fn create_receiver_session(
     let device_name = payload.name.trim();
     let platform = payload.platform.trim();
     let app_kind = payload.app_kind.trim();
+    let provided_receiver_credential = payload
+        .receiver_credential
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
     if device_key.is_empty() || device_name.is_empty() || platform.is_empty() || app_kind.is_empty()
     {
         return Err(AppError::BadRequest(
@@ -249,7 +265,7 @@ async fn create_receiver_session(
     }
 
     let now = Utc::now();
-    let existing = if let Some(receiver_credential) = payload.receiver_credential.as_deref() {
+    let existing = if let Some(receiver_credential) = provided_receiver_credential {
         let hash = hash_receiver_token(receiver_credential);
         sqlx::query_as::<_, ReceiverDeviceRecord>(
             r#"
@@ -257,7 +273,9 @@ async fn create_receiver_session(
                    remembered, last_seen_at,
                    current_playback_title, current_playback_kind, current_playback_live,
                    current_playback_catchup, current_playback_updated_at, current_playback_paused,
-                   current_playback_position_seconds, current_playback_duration_seconds,
+                   current_playback_buffering, current_playback_position_seconds,
+                   current_playback_duration_seconds, current_playback_error_message,
+                   last_public_origin,
                    revoked_at, updated_at
             FROM receiver_devices
             WHERE receiver_credential_hash = $1 AND revoked_at IS NULL
@@ -269,6 +287,7 @@ async fn create_receiver_session(
     } else {
         None
     };
+    let authenticated_with_receiver_credential = existing.is_some();
 
     let record = if let Some(existing) = existing {
         sqlx::query_as::<_, ReceiverDeviceRecord>(
@@ -280,13 +299,15 @@ async fn create_receiver_session(
                     ELSE device_name
                 END,
                 platform = $4, form_factor_hint = $5,
-                app_kind = $6, last_seen_at = NOW(), updated_at = NOW()
+                app_kind = $6, last_public_origin = $7, last_seen_at = NOW(), updated_at = NOW()
             WHERE id = $1
             RETURNING id, owner_user_id, device_name, platform, form_factor_hint, app_kind,
                    remembered, last_seen_at,
                    current_playback_title, current_playback_kind, current_playback_live,
                    current_playback_catchup, current_playback_updated_at, current_playback_paused,
-                   current_playback_position_seconds, current_playback_duration_seconds,
+                   current_playback_buffering, current_playback_position_seconds,
+                   current_playback_duration_seconds, current_playback_error_message,
+                   last_public_origin,
                    revoked_at, updated_at
             "#,
         )
@@ -296,15 +317,16 @@ async fn create_receiver_session(
         .bind(platform)
         .bind(payload.form_factor_hint)
         .bind(app_kind)
+        .bind(payload.public_origin.as_deref())
         .fetch_one(&state.pool)
         .await?
     } else {
         sqlx::query_as::<_, ReceiverDeviceRecord>(
             r#"
             INSERT INTO receiver_devices (
-                device_key, device_name, platform, form_factor_hint, app_kind, last_seen_at, updated_at
+                device_key, device_name, platform, form_factor_hint, app_kind, last_public_origin, last_seen_at, updated_at
             )
-            VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
+            VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW())
             ON CONFLICT (device_key)
             DO UPDATE SET device_name = CASE
                               WHEN receiver_devices.owner_user_id IS NULL THEN EXCLUDED.device_name
@@ -313,13 +335,16 @@ async fn create_receiver_session(
                           platform = EXCLUDED.platform,
                           form_factor_hint = EXCLUDED.form_factor_hint,
                           app_kind = EXCLUDED.app_kind,
+                          last_public_origin = EXCLUDED.last_public_origin,
                           last_seen_at = NOW(),
                           updated_at = NOW()
             RETURNING id, owner_user_id, device_name, platform, form_factor_hint, app_kind,
                    remembered, last_seen_at,
                    current_playback_title, current_playback_kind, current_playback_live,
                    current_playback_catchup, current_playback_updated_at, current_playback_paused,
-                   current_playback_position_seconds, current_playback_duration_seconds,
+                   current_playback_buffering, current_playback_position_seconds,
+                   current_playback_duration_seconds, current_playback_error_message,
+                   last_public_origin,
                    revoked_at, updated_at
             "#,
         )
@@ -328,6 +353,7 @@ async fn create_receiver_session(
         .bind(platform)
         .bind(payload.form_factor_hint)
         .bind(app_kind)
+        .bind(payload.public_origin.as_deref())
         .fetch_one(&state.pool)
         .await?
     };
@@ -350,8 +376,31 @@ async fn create_receiver_session(
     .bind(record.id)
     .bind(hash_receiver_token(&session_token))
     .bind(expires_at)
-    .execute(&state.pool)
-    .await?;
+        .execute(&state.pool)
+        .await?;
+
+    let session_receiver_credential = if record.owner_user_id.is_some() && record.remembered {
+        if authenticated_with_receiver_credential {
+            provided_receiver_credential.map(str::to_owned)
+        } else {
+            let receiver_credential = generate_refresh_token();
+            sqlx::query(
+                r#"
+                UPDATE receiver_devices
+                SET receiver_credential_hash = $2,
+                    updated_at = NOW()
+                WHERE id = $1
+                "#,
+            )
+            .bind(record.id)
+            .bind(hash_receiver_token(&receiver_credential))
+            .execute(&state.pool)
+            .await?;
+            Some(receiver_credential)
+        }
+    } else {
+        None
+    };
 
     let pairing_code = if record.owner_user_id.is_none() {
         Some(refresh_pairing_code(&state.pool, record.id).await?)
@@ -362,10 +411,7 @@ async fn create_receiver_session(
     Ok(Json(ReceiverSessionResponse {
         session_token,
         expires_at,
-        receiver_credential: record
-            .remembered
-            .then(|| payload.receiver_credential.unwrap_or_default())
-            .filter(|value| !value.is_empty()),
+        receiver_credential: session_receiver_credential,
         device: receiver_device_response(&state, &record, None),
         pairing_code: pairing_code.as_ref().map(|value| value.code.clone()),
         paired: record.owner_user_id.is_some() && record.revoked_at.is_none(),
@@ -474,8 +520,10 @@ async fn update_receiver_playback_state(
             current_playback_catchup = $5,
             current_playback_updated_at = CASE WHEN $2 IS NULL THEN NULL ELSE NOW() END,
             current_playback_paused = $6,
-            current_playback_position_seconds = $7,
-            current_playback_duration_seconds = $8,
+            current_playback_buffering = $7,
+            current_playback_position_seconds = $8,
+            current_playback_duration_seconds = $9,
+            current_playback_error_message = $10,
             last_seen_at = NOW(),
             updated_at = NOW()
         WHERE id = $1
@@ -487,8 +535,10 @@ async fn update_receiver_playback_state(
     .bind(payload.live)
     .bind(payload.catchup)
     .bind(payload.paused)
+    .bind(payload.buffering)
     .bind(payload.position_seconds)
     .bind(payload.duration_seconds)
+    .bind(payload.error_message)
     .execute(&state.pool)
     .await?;
     Ok(StatusCode::NO_CONTENT)
@@ -501,19 +551,22 @@ async fn acknowledge_receiver_command(
     Json(payload): Json<RemoteCommandAckPayload>,
 ) -> Result<StatusCode, AppError> {
     let receiver = require_receiver_auth(&state, &headers).await?;
+    let normalized_status = normalize_command_status(&payload.status)?;
     let updated = sqlx::query(
         r#"
         UPDATE receiver_commands
         SET status = $2,
             error_message = $3,
             delivered_at = CASE WHEN $2 = 'delivered' THEN NOW() ELSE delivered_at END,
-            acknowledged_at = CASE WHEN $2 = 'acknowledged' THEN NOW() ELSE acknowledged_at END,
+            executing_at = CASE WHEN $2 = 'executing' THEN NOW() ELSE executing_at END,
+            acknowledged_at = CASE WHEN $2 = 'succeeded' THEN NOW() ELSE acknowledged_at END,
+            completed_at = CASE WHEN $2 IN ('succeeded', 'failed') THEN NOW() ELSE completed_at END,
             failed_at = CASE WHEN $2 = 'failed' THEN NOW() ELSE failed_at END
         WHERE id = $1 AND receiver_device_id = $4
         "#,
     )
     .bind(command_id)
-    .bind(payload.status)
+    .bind(normalized_status)
     .bind(payload.error_message)
     .bind(receiver.receiver_device_id)
     .execute(&state.pool)
@@ -523,6 +576,18 @@ async fn acknowledge_receiver_command(
         return Err(AppError::NotFound("Receiver command not found".to_string()));
     }
     Ok(StatusCode::NO_CONTENT)
+}
+
+fn normalize_command_status(status: &str) -> Result<&'static str, AppError> {
+    match status {
+        "delivered" => Ok("delivered"),
+        "executing" => Ok("executing"),
+        "succeeded" | "acknowledged" => Ok("succeeded"),
+        "failed" => Ok("failed"),
+        _ => Err(AppError::BadRequest(
+            "Unsupported receiver command status.".to_string(),
+        )),
+    }
 }
 
 async fn pair_receiver(
@@ -570,7 +635,9 @@ async fn pair_receiver(
                remembered, last_seen_at,
                current_playback_title, current_playback_kind, current_playback_live,
                current_playback_catchup, current_playback_updated_at, current_playback_paused,
-               current_playback_position_seconds, current_playback_duration_seconds,
+               current_playback_buffering, current_playback_position_seconds,
+               current_playback_duration_seconds, current_playback_error_message,
+               last_public_origin,
                revoked_at, updated_at
         "#,
     )
@@ -618,7 +685,9 @@ async fn list_remote_receivers(
                remembered, last_seen_at,
                current_playback_title, current_playback_kind, current_playback_live,
                current_playback_catchup, current_playback_updated_at, current_playback_paused,
-               current_playback_position_seconds, current_playback_duration_seconds,
+               current_playback_buffering, current_playback_position_seconds,
+               current_playback_duration_seconds, current_playback_error_message,
+               last_public_origin,
                revoked_at, updated_at
         FROM receiver_devices
         WHERE owner_user_id = $1 AND revoked_at IS NULL
@@ -771,6 +840,7 @@ async fn play_channel_remotely(
         auth.user_id,
         id,
         &target.app_kind,
+        target.last_public_origin.as_deref(),
     )
     .await?;
 
@@ -792,6 +862,7 @@ async fn play_program_remotely(
         auth.user_id,
         id,
         &target.app_kind,
+        target.last_public_origin.as_deref(),
     )
     .await?;
 
@@ -893,7 +964,9 @@ pub(super) async fn load_receiver_device(
                remembered, last_seen_at,
                current_playback_title, current_playback_kind, current_playback_live,
                current_playback_catchup, current_playback_updated_at, current_playback_paused,
-               current_playback_position_seconds, current_playback_duration_seconds,
+               current_playback_buffering, current_playback_position_seconds,
+               current_playback_duration_seconds, current_playback_error_message,
+               last_public_origin,
                revoked_at, updated_at
         FROM receiver_devices
         WHERE id = $1
@@ -928,8 +1001,11 @@ async fn load_receiver_controller_target_record(
           rd.current_playback_catchup,
           rd.current_playback_updated_at,
           rd.current_playback_paused,
+          rd.current_playback_buffering,
           rd.current_playback_position_seconds,
           rd.current_playback_duration_seconds,
+          rd.current_playback_error_message,
+          rd.last_public_origin,
           rd.revoked_at,
           rd.updated_at
         FROM receiver_controller_sessions rcs
@@ -962,8 +1038,11 @@ fn receiver_device_record_from_target(
         current_playback_catchup: record.current_playback_catchup,
         current_playback_updated_at: record.current_playback_updated_at,
         current_playback_paused: record.current_playback_paused,
+        current_playback_buffering: record.current_playback_buffering,
         current_playback_position_seconds: record.current_playback_position_seconds,
         current_playback_duration_seconds: record.current_playback_duration_seconds,
+        current_playback_error_message: record.current_playback_error_message,
+        last_public_origin: record.last_public_origin,
         revoked_at: record.revoked_at,
         updated_at: record.updated_at,
     }
@@ -989,25 +1068,83 @@ fn receiver_device_response(
         last_seen_at: record.last_seen_at,
         updated_at: record.updated_at,
         current_playback: (!playback_state_stale)
-            .then(|| {
-                record
-                    .current_playback_title
-                    .as_ref()
-                    .map(|title| ReceiverPlaybackStateResponse {
-                        title: title.clone(),
-                        source_kind: record.current_playback_kind.clone().unwrap_or_default(),
-                        live: record.current_playback_live.unwrap_or(false),
-                        catchup: record.current_playback_catchup.unwrap_or(false),
-                        updated_at: record
-                            .current_playback_updated_at
-                            .unwrap_or(record.updated_at),
-                        paused: record.current_playback_paused.unwrap_or(false),
-                        position_seconds: record.current_playback_position_seconds,
-                        duration_seconds: record.current_playback_duration_seconds,
-                    })
-            })
+            .then(|| playback_state_from_record(record))
             .flatten(),
         playback_state_stale,
+    }
+}
+
+fn playback_state_from_record(
+    record: &ReceiverDeviceRecord,
+) -> Option<ReceiverPlaybackStateResponse> {
+    record
+        .current_playback_title
+        .as_ref()
+        .map(|title| ReceiverPlaybackStateResponse {
+            title: title.clone(),
+            source_kind: record.current_playback_kind.clone().unwrap_or_default(),
+            live: record.current_playback_live.unwrap_or(false),
+            catchup: record.current_playback_catchup.unwrap_or(false),
+            updated_at: record
+                .current_playback_updated_at
+                .unwrap_or(record.updated_at),
+            paused: record.current_playback_paused.unwrap_or(false),
+            buffering: record.current_playback_buffering.unwrap_or(false),
+            position_seconds: record.current_playback_position_seconds,
+            duration_seconds: record.current_playback_duration_seconds,
+            error_message: record.current_playback_error_message.clone(),
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalize_command_status_accepts_legacy_acknowledged() {
+        assert_eq!(
+            normalize_command_status("acknowledged").unwrap(),
+            "succeeded"
+        );
+        assert_eq!(normalize_command_status("executing").unwrap(), "executing");
+        assert!(normalize_command_status("bogus").is_err());
+    }
+
+    #[test]
+    fn playback_state_from_record_includes_buffering_and_error() {
+        let now = Utc::now();
+        let record = ReceiverDeviceRecord {
+            id: Uuid::new_v4(),
+            owner_user_id: None,
+            device_name: "TV".to_string(),
+            platform: "android-tv".to_string(),
+            form_factor_hint: Some("tv".to_string()),
+            app_kind: "receiver-android-tv".to_string(),
+            remembered: true,
+            last_seen_at: now,
+            current_playback_title: Some("Arena 1".to_string()),
+            current_playback_kind: Some("hls".to_string()),
+            current_playback_live: Some(true),
+            current_playback_catchup: Some(false),
+            current_playback_updated_at: Some(now),
+            current_playback_paused: Some(false),
+            current_playback_buffering: Some(true),
+            current_playback_position_seconds: Some(12.0),
+            current_playback_duration_seconds: None,
+            current_playback_error_message: Some(
+                "The receiver could not decode this stream.".to_string(),
+            ),
+            last_public_origin: Some("http://192.168.0.67:5173".to_string()),
+            revoked_at: None,
+            updated_at: now,
+        };
+
+        let playback = playback_state_from_record(&record).expect("playback state");
+        assert!(playback.buffering);
+        assert_eq!(
+            playback.error_message.as_deref(),
+            Some("The receiver could not decode this stream."),
+        );
     }
 }
 

@@ -3,6 +3,11 @@ use super::playback::relay_tokens::{
     validate_relay_token,
 };
 use super::*;
+use futures_util::StreamExt;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 
 fn playback_diag_id(value: &str) -> String {
     let digest = Sha256::digest(value.as_bytes());
@@ -14,6 +19,23 @@ fn playback_diag_id(value: &str) -> String {
 
 fn relay_upstream_host(url: &Url) -> String {
     url.host_str().unwrap_or("unknown").to_string()
+}
+
+fn relay_header_value(headers: &HeaderMap, name: HeaderName) -> Option<String> {
+    headers
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .map(ToString::to_string)
+}
+
+fn upstream_header_value(
+    headers: &reqwest::header::HeaderMap,
+    name: reqwest::header::HeaderName,
+) -> Option<String> {
+    headers
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .map(ToString::to_string)
 }
 
 pub(super) fn router() -> Router<AppState> {
@@ -29,6 +51,7 @@ async fn relay_hls_playlist(
     Query(query): Query<RelayTokenQuery>,
 ) -> Result<Response, AppError> {
     let relay_token_id = playback_diag_id(&query.token);
+    let started_at = Instant::now();
     let relay = match validate_relay_token(&state, &query.token, RelayAssetKind::Hls).await {
         Ok(relay) => relay,
         Err(error) => {
@@ -63,6 +86,7 @@ async fn relay_hls_playlist(
         );
         AppError::Internal(anyhow!(error))
     })?;
+    let upstream_response_ms = started_at.elapsed().as_millis();
     let status = StatusCode::from_u16(response.status().as_u16())
         .map_err(|error| AppError::Internal(anyhow!(error)))?;
     let response_url = response.url().clone();
@@ -71,20 +95,18 @@ async fn relay_hls_playlist(
         .get(header::CONTENT_TYPE)
         .cloned()
         .unwrap_or_else(|| HeaderValue::from_static("application/vnd.apple.mpegurl"));
-    let bytes = response
-        .bytes()
-        .await
-        .map_err(|error| {
-            warn!(
-                component = "iptv-provider",
-                asset = "hls-playlist",
-                relay_token_id = %relay_token_id,
-                upstream_host = %upstream_host,
-                error = ?error,
-                "failed to read upstream HLS playlist body"
-            );
-            AppError::Internal(anyhow!(error))
-        })?;
+    let bytes = response.bytes().await.map_err(|error| {
+        warn!(
+            component = "iptv-provider",
+            asset = "hls-playlist",
+            relay_token_id = %relay_token_id,
+            upstream_host = %upstream_host,
+            error = ?error,
+            "failed to read upstream HLS playlist body"
+        );
+        AppError::Internal(anyhow!(error))
+    })?;
+    let upstream_body_ms = started_at.elapsed().as_millis();
     if !status.is_success() {
         warn!(
             component = "iptv-provider",
@@ -92,6 +114,9 @@ async fn relay_hls_playlist(
             relay_token_id = %relay_token_id,
             upstream_host = %upstream_host,
             status = %status,
+            upstream_response_ms,
+            upstream_body_ms,
+            response_bytes = bytes.len(),
             "IPTV provider returned a non-success HLS playlist response"
         );
         return relay_response_headers(
@@ -147,6 +172,20 @@ async fn relay_hls_playlist(
         );
         error
     })?;
+    info!(
+        component = "euripus-relay",
+        asset = "hls-playlist",
+        relay_token_id = %relay_token_id,
+        upstream_host = %upstream_host,
+        status = %status,
+        upstream_response_ms,
+        upstream_body_ms,
+        total_relay_ms = started_at.elapsed().as_millis(),
+        response_bytes = bytes.len(),
+        upstream_content_type = ?upstream_header_value(&upstream_headers, reqwest::header::CONTENT_TYPE),
+        upstream_cache_control = ?upstream_header_value(&upstream_headers, reqwest::header::CACHE_CONTROL),
+        "rewrote upstream HLS playlist into relay URLs"
+    );
 
     Response::builder()
         .status(StatusCode::OK)
@@ -175,7 +214,14 @@ async fn relay_raw_stream(
         }
     };
 
-    relay_stream_response(&state, relay.upstream_url, &headers, "raw-stream", &relay_token_id).await
+    relay_stream_response(
+        &state,
+        relay.upstream_url,
+        &headers,
+        "raw-stream",
+        &relay_token_id,
+    )
+    .await
 }
 
 async fn relay_asset(
@@ -197,7 +243,14 @@ async fn relay_asset(
         }
     };
 
-    relay_stream_response(&state, relay.upstream_url, &headers, "hls-asset", &relay_token_id).await
+    relay_stream_response(
+        &state,
+        relay.upstream_url,
+        &headers,
+        "hls-asset",
+        &relay_token_id,
+    )
+    .await
 }
 
 pub(super) async fn relay_stream_response(
@@ -208,6 +261,8 @@ pub(super) async fn relay_stream_response(
     relay_token_id: &str,
 ) -> Result<Response, AppError> {
     let upstream_host = relay_upstream_host(&upstream_url);
+    let started_at = Instant::now();
+    let request_range = relay_header_value(headers, header::RANGE);
     let response = relay_upstream_request(
         &state.relay_http_client,
         upstream_url,
@@ -227,9 +282,16 @@ pub(super) async fn relay_stream_response(
         );
         AppError::Internal(anyhow!(error))
     })?;
+    let upstream_response_ms = started_at.elapsed().as_millis();
     let status = StatusCode::from_u16(response.status().as_u16())
         .map_err(|error| AppError::Internal(anyhow!(error)))?;
     let upstream_headers = response.headers().clone();
+    let response_content_length =
+        upstream_header_value(&upstream_headers, reqwest::header::CONTENT_LENGTH);
+    let response_content_range =
+        upstream_header_value(&upstream_headers, reqwest::header::CONTENT_RANGE);
+    let response_content_type =
+        upstream_header_value(&upstream_headers, reqwest::header::CONTENT_TYPE);
     if !status.is_success() {
         warn!(
             component = "iptv-provider",
@@ -237,10 +299,62 @@ pub(super) async fn relay_stream_response(
             relay_token_id = %relay_token_id,
             upstream_host = %upstream_host,
             status = %status,
+            upstream_response_ms,
+            request_range = ?request_range,
+            response_content_length = ?response_content_length,
+            response_content_range = ?response_content_range,
             "IPTV provider returned a non-success stream response"
         );
+    } else {
+        info!(
+            component = "euripus-relay",
+            asset = asset,
+            relay_token_id = %relay_token_id,
+            upstream_host = %upstream_host,
+            status = %status,
+            upstream_response_ms,
+            request_range = ?request_range,
+            response_content_type = ?response_content_type,
+            response_content_length = ?response_content_length,
+            response_content_range = ?response_content_range,
+            "received upstream stream response headers"
+        );
     }
-    let body = Body::from_stream(response.bytes_stream());
+    let first_chunk_logged = Arc::new(AtomicBool::new(false));
+    let first_chunk_logged_for_stream = Arc::clone(&first_chunk_logged);
+    let asset_for_stream = asset.to_string();
+    let relay_token_id_for_stream = relay_token_id.to_string();
+    let upstream_host_for_stream = upstream_host.clone();
+    let body = Body::from_stream(response.bytes_stream().inspect(move |result| {
+        if first_chunk_logged_for_stream.swap(true, Ordering::Relaxed) {
+            return;
+        }
+
+        match result {
+            Ok(chunk) => {
+                info!(
+                    component = "euripus-relay",
+                    asset = %asset_for_stream,
+                    relay_token_id = %relay_token_id_for_stream,
+                    upstream_host = %upstream_host_for_stream,
+                    first_chunk_ms = started_at.elapsed().as_millis(),
+                    first_chunk_bytes = chunk.len(),
+                    "received first upstream stream chunk"
+                );
+            }
+            Err(error) => {
+                warn!(
+                    component = "iptv-provider",
+                    asset = %asset_for_stream,
+                    relay_token_id = %relay_token_id_for_stream,
+                    upstream_host = %upstream_host_for_stream,
+                    first_chunk_ms = started_at.elapsed().as_millis(),
+                    error = ?error,
+                    "upstream stream failed before the first chunk reached the relay response body"
+                );
+            }
+        }
+    }));
 
     let builder = relay_response_headers(
         Response::builder().status(status),

@@ -39,7 +39,8 @@ pub async fn run() -> Result<()> {
             .timeout(Duration::from_secs(30))
             .build()?,
         relay_http_client: reqwest::Client::builder()
-            .connect_timeout(Duration::from_secs(10))
+            .connect_timeout(Duration::from_secs(RELAY_UPSTREAM_CONNECT_TIMEOUT_SECONDS))
+            .read_timeout(Duration::from_secs(RELAY_UPSTREAM_READ_TIMEOUT_SECONDS))
             .build()?,
         meili: meili_setup.client,
         meili_readiness: Arc::new(RwLock::new(meili_setup.readiness)),

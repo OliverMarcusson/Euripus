@@ -114,6 +114,7 @@ pub(in crate::server_main) fn unsupported_playback(
 pub(in crate::server_main) fn playback_source_for_mode(
     state: &AppState,
     headers: &HeaderMap,
+    target_public_origin: Option<&str>,
     user_id: Uuid,
     profile_id: Uuid,
     target: PlaybackTarget,
@@ -135,7 +136,10 @@ pub(in crate::server_main) fn playback_source_for_mode(
     );
     let playback_mode = normalize_playback_mode(raw_playback_mode)?;
 
-    let request_base_url = request_base_url(&state.config, headers)?;
+    let request_base_url = target_public_origin
+        .map(|origin| Url::parse(origin).map_err(|error| AppError::Internal(anyhow!(error))))
+        .transpose()?
+        .unwrap_or(request_base_url(&state.config, headers)?);
     let relay_required_for_android_tv = matches!(target, PlaybackTarget::ReceiverAndroidTv);
     let relay_required_for_https = matches!(target, PlaybackTarget::Browser)
         && should_force_relay_for_secure_request(&request_base_url, &upstream_url);
@@ -325,12 +329,9 @@ mod tests {
 
     #[test]
     fn resolve_effective_playback_format_for_browser_forces_hls() {
-        let format = resolve_effective_playback_format_for_target(
-            PlaybackTarget::Browser,
-            "ts",
-            Some("ts"),
-        )
-        .expect("browser playback format");
+        let format =
+            resolve_effective_playback_format_for_target(PlaybackTarget::Browser, "ts", Some("ts"))
+                .expect("browser playback format");
 
         assert_eq!(format, PlaybackStreamFormat::Hls);
     }

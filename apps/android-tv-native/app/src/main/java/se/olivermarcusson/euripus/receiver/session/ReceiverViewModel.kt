@@ -27,6 +27,7 @@ import se.olivermarcusson.euripus.receiver.data.api.ReceiverSessionPayloadDto
 import se.olivermarcusson.euripus.receiver.data.api.RemoteCommandAckDto
 import se.olivermarcusson.euripus.receiver.data.events.ReceiverAuthExpiredException
 import se.olivermarcusson.euripus.receiver.data.events.ReceiverEventStream
+import se.olivermarcusson.euripus.receiver.data.player.PlaybackStateHeuristics
 import se.olivermarcusson.euripus.receiver.data.player.ReceiverPlayerController
 import se.olivermarcusson.euripus.receiver.data.storage.ReceiverPreferences
 import se.olivermarcusson.euripus.receiver.data.storage.ReceiverPreferencesRepository
@@ -35,7 +36,22 @@ import se.olivermarcusson.euripus.receiver.domain.ReceiverUiState
 
 private const val TAG = "ReceiverViewModel"
 private const val HEARTBEAT_INTERVAL_MS = 15_000L
-private const val PLAYBACK_SYNC_INTERVAL_MS = 1_000L
+private const val PLAYBACK_SYNC_INTERVAL_MS = 5_000L
+private const val SEEK_COMPLETION_TOLERANCE_SECONDS = 1.5
+
+private enum class PendingCommandKind {
+    PLAYBACK_SOURCE,
+    PLAY,
+    PAUSE,
+    SEEK,
+    STOP,
+}
+
+private data class PendingCommand(
+    val id: String,
+    val kind: PendingCommandKind,
+    val seekPositionSeconds: Double? = null,
+)
 
 class ReceiverViewModel(application: Application) : AndroidViewModel(application) {
     private val preferencesRepository = ReceiverPreferencesRepository(application)
@@ -61,6 +77,7 @@ class ReceiverViewModel(application: Application) : AndroidViewModel(application
     private var heartbeatJob: Job? = null
     private var eventJob: Job? = null
     private var playbackSyncJob: Job? = null
+    private var pendingCommand: PendingCommand? = null
 
     init {
         viewModelScope.launch {
@@ -85,19 +102,17 @@ class ReceiverViewModel(application: Application) : AndroidViewModel(application
 
         viewModelScope.launch {
             playerController.currentSource.collectLatest { source ->
-                mutableUiState.update { state ->
-                    state.copy(
-                        source = source,
-                        status = when {
-                            state.status == ReceiverStatus.NEEDS_SERVER_CONFIG -> state.status
-                            state.status == ReceiverStatus.STARTING_SESSION -> state.status
-                            state.pairingCode != null -> ReceiverStatus.PAIRING
-                            source == null -> ReceiverStatus.IDLE
-                            source.kind == "unsupported" -> ReceiverStatus.ERROR
-                            else -> ReceiverStatus.PLAYING
-                        },
-                    )
-                }
+                syncUiFromPlaybackState(source = source)
+                runCatching { maybeCompletePendingCommand() }
+                    .onFailure { error -> Log.w(TAG, "Failed to finish pending command", error) }
+            }
+        }
+
+        viewModelScope.launch {
+            playerController.snapshot.collectLatest {
+                syncUiFromPlaybackState()
+                runCatching { maybeCompletePendingCommand() }
+                    .onFailure { error -> Log.w(TAG, "Failed to finish pending command", error) }
             }
         }
     }
@@ -299,6 +314,7 @@ class ReceiverViewModel(application: Application) : AndroidViewModel(application
                     platform = "android-tv",
                     formFactorHint = "tv",
                     appKind = "receiver-android-tv",
+                    publicOrigin = config.publicOrigin,
                     receiverCredential = currentPreferences.receiverCredential,
                 ),
             )
@@ -398,28 +414,39 @@ class ReceiverViewModel(application: Application) : AndroidViewModel(application
 
         when (event.eventType) {
             "playback_command" -> {
-                event.source?.let(::setPlaybackSource)
-                apiService.acknowledgeCommand(
+                val source = event.source ?: return
+                beginPendingCommand(
                     config = config,
-                    sessionToken = token,
+                    token = token,
                     commandId = event.command.id,
-                    payload = RemoteCommandAckDto(status = "acknowledged"),
+                    kind = PendingCommandKind.PLAYBACK_SOURCE,
                 )
+                setPlaybackSource(source)
+                maybeCompletePendingCommand()
             }
 
             "transport_command" -> {
+                val commandKind = when (event.command.commandType) {
+                    "pause" -> PendingCommandKind.PAUSE
+                    "play" -> PendingCommandKind.PLAY
+                    "seek" -> PendingCommandKind.SEEK
+                    "stop" -> PendingCommandKind.STOP
+                    else -> null
+                } ?: return
+                beginPendingCommand(
+                    config = config,
+                    token = token,
+                    commandId = event.command.id,
+                    kind = commandKind,
+                    seekPositionSeconds = event.positionSeconds,
+                )
                 when (event.command.commandType) {
                     "pause" -> playerController.pause()
                     "play" -> playerController.playFromTvRemote()
                     "seek" -> event.positionSeconds?.let(playerController::seekTo)
                     "stop" -> playerController.stopPlayback()
                 }
-                apiService.acknowledgeCommand(
-                    config = config,
-                    sessionToken = token,
-                    commandId = event.command.id,
-                    payload = RemoteCommandAckDto(status = "acknowledged"),
-                )
+                maybeCompletePendingCommand()
             }
 
             "pairing_complete" -> {
@@ -446,29 +473,12 @@ class ReceiverViewModel(application: Application) : AndroidViewModel(application
     private fun setPlaybackSource(source: PlaybackSourceDto) {
         if (source.kind == "unsupported") {
             playerController.markUnsupported(source)
-            mutableUiState.update {
-                it.copy(
-                    source = source,
-                    status = ReceiverStatus.ERROR,
-                    pairingCode = null,
-                    errorMessage = source.unsupportedReason
-                        ?: "This stream is not supported on the receiver.",
-                    detailMessage = source.title,
-                )
-            }
+            syncUiFromPlaybackState(source = source)
             return
         }
 
         playerController.setSource(source)
-        mutableUiState.update {
-            it.copy(
-                source = source,
-                pairingCode = null,
-                status = ReceiverStatus.PLAYING,
-                errorMessage = null,
-                detailMessage = null,
-            )
-        }
+        syncUiFromPlaybackState(source = source)
     }
 
     private suspend fun syncPlaybackStateOnce(token: String) {
@@ -489,8 +499,10 @@ class ReceiverViewModel(application: Application) : AndroidViewModel(application
                     live = source?.live,
                     catchup = source?.catchup,
                     paused = snapshot.paused,
+                    buffering = snapshot.buffering,
                     positionSeconds = snapshot.positionSeconds,
                     durationSeconds = snapshot.durationSeconds,
+                    errorMessage = snapshot.errorMessage,
                 ),
             )
         }.onFailure { error ->
@@ -501,12 +513,152 @@ class ReceiverViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
+    private fun syncUiFromPlaybackState(source: PlaybackSourceDto? = playerController.currentSource.value) {
+        val snapshot = playerController.snapshot.value
+        mutableUiState.update { state ->
+            val nextStatus = when {
+                state.status == ReceiverStatus.NEEDS_SERVER_CONFIG -> state.status
+                state.status == ReceiverStatus.STARTING_SESSION -> state.status
+                state.pairingCode != null -> ReceiverStatus.PAIRING
+                source == null -> ReceiverStatus.IDLE
+                source.kind == "unsupported" -> ReceiverStatus.ERROR
+                snapshot.errorMessage != null -> ReceiverStatus.ERROR
+                else -> ReceiverStatus.PLAYING
+            }
+            state.copy(
+                source = source,
+                pairingCode = if (source != null) null else state.pairingCode,
+                status = nextStatus,
+                errorMessage = when {
+                    source?.kind == "unsupported" -> source.unsupportedReason
+                        ?: "This stream is not supported on the receiver."
+                    snapshot.errorMessage != null -> snapshot.errorMessage
+                    state.status == ReceiverStatus.NEEDS_SERVER_CONFIG ||
+                        state.status == ReceiverStatus.STARTING_SESSION ||
+                        state.pairingCode != null -> state.errorMessage
+                    else -> null
+                },
+                detailMessage = when {
+                    source?.kind == "unsupported" -> source.title
+                    snapshot.errorMessage != null -> source?.title
+                    nextStatus == ReceiverStatus.PLAYING && snapshot.buffering -> "Buffering stream..."
+                    nextStatus == ReceiverStatus.IDLE && state.detailMessage.isNullOrBlank() -> "Receiver is ready."
+                    nextStatus == ReceiverStatus.PLAYING -> null
+                    else -> state.detailMessage
+                },
+            )
+        }
+    }
+
+    private suspend fun beginPendingCommand(
+        config: ReceiverEndpointConfig,
+        token: String,
+        commandId: String,
+        kind: PendingCommandKind,
+        seekPositionSeconds: Double? = null,
+    ) {
+        pendingCommand = PendingCommand(
+            id = commandId,
+            kind = kind,
+            seekPositionSeconds = seekPositionSeconds,
+        )
+        apiService.acknowledgeCommand(
+            config = config,
+            sessionToken = token,
+            commandId = commandId,
+            payload = RemoteCommandAckDto(status = "executing"),
+        )
+    }
+
+    private suspend fun maybeCompletePendingCommand() {
+        val pending = pendingCommand ?: return
+        val config = endpointConfig ?: return
+        val token = sessionToken ?: return
+        val source = playerController.currentSource.value
+        val snapshot = playerController.snapshot.value
+
+        if (source?.kind == "unsupported") {
+            finishPendingCommand(
+                config = config,
+                token = token,
+                status = "failed",
+                errorMessage = source.unsupportedReason ?: "This stream is not supported on the receiver.",
+            )
+            return
+        }
+
+        if (snapshot.errorMessage != null) {
+            finishPendingCommand(
+                config = config,
+                token = token,
+                status = "failed",
+                errorMessage = snapshot.errorMessage,
+            )
+            return
+        }
+
+        when (pending.kind) {
+            PendingCommandKind.PLAYBACK_SOURCE -> {
+                if (playerController.isReadyForPlayback()) {
+                    finishPendingCommand(config, token, "succeeded")
+                }
+            }
+
+            PendingCommandKind.PLAY -> {
+                if (playerController.isReadyForPlayback() && !snapshot.paused) {
+                    finishPendingCommand(config, token, "succeeded")
+                }
+            }
+
+            PendingCommandKind.PAUSE -> {
+                if (source != null && snapshot.paused && !snapshot.buffering) {
+                    finishPendingCommand(config, token, "succeeded")
+                }
+            }
+
+            PendingCommandKind.SEEK -> {
+                if (PlaybackStateHeuristics.seekCompleted(
+                        targetSeconds = pending.seekPositionSeconds,
+                        positionSeconds = snapshot.positionSeconds,
+                        buffering = snapshot.buffering,
+                        toleranceSeconds = SEEK_COMPLETION_TOLERANCE_SECONDS,
+                    )
+                ) {
+                    finishPendingCommand(config, token, "succeeded")
+                }
+            }
+
+            PendingCommandKind.STOP -> {
+                if (source == null) {
+                    finishPendingCommand(config, token, "succeeded")
+                }
+            }
+        }
+    }
+
+    private suspend fun finishPendingCommand(
+        config: ReceiverEndpointConfig,
+        token: String,
+        status: String,
+        errorMessage: String? = null,
+    ) {
+        val pending = pendingCommand ?: return
+        apiService.acknowledgeCommand(
+            config = config,
+            sessionToken = token,
+            commandId = pending.id,
+            payload = RemoteCommandAckDto(status = status, errorMessage = errorMessage),
+        )
+        pendingCommand = null
+    }
+
     private suspend fun handleSessionExpired(token: String) {
         if (sessionToken != token) {
             return
         }
         cancelSessionLoops()
         sessionToken = null
+        pendingCommand = null
         currentPreferences = currentPreferences.copy(receiverCredential = null)
         preferencesRepository.saveReceiverCredential(null)
         playerController.stopPlayback()
@@ -561,6 +713,7 @@ class ReceiverViewModel(application: Application) : AndroidViewModel(application
         heartbeatJob?.cancel()
         eventJob?.cancel()
         playbackSyncJob?.cancel()
+        pendingCommand = null
         heartbeatJob = null
         eventJob = null
         playbackSyncJob = null

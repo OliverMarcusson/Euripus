@@ -29,8 +29,10 @@ data class ReceiverPlaybackStateDto(
     val catchup: Boolean,
     val updatedAt: String,
     val paused: Boolean,
+    val buffering: Boolean,
     val positionSeconds: Double? = null,
     val durationSeconds: Double? = null,
+    val errorMessage: String? = null,
 )
 
 @Serializable
@@ -75,6 +77,7 @@ data class ReceiverSessionPayloadDto(
     val platform: String,
     val formFactorHint: String? = null,
     val appKind: String,
+    val publicOrigin: String? = null,
     val receiverCredential: String? = null,
 )
 
@@ -102,8 +105,10 @@ data class ReceiverPlaybackStatePayloadDto(
     val live: Boolean? = null,
     val catchup: Boolean? = null,
     val paused: Boolean? = null,
+    val buffering: Boolean? = null,
     val positionSeconds: Double? = null,
     val durationSeconds: Double? = null,
+    val errorMessage: String? = null,
 )
 
 @Serializable

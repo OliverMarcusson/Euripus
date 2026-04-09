@@ -75,8 +75,7 @@ struct XtreamChannelPayload {
 }
 
 const BROWSER_HLS_PROBE_TIMEOUT: Duration = Duration::from_secs(8);
-const BROWSER_HLS_WARNING_MESSAGE: &str =
-    "Provider credentials validated, but Euripus could not verify browser HLS playback. Web playback may be unavailable while receiver/native playback can still work.";
+const BROWSER_HLS_WARNING_MESSAGE: &str = "Provider credentials validated, but Euripus could not verify browser HLS playback. Web playback may be unavailable while receiver/native playback can still work.";
 
 pub fn browser_hls_warning_message() -> &'static str {
     BROWSER_HLS_WARNING_MESSAGE
