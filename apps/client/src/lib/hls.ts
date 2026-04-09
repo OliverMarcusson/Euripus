@@ -1,4 +1,4 @@
-import Hls, { type ErrorData, type HlsConfig } from "hls.js";
+import Hls, { type ErrorData, type HlsConfig, type Level } from "hls.js";
 
 export const IPTV_HLS_CONFIG = {
   lowLatencyMode: false,
@@ -20,11 +20,66 @@ type HlsErrorRecoveryState = {
   mediaRecoveryAttempts: number;
 };
 
+export const AUTO_HLS_QUALITY = 0;
+
+export type HlsQualityOption = {
+  value: number;
+  label: string;
+  level: number;
+  bitrate: number;
+};
+
 type HlsErrorController = Pick<Hls, "destroy" | "recoverMediaError" | "startLoad">;
 type HlsLiveSyncController = Pick<Hls, "liveSyncPosition">;
-type HlsSession = {
+export type HlsSession = {
+  readonly qualityOptions: HlsQualityOption[];
   destroy: () => void;
+  getCurrentQuality: () => number;
+  onQualitiesChanged: (
+    listener: (options: HlsQualityOption[]) => void,
+  ) => () => void;
+  setQuality: (quality: number) => void;
 };
+
+function getQualityValue(level: Pick<Level, "height" | "bitrate">) {
+  if (typeof level.height === "number" && Number.isFinite(level.height) && level.height > 0) {
+    return level.height;
+  }
+
+  const bitrateKbps = Math.round(level.bitrate / 1000);
+  return Math.max(bitrateKbps, 1);
+}
+
+export function getIptvHlsQualityLabel(level: Pick<Level, "height" | "bitrate">) {
+  if (typeof level.height === "number" && Number.isFinite(level.height) && level.height > 0) {
+    return `${level.height}p`;
+  }
+
+  return `${Math.max(Math.round(level.bitrate / 1000), 1)} kbps`;
+}
+
+export function getIptvHlsQualityOptions(
+  levels: Array<Pick<Level, "height" | "bitrate">>,
+) {
+  const optionsByValue = new Map<number, HlsQualityOption>();
+
+  levels.forEach((level, index) => {
+    const value = getQualityValue(level);
+    const existing = optionsByValue.get(value);
+    if (existing && existing.bitrate >= level.bitrate) {
+      return;
+    }
+
+    optionsByValue.set(value, {
+      value,
+      label: getIptvHlsQualityLabel(level),
+      level: index,
+      bitrate: level.bitrate,
+    });
+  });
+
+  return Array.from(optionsByValue.values()).sort((left, right) => right.value - left.value);
+}
 
 export function isIptvHlsSupported() {
   return Hls.isSupported();
@@ -127,10 +182,30 @@ export function createIptvHls(
 ): HlsSession {
   const hls = new Hls(IPTV_HLS_CONFIG);
   const recoveryState: HlsErrorRecoveryState = { mediaRecoveryAttempts: 0 };
+  const qualityListeners = new Set<(options: HlsQualityOption[]) => void>();
+  let currentQuality = AUTO_HLS_QUALITY;
+  let qualityOptions = getIptvHlsQualityOptions(hls.levels);
 
-  hls.on(Hls.Events.ERROR, (_event, data) => {
+  const notifyQualityListeners = () => {
+    qualityListeners.forEach((listener) => {
+      listener(qualityOptions);
+    });
+  };
+
+  const publishQualityOptions = () => {
+    qualityOptions = getIptvHlsQualityOptions(hls.levels);
+    if (
+      currentQuality !== AUTO_HLS_QUALITY &&
+      !qualityOptions.some((option) => option.value === currentQuality)
+    ) {
+      currentQuality = AUTO_HLS_QUALITY;
+    }
+    notifyQualityListeners();
+  };
+
+  const handleError = (_event: string, data: ErrorData) => {
     handleIptvHlsError(hls, data, recoveryState);
-  });
+  };
 
   const handleLiveUpdate = () => {
     if (!live) {
@@ -156,11 +231,25 @@ export function createIptvHls(
     }
   };
 
+  const handleManifestParsed = () => {
+    publishQualityOptions();
+    if (!live) {
+      return;
+    }
+
+    syncLivePlaybackPosition(video, hls, { force: true });
+    updateLivePlaybackRate(video, hls);
+  };
+
+  const handleLevelsUpdated = () => {
+    publishQualityOptions();
+  };
+
+  hls.on(Hls.Events.ERROR, handleError);
+  hls.on(Hls.Events.MANIFEST_PARSED, handleManifestParsed);
+  hls.on(Hls.Events.LEVELS_UPDATED, handleLevelsUpdated);
+
   if (live) {
-    hls.on(Hls.Events.MANIFEST_PARSED, () => {
-      syncLivePlaybackPosition(video, hls, { force: true });
-      updateLivePlaybackRate(video, hls);
-    });
     hls.on(Hls.Events.LEVEL_UPDATED, handleLiveUpdate);
     video.addEventListener("timeupdate", handleLiveUpdate);
     video.addEventListener("seeking", handleLiveSeek);
@@ -171,11 +260,44 @@ export function createIptvHls(
   hls.attachMedia(video);
 
   return {
+    get qualityOptions() {
+      return qualityOptions;
+    },
+    getCurrentQuality() {
+      return currentQuality;
+    },
+    onQualitiesChanged(listener) {
+      qualityListeners.add(listener);
+      listener(qualityOptions);
+      return () => {
+        qualityListeners.delete(listener);
+      };
+    },
+    setQuality(quality) {
+      if (quality === AUTO_HLS_QUALITY) {
+        currentQuality = AUTO_HLS_QUALITY;
+        hls.currentLevel = -1;
+        return;
+      }
+
+      const nextQuality = qualityOptions.find((option) => option.value === quality);
+      if (!nextQuality) {
+        return;
+      }
+
+      currentQuality = nextQuality.value;
+      hls.currentLevel = nextQuality.level;
+    },
     destroy() {
+      qualityListeners.clear();
+      hls.off(Hls.Events.ERROR, handleError);
+      hls.off(Hls.Events.MANIFEST_PARSED, handleManifestParsed);
+      hls.off(Hls.Events.LEVELS_UPDATED, handleLevelsUpdated);
       if (live) {
         video.removeEventListener("timeupdate", handleLiveUpdate);
         video.removeEventListener("seeking", handleLiveSeek);
         video.removeEventListener("pause", handlePause);
+        hls.off(Hls.Events.LEVEL_UPDATED, handleLiveUpdate);
       }
       if (video.playbackRate !== 1) {
         video.playbackRate = 1;

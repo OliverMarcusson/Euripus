@@ -15,7 +15,7 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@/components/ui/empty";
-import { createIptvHls, isIptvHlsSupported } from "@/lib/hls";
+import { PlyrSurface } from "@/components/player/plyr-surface";
 
 const RECEIVER_STORAGE_KEY = "euripus-receiver-device";
 const RECEIVER_HEARTBEAT_MS = 15_000;
@@ -169,27 +169,6 @@ export function ReceiverPage() {
   }, [initial.deviceKey, session?.sessionToken]);
 
   useEffect(() => {
-    const video = videoRef.current;
-    if (!video || !source || source.kind === "unsupported") {
-      return;
-    }
-
-    video.removeAttribute("src");
-    video.load();
-
-    if (source.kind === "hls" && isIptvHlsSupported()) {
-      const hls = createIptvHls(video, source.url, { live: source.live });
-      return () => hls.destroy();
-    }
-
-    video.src = source.url;
-    return () => {
-      video.removeAttribute("src");
-      video.load();
-    };
-  }, [source]);
-
-  useEffect(() => {
     if (!session?.sessionToken) {
       return;
     }
@@ -282,14 +261,16 @@ export function ReceiverPage() {
           </div>
         </main>
       ) : (
-        <video
-          ref={videoRef}
-          controls
-          autoPlay
-          playsInline
-          className="relative h-screen w-screen bg-black object-contain"
-          aria-label={`Playing ${source.title}`}
-        />
+        <div className="euripus-plyr-shell euripus-plyr-shell--receiver relative h-screen w-screen">
+          <PlyrSurface
+            ariaLabel={`Playing ${source.title}`}
+            className="contents"
+            source={source}
+            uiMode="receiver"
+            videoClassName="euripus-plyr-media relative h-screen w-screen bg-black object-contain"
+            videoRef={videoRef}
+          />
+        </div>
       )}
     </div>
   );

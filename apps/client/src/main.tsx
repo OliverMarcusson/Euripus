@@ -10,6 +10,7 @@ import { useThemeSync } from "@/hooks/use-theme-sync";
 import { registerPwaServiceWorker } from "@/lib/pwa";
 import { useThemeStore } from "@/store/theme-store";
 import "./index.css";
+import "plyr/dist/plyr.css";
 
 const queryClient = new QueryClient();
 

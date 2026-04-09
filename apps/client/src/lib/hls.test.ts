@@ -2,6 +2,8 @@ import Hls, { type ErrorData } from "hls.js";
 import { describe, expect, it, vi } from "vitest";
 import {
   IPTV_HLS_CONFIG,
+  getIptvHlsQualityLabel,
+  getIptvHlsQualityOptions,
   handleIptvHlsError,
   syncLivePlaybackPosition,
   updateLivePlaybackRate,
@@ -103,5 +105,27 @@ describe("IPTV HLS helpers", () => {
     updateLivePlaybackRate(video, { liveSyncPosition: 102.5 });
 
     expect(video.playbackRate).toBe(1.05);
+  });
+
+  it("formats quality labels from resolution or bitrate", () => {
+    expect(
+      getIptvHlsQualityLabel({ height: 1080, bitrate: 4_200_000 }),
+    ).toBe("1080p");
+    expect(
+      getIptvHlsQualityLabel({ height: 0, bitrate: 768_000 }),
+    ).toBe("768 kbps");
+  });
+
+  it("deduplicates HLS quality options by visible label value", () => {
+    expect(
+      getIptvHlsQualityOptions([
+        { height: 720, bitrate: 2_500_000 },
+        { height: 1080, bitrate: 4_500_000 },
+        { height: 720, bitrate: 3_100_000 },
+      ]),
+    ).toEqual([
+      { value: 1080, label: "1080p", level: 1, bitrate: 4_500_000 },
+      { value: 720, label: "720p", level: 2, bitrate: 3_100_000 },
+    ]);
   });
 });
