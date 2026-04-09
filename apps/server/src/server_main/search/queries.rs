@@ -37,7 +37,18 @@ pub(in crate::server_main) async fn search_channels_postgres(
     term: &str,
     offset: i64,
     limit: i64,
+    visible_channel_ids: &[Uuid],
 ) -> Result<ChannelSearchResponse, AppError> {
+    if visible_channel_ids.is_empty() {
+        return Ok(ChannelSearchResponse {
+            query: term.to_string(),
+            backend: "postgres".to_string(),
+            next_offset: None,
+            total_count: 0,
+            items: Vec::new(),
+        });
+    }
+
     let rows = sqlx::query_as::<_, ChannelSearchRow>(
         r#"
         WITH matches AS (
@@ -51,8 +62,10 @@ pub(in crate::server_main) async fn search_channels_postgres(
                 sd.title ASC
             ) AS ordinal
           FROM search_documents sd
+          JOIN channels c ON c.id = sd.entity_id
           WHERE sd.user_id = $1
             AND sd.entity_type = 'channel'
+            AND c.id = ANY($5)
             AND (sd.tsv @@ plainto_tsquery('simple', $2) OR sd.search_text % $2)
         ),
         page AS (
@@ -76,8 +89,8 @@ pub(in crate::server_main) async fn search_channels_postgres(
             FROM programs p
             WHERE p.user_id = c.user_id
               AND p.channel_id = c.id
-              AND p.end_at > NOW() - ($5 * INTERVAL '1 hour')
-              AND p.start_at < NOW() + ($6 * INTERVAL '1 day')
+              AND p.end_at > NOW() - ($6 * INTERVAL '1 hour')
+              AND p.start_at < NOW() + ($7 * INTERVAL '1 day')
           ) AS has_epg,
           c.has_catchup,
           c.archive_duration_hours,
@@ -96,6 +109,7 @@ pub(in crate::server_main) async fn search_channels_postgres(
     .bind(term)
     .bind(offset)
     .bind(limit)
+    .bind(visible_channel_ids)
     .bind(EPG_RETENTION_PAST_HOURS)
     .bind(EPG_RETENTION_FUTURE_DAYS)
     .fetch_all(&state.pool)
@@ -135,6 +149,7 @@ pub(in crate::server_main) async fn search_programs_postgres(
     term: &str,
     offset: i64,
     limit: i64,
+    visible_channel_ids: &[Uuid],
 ) -> Result<ProgramSearchResponse, AppError> {
     let rows = sqlx::query_as::<_, ProgramSearchRow>(
         r#"
@@ -159,6 +174,10 @@ pub(in crate::server_main) async fn search_programs_postgres(
           JOIN programs p ON p.id = sd.entity_id
           WHERE sd.user_id = $1
             AND sd.entity_type = 'program'
+            AND (
+              p.channel_id IS NULL
+              OR p.channel_id = ANY($5)
+            )
             AND (sd.tsv @@ plainto_tsquery('simple', $2) OR sd.search_text % $2)
         ),
         page AS (
@@ -187,6 +206,7 @@ pub(in crate::server_main) async fn search_programs_postgres(
     .bind(term)
     .bind(offset)
     .bind(limit)
+    .bind(visible_channel_ids)
     .fetch_all(pool)
     .await?;
     let total_count = rows.first().map(|row| row.total_count).unwrap_or(0);
