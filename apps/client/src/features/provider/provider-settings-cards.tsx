@@ -56,7 +56,7 @@ export function ProviderHealthCard({
           detail={formatDateTime(provider?.lastSyncAt ?? null)}
         />
         <Separator />
-        <StatusRow label="Output format" value={outputFormat} />
+        <StatusRow label="Receiver/native format" value={outputFormat} />
         <Separator />
         <StatusRow label="Playback routing" value={playbackMode} />
         <Separator />

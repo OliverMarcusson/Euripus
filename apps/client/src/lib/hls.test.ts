@@ -13,12 +13,13 @@ describe("IPTV HLS helpers", () => {
   it("uses the tuned IPTV buffering configuration", () => {
     expect(IPTV_HLS_CONFIG).toMatchObject({
       lowLatencyMode: false,
-      liveSyncDurationCount: 2,
-      liveMaxLatencyDurationCount: 4,
-      maxBufferLength: 10,
-      backBufferLength: 16,
-      manifestLoadingTimeOut: 12_000,
-      fragLoadingTimeOut: 20_000,
+      liveSyncDurationCount: 10,
+      liveMaxLatencyDurationCount: 20,
+      maxBufferLength: 60,
+      backBufferLength: 90,
+      nudgeOnVideoHole: true,
+      manifestLoadingTimeOut: 15_000,
+      fragLoadingTimeOut: 25_000,
     });
   });
 
@@ -84,17 +85,17 @@ describe("IPTV HLS helpers", () => {
     expect(controller.recoverMediaError).not.toHaveBeenCalled();
   });
 
-  it("snaps live playback closer to the live sync position when drift is large", () => {
+  it("does not force-seek live playback toward the live sync position", () => {
     const video = {
       currentTime: 100,
     } as unknown as HTMLVideoElement;
 
     syncLivePlaybackPosition(video, { liveSyncPosition: 106 });
 
-    expect(video.currentTime).toBeCloseTo(105.5);
+    expect(video.currentTime).toBe(100);
   });
 
-  it("increases playback rate slightly when live playback drifts behind", () => {
+  it("does not speed up live playback to chase the live edge", () => {
     const video = {
       currentTime: 100,
       paused: false,
@@ -107,7 +108,7 @@ describe("IPTV HLS helpers", () => {
 
     updateLivePlaybackRate(video, { liveSyncPosition: 102.5 });
 
-    expect(video.playbackRate).toBe(1.05);
+    expect(video.playbackRate).toBe(1);
   });
 
   it("formats quality labels from resolution or bitrate", () => {

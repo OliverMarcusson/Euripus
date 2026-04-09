@@ -215,6 +215,18 @@ pub(in crate::server_main) fn resolve_effective_playback_format(
     })
 }
 
+pub(in crate::server_main) fn resolve_effective_playback_format_for_target(
+    target: PlaybackTarget,
+    output_format: &str,
+    legacy_stream_extension: Option<&str>,
+) -> Result<PlaybackStreamFormat, AppError> {
+    if matches!(target, PlaybackTarget::Browser) {
+        return Ok(PlaybackStreamFormat::Hls);
+    }
+
+    resolve_effective_playback_format(output_format, legacy_stream_extension)
+}
+
 pub(in crate::server_main) fn playback_kind_for_format(
     format: PlaybackStreamFormat,
 ) -> &'static str {
@@ -307,6 +319,18 @@ mod tests {
     #[test]
     fn resolve_effective_playback_format_uses_saved_output_format_when_channel_extension_missing() {
         let format = resolve_effective_playback_format("m3u8", None).expect("playback format");
+
+        assert_eq!(format, PlaybackStreamFormat::Hls);
+    }
+
+    #[test]
+    fn resolve_effective_playback_format_for_browser_forces_hls() {
+        let format = resolve_effective_playback_format_for_target(
+            PlaybackTarget::Browser,
+            "ts",
+            Some("ts"),
+        )
+        .expect("browser playback format");
 
         assert_eq!(format, PlaybackStreamFormat::Hls);
     }
