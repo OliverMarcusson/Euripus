@@ -16,10 +16,11 @@ export function useGuidePageState() {
   const [forcedVisibleCategoryId, setForcedVisibleCategoryId] = useState<string | null>(null);
   const [filterInput, setFilterInput] = useState("");
   const [appliedFilter, setAppliedFilter] = useState("");
+  const [showOnlyChannelsWithEpg, setShowOnlyChannelsWithEpg] = useState(false);
 
   const guideQuery = useQuery({
-    queryKey: ["guide", "overview"],
-    queryFn: getGuide,
+    queryKey: ["guide", "overview", { withEpgOnly: showOnlyChannelsWithEpg }],
+    queryFn: () => getGuide(showOnlyChannelsWithEpg),
   });
   const preferencesQuery = useQuery({
     queryKey: ["guide", "preferences"],
@@ -195,6 +196,8 @@ export function useGuidePageState() {
     refreshGuide,
     savePreferencesMutation,
     setFilterInput,
+    setShowOnlyChannelsWithEpg,
+    showOnlyChannelsWithEpg,
     shouldApplyFilter,
     toggleCategory,
     toggleIncludedCategory,

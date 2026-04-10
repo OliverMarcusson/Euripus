@@ -115,7 +115,7 @@ describe("GuidePage", () => {
     renderGuidePage();
     fireEvent.click((await screen.findAllByRole("button", { name: /show channels/i }))[0]);
 
-    await waitFor(() => expect(mockedGetGuideCategory).toHaveBeenCalledWith("sports", 0, 40));
+    await waitFor(() => expect(mockedGetGuideCategory).toHaveBeenCalledWith("sports", 0, 40, false));
     expect(await screen.findByText("Matchday Live")).toBeInTheDocument();
   });
 
@@ -204,7 +204,7 @@ describe("GuidePage", () => {
     expect(await screen.findByText("Matchday Live")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /load more/i }));
 
-    await waitFor(() => expect(mockedGetGuideCategory).toHaveBeenNthCalledWith(2, "sports", 40, 40));
+    await waitFor(() => expect(mockedGetGuideCategory).toHaveBeenNthCalledWith(2, "sports", 40, 40, false));
     expect(await screen.findByText("Late Kickoff")).toBeInTheDocument();
     expect(screen.getByText("Matchday Live")).toBeInTheDocument();
   });
@@ -435,5 +435,134 @@ describe("GuidePage", () => {
 
     expect(await screen.findByPlaceholderText(/filter categories/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /hide filter/i })).toBeInTheDocument();
+  });
+
+  it("toggles EPG-only filtering for overview and expanded categories", async () => {
+    mockedGetGuide.mockImplementation(async (withEpgOnly) => ({
+      categories: withEpgOnly
+        ? [
+            {
+              id: "sports",
+              name: "Sports",
+              channelCount: 1,
+              liveNowCount: 1,
+              isFavorite: false,
+            },
+          ]
+        : [
+            {
+              id: "sports",
+              name: "Sports",
+              channelCount: 2,
+              liveNowCount: 1,
+              isFavorite: false,
+            },
+            {
+              id: "news",
+              name: "News",
+              channelCount: 1,
+              liveNowCount: 0,
+              isFavorite: false,
+            },
+          ],
+    }));
+    mockedGetGuideCategory.mockImplementation(async (_categoryId, _offset, _limit, withEpgOnly) => ({
+      category: {
+        id: "sports",
+        name: "Sports",
+        channelCount: withEpgOnly ? 1 : 2,
+        liveNowCount: 1,
+        isFavorite: false,
+      },
+      entries: withEpgOnly
+        ? [
+            {
+              channel: {
+                id: "channel-1",
+                name: "Arena 1",
+                logoUrl: null,
+                categoryName: "Sports",
+                remoteStreamId: 1,
+                epgChannelId: "arena.1",
+                hasEpg: true,
+                hasCatchup: false,
+                archiveDurationHours: null,
+                streamExtension: "m3u8",
+                isFavorite: false,
+              },
+              program: {
+                id: "program-1",
+                channelId: "channel-1",
+                channelName: "Arena 1",
+                title: "Matchday Live",
+                description: null,
+                startAt: "2026-04-04T10:00:00.000Z",
+                endAt: "2026-04-04T12:00:00.000Z",
+                canCatchup: false,
+              },
+            },
+          ]
+        : [
+            {
+              channel: {
+                id: "channel-1",
+                name: "Arena 1",
+                logoUrl: null,
+                categoryName: "Sports",
+                remoteStreamId: 1,
+                epgChannelId: "arena.1",
+                hasEpg: true,
+                hasCatchup: false,
+                archiveDurationHours: null,
+                streamExtension: "m3u8",
+                isFavorite: false,
+              },
+              program: {
+                id: "program-1",
+                channelId: "channel-1",
+                channelName: "Arena 1",
+                title: "Matchday Live",
+                description: null,
+                startAt: "2026-04-04T10:00:00.000Z",
+                endAt: "2026-04-04T12:00:00.000Z",
+                canCatchup: false,
+              },
+            },
+            {
+              channel: {
+                id: "channel-2",
+                name: "Arena 2",
+                logoUrl: null,
+                categoryName: "Sports",
+                remoteStreamId: 2,
+                epgChannelId: null,
+                hasEpg: false,
+                hasCatchup: false,
+                archiveDurationHours: null,
+                streamExtension: "m3u8",
+                isFavorite: false,
+              },
+              program: null,
+            },
+          ],
+      totalCount: withEpgOnly ? 1 : 2,
+      nextOffset: null,
+    }));
+
+    renderGuidePage();
+    expect(await screen.findByText("News")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /show filter/i }));
+    fireEvent.click(await screen.findByRole("button", { name: /hide channels without epg/i }));
+
+    await waitFor(() => expect(mockedGetGuide).toHaveBeenLastCalledWith(true));
+    expect(await screen.findByText("Sports")).toBeInTheDocument();
+    expect(screen.queryByText("News")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /show channels/i }));
+
+    await waitFor(() => expect(mockedGetGuideCategory).toHaveBeenLastCalledWith("sports", 0, 40, true));
+    expect(await screen.findByText("Matchday Live")).toBeInTheDocument();
+    expect(screen.queryByText("Arena 2")).not.toBeInTheDocument();
   });
 });
