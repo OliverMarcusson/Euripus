@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { SearchPage } from "@/features/search/search-page";
 import {
+  getSearchFilterOptions,
   searchChannels,
   searchPrograms,
   startRemoteChannelPlayback,
@@ -14,6 +15,7 @@ vi.mock("@/hooks/use-debounce", () => ({
 
 vi.mock("@/lib/api", () => ({
   addFavorite: vi.fn(),
+  getSearchFilterOptions: vi.fn(),
   removeFavorite: vi.fn(),
   searchChannels: vi.fn(),
   searchPrograms: vi.fn(),
@@ -25,6 +27,7 @@ vi.mock("@/lib/api", () => ({
 
 const mockedSearchChannels = vi.mocked(searchChannels);
 const mockedSearchPrograms = vi.mocked(searchPrograms);
+const mockedGetSearchFilterOptions = vi.mocked(getSearchFilterOptions);
 const mockedStartRemoteChannelPlayback = vi.mocked(startRemoteChannelPlayback);
 
 describe("SearchPage", () => {
@@ -32,6 +35,14 @@ describe("SearchPage", () => {
     vi.clearAllMocks();
     vi.spyOn(Date, "now").mockReturnValue(new Date("2026-04-04T12:00:00.000Z").getTime());
     useRemoteControllerStore.getState().clearTarget();
+    mockedGetSearchFilterOptions.mockResolvedValue({
+      countries: ["se", "us"],
+      providers: [
+        { value: "tv4play", countryCodes: ["se"] },
+        { value: "viaplay", countryCodes: ["se"] },
+        { value: "sky", countryCodes: ["uk"] },
+      ],
+    });
     mockedStartRemoteChannelPlayback.mockResolvedValue({
       id: "remote-command-1",
       targetDeviceId: "tv-1",
@@ -299,5 +310,120 @@ describe("SearchPage", () => {
 
     expect(await screen.findByText("Meilisearch")).toBeInTheDocument();
     expect(await screen.findByText("Postgres")).toBeInTheDocument();
+  });
+
+  it("shows a lightweight search guide and applies filter suggestions", async () => {
+    mockedSearchChannels.mockResolvedValue({
+      query: "golf country:se",
+      backend: "meilisearch",
+      items: [],
+      totalCount: 0,
+      nextOffset: null,
+    });
+    mockedSearchPrograms.mockResolvedValue({
+      query: "golf country:se",
+      backend: "meilisearch",
+      items: [],
+      totalCount: 0,
+      nextOffset: null,
+    });
+
+    renderSearchPage();
+    fireEvent.change(screen.getByPlaceholderText(/^search$/i), {
+      target: { value: "golf country:se" },
+    });
+
+    expect(await screen.findByText(/search guide:/i)).toBeInTheDocument();
+    expect(screen.getByText(/searching for "golf"/i)).toBeInTheDocument();
+    expect(screen.getByText(/country se/i)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "epg" }));
+
+    await waitFor(() =>
+      expect(mockedSearchChannels).toHaveBeenCalledWith("golf country:se epg", 0, 30),
+    );
+  });
+
+  it("shows country autocomplete options and inserts the selected token", async () => {
+    mockedSearchChannels.mockResolvedValue({
+      query: "country:se ",
+      backend: "meilisearch",
+      items: [],
+      totalCount: 0,
+      nextOffset: null,
+    });
+    mockedSearchPrograms.mockResolvedValue({
+      query: "country:se ",
+      backend: "meilisearch",
+      items: [],
+      totalCount: 0,
+      nextOffset: null,
+    });
+
+    renderSearchPage();
+    const input = screen.getByPlaceholderText(/^search$/i) as HTMLInputElement;
+    fireEvent.focus(input);
+    fireEvent.change(input, {
+      target: { value: "country:" },
+    });
+    input.setSelectionRange(input.value.length, input.value.length);
+    fireEvent.keyUp(input);
+
+    expect(await screen.findByText("Countries")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("option", { name: /country:se/i }));
+
+    await waitFor(() =>
+      expect(mockedSearchChannels).toHaveBeenCalledWith("country:se ", 0, 30),
+    );
+    expect(input.value).toBe("country:se ");
+  });
+
+  it("supports provider autocomplete from the keyboard, scoped to the chosen country", async () => {
+    mockedSearchChannels.mockResolvedValue({
+      query: "golf country:se provider:viaplay ",
+      backend: "meilisearch",
+      items: [],
+      totalCount: 0,
+      nextOffset: null,
+    });
+    mockedSearchPrograms.mockResolvedValue({
+      query: "golf country:se provider:viaplay ",
+      backend: "meilisearch",
+      items: [],
+      totalCount: 0,
+      nextOffset: null,
+    });
+
+    renderSearchPage();
+    const input = screen.getByPlaceholderText(/^search$/i) as HTMLInputElement;
+    fireEvent.focus(input);
+    fireEvent.change(input, {
+      target: { value: "ppv" },
+    });
+    input.setSelectionRange(input.value.length, input.value.length);
+    fireEvent.keyUp(input);
+    expect(screen.queryByText("Countries")).not.toBeInTheDocument();
+    expect(screen.queryByText("Providers")).not.toBeInTheDocument();
+
+    fireEvent.change(input, {
+      target: { value: "golf country:se provider:via" },
+    });
+    input.setSelectionRange(input.value.length, input.value.length);
+    fireEvent.keyUp(input);
+
+    expect(await screen.findByText("Providers")).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: /provider:viaplay/i })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: /provider:sky/i })).not.toBeInTheDocument();
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    await waitFor(() =>
+      expect(mockedSearchChannels).toHaveBeenCalledWith(
+        "golf country:se provider:viaplay ",
+        0,
+        30,
+      ),
+    );
+    expect(input.value).toBe("golf country:se provider:viaplay ");
   });
 });

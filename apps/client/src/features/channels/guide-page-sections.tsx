@@ -15,7 +15,7 @@ import type { KeyboardEvent } from "react";
 import { ChannelAvatar } from "@/components/ui/channel-avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardTitle } from "@/components/ui/card";
 import {
   Collapsible,
   CollapsibleContent,
@@ -106,8 +106,8 @@ export function GuideCategoryFilterCard({
   return (
     <Collapsible open={open} onOpenChange={setOpen}>
       <Card className="overflow-hidden rounded-none border-0 bg-transparent shadow-none sm:rounded-xl sm:border sm:border-border/80 sm:bg-gradient-to-r sm:from-card sm:via-card sm:to-primary/5 sm:shadow-sm">
-        <CardHeader className="px-0 pt-0 pb-4 sm:p-5 sm:pb-0">
-          <div className="flex flex-col gap-4 sm:grid sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center sm:gap-x-4 sm:gap-y-3">
+        <div className="px-0 pt-0 pb-4 sm:p-5 sm:pb-0">
+          <div className="flex flex-wrap items-center justify-between gap-4">
             <div className="flex min-h-10 min-w-0 items-center gap-3">
               <div className="flex size-10 shrink-0 items-center justify-center rounded-2xl bg-primary/10 text-primary">
                 <SlidersHorizontal aria-hidden="true" />
@@ -118,7 +118,7 @@ export function GuideCategoryFilterCard({
                 </CardTitle>
               </div>
             </div>
-            <div className="flex flex-wrap items-center gap-2 sm:justify-self-end">
+            <div className="flex flex-wrap items-center gap-2">
               <Badge
                 variant={selectedCategoryIds.length ? "accent" : "outline"}
               >
@@ -148,7 +148,7 @@ export function GuideCategoryFilterCard({
               </CollapsibleTrigger>
             </div>
           </div>
-        </CardHeader>
+        </div>
 
         <CollapsibleContent className="overflow-hidden data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down">
           <CardContent className="flex flex-col gap-4 px-0 pb-0 sm:p-5">

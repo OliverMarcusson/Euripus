@@ -1364,6 +1364,7 @@ mod tests {
                 vpn_provider_name: None,
                 meilisearch_url: None,
                 meilisearch_api_key: None,
+                admin_password: None,
             }),
             provider_http_client: reqwest::Client::new(),
             relay_http_client: reqwest::Client::new(),

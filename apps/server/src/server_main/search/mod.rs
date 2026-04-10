@@ -4,10 +4,12 @@ use super::*;
 pub(super) mod indexing;
 pub(super) mod lexicon;
 pub(super) mod queries;
+pub(super) mod rules;
 
 pub(super) fn shared_router() -> Router<AppState> {
     Router::new()
         .route("/search/status", get(get_search_backend_status))
+        .route("/search/filter-options", get(get_search_filter_options))
         .route("/search/channels", get(search_channels))
         .route("/search/programs", get(search_programs))
 }
@@ -64,13 +66,22 @@ async fn get_search_backend_status(
     }))
 }
 
+async fn get_search_filter_options(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> ApiResult<SearchFilterOptionsResponse> {
+    require_auth(&state, &headers).await?;
+    let groups = rules::load_pattern_groups(&state.pool).await?;
+    Ok(Json(build_search_filter_options(&groups)))
+}
+
 async fn search_channels(
     State(state): State<AppState>,
     headers: HeaderMap,
     Query(query): Query<SearchQuery>,
 ) -> ApiResult<ChannelSearchResponse> {
     let auth = require_auth(&state, &headers).await?;
-    let (term, offset, limit) = parse_search_pagination(query)?;
+    let (term, offset, limit, parsed) = parse_search_pagination(query)?;
     let visibility = load_channel_visibility_map(&state.pool, auth.user_id, None).await?;
     let visible_channel_ids = visible_channel_ids_from_map(&visibility);
     let visible_channel_set = visible_channel_ids.iter().copied().collect::<HashSet<_>>();
@@ -79,31 +90,22 @@ async fn search_channels(
             .meili
             .as_ref()
             .expect("Meilisearch client must exist when ready");
-        match lexicon::get_search_lexicon(&state, auth.user_id).await {
-            Ok(lexicon) => {
-                match search_channels_meili(
-                    &state,
-                    &headers,
-                    meili,
-                    auth.user_id,
-                    &term,
-                    offset,
-                    limit,
-                    lexicon.as_ref(),
-                    &visible_channel_set,
-                )
-                .await
-                {
-                    Ok(response) => return Ok(Json(response)),
-                    Err(error) => {
-                        warn!(
-                            "Meilisearch channel search failed, falling back to PostgreSQL: {error:?}"
-                        )
-                    }
-                }
-            }
+        match search_channels_meili(
+            &state,
+            &headers,
+            meili,
+            auth.user_id,
+            &term,
+            offset,
+            limit,
+            &parsed,
+            &visible_channel_set,
+        )
+        .await
+        {
+            Ok(response) => return Ok(Json(response)),
             Err(error) => {
-                warn!("failed to load search lexicon, falling back to PostgreSQL search: {error:?}")
+                warn!("Meilisearch channel search failed, falling back to PostgreSQL: {error:?}")
             }
         }
     }
@@ -116,6 +118,7 @@ async fn search_channels(
             &term,
             offset,
             limit,
+            &parsed,
             &visible_channel_ids,
         )
         .await?,
@@ -128,7 +131,7 @@ async fn search_programs(
     Query(query): Query<SearchQuery>,
 ) -> ApiResult<ProgramSearchResponse> {
     let auth = require_auth(&state, &headers).await?;
-    let (term, offset, limit) = parse_search_pagination(query)?;
+    let (term, offset, limit, parsed) = parse_search_pagination(query)?;
     let visibility = load_channel_visibility_map(&state.pool, auth.user_id, None).await?;
     let visible_channel_ids = visible_channel_ids_from_map(&visibility);
     let visible_channel_set = visible_channel_ids.iter().copied().collect::<HashSet<_>>();
@@ -137,30 +140,21 @@ async fn search_programs(
             .meili
             .as_ref()
             .expect("Meilisearch client must exist when ready");
-        match lexicon::get_search_lexicon(&state, auth.user_id).await {
-            Ok(lexicon) => {
-                match search_programs_meili(
-                    meili,
-                    &state.pool,
-                    auth.user_id,
-                    &term,
-                    offset,
-                    limit,
-                    lexicon.as_ref(),
-                    &visible_channel_set,
-                )
-                .await
-                {
-                    Ok(response) => return Ok(Json(response)),
-                    Err(error) => {
-                        warn!(
-                            "Meilisearch program search failed, falling back to PostgreSQL: {error:?}"
-                        )
-                    }
-                }
-            }
+        match search_programs_meili(
+            meili,
+            &state.pool,
+            auth.user_id,
+            &term,
+            offset,
+            limit,
+            &parsed,
+            &visible_channel_set,
+        )
+        .await
+        {
+            Ok(response) => return Ok(Json(response)),
             Err(error) => {
-                warn!("failed to load search lexicon, falling back to PostgreSQL search: {error:?}")
+                warn!("Meilisearch program search failed, falling back to PostgreSQL: {error:?}")
             }
         }
     }
@@ -172,18 +166,27 @@ async fn search_programs(
             &term,
             offset,
             limit,
+            &parsed,
             &visible_channel_ids,
         )
         .await?,
     ))
 }
 
-fn parse_search_pagination(query: SearchQuery) -> Result<(String, i64, i64), AppError> {
+fn parse_search_pagination(
+    query: SearchQuery,
+) -> Result<(String, i64, i64, lexicon::ParsedSearch), AppError> {
     let term = query.q.trim().to_string();
     let offset = query.offset.unwrap_or(0);
     let limit = query.limit.unwrap_or(SEARCH_DEFAULT_LIMIT);
+    let parsed = lexicon::parse_search_query(&term);
+    let has_structured_filters = !parsed.countries.is_empty()
+        || !parsed.providers.is_empty()
+        || parsed.ppv.is_some()
+        || parsed.vip.is_some()
+        || parsed.require_epg;
 
-    if term.len() < 2 {
+    if parsed.search.len() < 2 && !has_structured_filters {
         return Err(AppError::BadRequest(
             "Search query must be at least 2 characters".to_string(),
         ));
@@ -201,7 +204,7 @@ fn parse_search_pagination(query: SearchQuery) -> Result<(String, i64, i64), App
         ));
     }
 
-    Ok((term, offset, limit.min(SEARCH_MAX_LIMIT)))
+    Ok((term, offset, limit.min(SEARCH_MAX_LIMIT), parsed))
 }
 
 async fn execute_meili_channel_search(
@@ -213,8 +216,7 @@ async fn execute_meili_channel_search(
     offset: usize,
     apply_sort: bool,
 ) -> std::result::Result<SearchResults<MeiliChannelDoc>, AppError> {
-    let base_filter = lexicon::build_meili_search_filter(user_id, parsed.filter.as_deref());
-    let filter = format!("({base_filter}) AND is_hidden = false");
+    let filter = lexicon::build_meili_search_filter(user_id, parsed, false);
     let index = meili.index("channels");
     let mut search = index.search();
     search
@@ -240,10 +242,9 @@ async fn search_channels_meili(
     query: &str,
     offset: i64,
     limit: i64,
-    lexicon: &lexicon::SearchLexicon,
+    parsed: &lexicon::ParsedSearch,
     visible_channel_ids: &HashSet<Uuid>,
 ) -> std::result::Result<ChannelSearchResponse, AppError> {
-    let parsed = lexicon::parse_search_query(query, lexicon);
     if parsed.search.is_empty() {
         let results = execute_meili_channel_search(
             meili,
@@ -391,12 +392,10 @@ async fn search_programs_meili(
     query: &str,
     offset: i64,
     limit: i64,
-    lexicon: &lexicon::SearchLexicon,
+    parsed: &lexicon::ParsedSearch,
     visible_channel_ids: &HashSet<Uuid>,
 ) -> std::result::Result<ProgramSearchResponse, AppError> {
-    let parsed = lexicon::parse_search_query(query, lexicon);
-    let base_filter = lexicon::build_meili_search_filter(user_id, parsed.filter.as_deref());
-    let filter = format!("({base_filter}) AND is_hidden = false");
+    let filter = lexicon::build_meili_search_filter(user_id, parsed, false);
     let results = meili
         .index("programs")
         .search()
@@ -443,6 +442,65 @@ async fn search_programs_meili(
 fn next_page_offset(offset: i64, limit: i64, total_count: i64) -> Option<i64> {
     let next_offset = offset + limit;
     (next_offset < total_count).then_some(next_offset)
+}
+
+fn build_search_filter_options(
+    groups: &[rules::LoadedAdminPatternGroup],
+) -> SearchFilterOptionsResponse {
+    let countries = collect_filter_options(groups, AdminSearchPatternKind::Country);
+    let providers = collect_provider_filter_options(groups, &countries);
+
+    SearchFilterOptionsResponse {
+        countries,
+        providers,
+    }
+}
+
+fn collect_filter_options(
+    groups: &[rules::LoadedAdminPatternGroup],
+    kind: AdminSearchPatternKind,
+) -> Vec<String> {
+    groups
+        .iter()
+        .filter(|group| group.enabled && group.kind == kind && !group.normalized_value.is_empty())
+        .map(|group| group.normalized_value.clone())
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+fn collect_provider_filter_options(
+    groups: &[rules::LoadedAdminPatternGroup],
+    countries: &[String],
+) -> Vec<SearchFilterProviderOptionResponse> {
+    let enabled_countries = countries.iter().cloned().collect::<HashSet<_>>();
+    let mut providers_by_value =
+        std::collections::BTreeMap::<String, std::collections::BTreeSet<String>>::new();
+
+    for group in groups.iter().filter(|group| {
+        group.enabled
+            && group.kind == AdminSearchPatternKind::Provider
+            && !group.normalized_value.is_empty()
+    }) {
+        let entry = providers_by_value
+            .entry(group.normalized_value.clone())
+            .or_default();
+        for country_code in &group.country_codes {
+            if enabled_countries.contains(country_code) {
+                entry.insert(country_code.clone());
+            }
+        }
+    }
+
+    providers_by_value
+        .into_iter()
+        .map(
+            |(value, country_codes)| SearchFilterProviderOptionResponse {
+                value,
+                country_codes: country_codes.into_iter().collect(),
+            },
+        )
+        .collect()
 }
 
 async fn load_channels_by_ids(
@@ -504,6 +562,66 @@ async fn load_channels_by_ids(
     }
 
     Ok(ordered)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_group(
+        kind: AdminSearchPatternKind,
+        value: &str,
+        enabled: bool,
+        country_codes: &[&str],
+    ) -> rules::LoadedAdminPatternGroup {
+        rules::LoadedAdminPatternGroup {
+            id: Uuid::new_v4(),
+            kind,
+            value: value.to_string(),
+            normalized_value: value.to_ascii_lowercase(),
+            match_target: AdminSearchMatchTarget::ChannelOrCategory,
+            match_mode: AdminSearchMatchMode::Contains,
+            priority: 0,
+            enabled,
+            country_codes: country_codes
+                .iter()
+                .map(|code| (*code).to_string())
+                .collect(),
+            patterns: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn build_search_filter_options_returns_enabled_country_and_provider_values() {
+        let response = build_search_filter_options(&[
+            sample_group(AdminSearchPatternKind::Provider, "viaplay", true, &["se"]),
+            sample_group(AdminSearchPatternKind::Country, "se", true, &[]),
+            sample_group(AdminSearchPatternKind::Provider, "viaplay", true, &["uk"]),
+            sample_group(AdminSearchPatternKind::Country, "us", false, &[]),
+            sample_group(AdminSearchPatternKind::Flag, "ppv", true, &[]),
+            sample_group(
+                AdminSearchPatternKind::Provider,
+                "tv4play",
+                true,
+                &["se", "us"],
+            ),
+        ]);
+
+        assert_eq!(response.countries, vec!["se".to_string()]);
+        assert_eq!(
+            response.providers,
+            vec![
+                SearchFilterProviderOptionResponse {
+                    value: "tv4play".to_string(),
+                    country_codes: vec!["se".to_string()],
+                },
+                SearchFilterProviderOptionResponse {
+                    value: "viaplay".to_string(),
+                    country_codes: vec!["se".to_string()],
+                },
+            ]
+        );
+    }
 }
 
 async fn load_programs_by_ids(

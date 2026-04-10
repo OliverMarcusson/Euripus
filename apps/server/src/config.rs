@@ -22,6 +22,7 @@ pub struct Config {
     pub vpn_provider_name: Option<String>,
     pub meilisearch_url: Option<String>,
     pub meilisearch_api_key: Option<String>,
+    pub admin_password: Option<String>,
 }
 
 impl Config {
@@ -66,6 +67,7 @@ impl Config {
         let vpn_provider_name = read_optional_env("APP_VPN_PROVIDER_NAME")?;
         let meilisearch_url = read_optional_env("APP_MEILISEARCH_URL")?;
         let meilisearch_api_key = read_optional_env("APP_MEILISEARCH_API_KEY")?;
+        let admin_password = read_optional_env("APP_ADMIN_PASSWORD")?;
         let decoded_key = STANDARD
             .decode(read_env("APP_ENCRYPTION_KEY_B64")?)
             .context("APP_ENCRYPTION_KEY_B64 must be valid base64")?;
@@ -90,6 +92,7 @@ impl Config {
             vpn_provider_name,
             meilisearch_url,
             meilisearch_api_key,
+            admin_password,
         })
     }
 }
