@@ -8,11 +8,21 @@ import { router } from "@/router";
 import { useBootstrapSession } from "@/hooks/use-bootstrap-session";
 import { useThemeSync } from "@/hooks/use-theme-sync";
 import { registerPwaServiceWorker } from "@/lib/pwa";
+import { QUERY_CACHE_GC_TIME_MS } from "@/lib/query-cache";
 import { useThemeStore } from "@/store/theme-store";
 import "./index.css";
 import "plyr/dist/plyr.css";
 
-const queryClient = new QueryClient();
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      staleTime: 0,
+      gcTime: QUERY_CACHE_GC_TIME_MS,
+      refetchOnWindowFocus: true,
+      refetchOnReconnect: true,
+    },
+  },
+});
 
 function Bootstrapper() {
   useBootstrapSession();

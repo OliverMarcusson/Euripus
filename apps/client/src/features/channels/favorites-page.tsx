@@ -20,6 +20,7 @@ import { useCategoryFavoriteMutation } from "@/hooks/use-category-favorite";
 import { useChannelFavoriteMutation } from "@/hooks/use-channel-favorite";
 import { useChannelPlaybackMutation } from "@/hooks/use-playback-actions";
 import { getFavorites, reorderFavorites } from "@/lib/api";
+import { STANDARD_QUERY_STALE_TIME_MS } from "@/lib/query-cache";
 import {
   formatArchiveDuration,
   formatTimeRange,
@@ -38,6 +39,7 @@ export function FavoritesPage() {
   const favoritesQuery = useQuery({
     queryKey: ["favorites"],
     queryFn: getFavorites,
+    staleTime: STANDARD_QUERY_STALE_TIME_MS,
   });
   const favoriteMutation = useChannelFavoriteMutation();
   const categoryFavoriteMutation = useCategoryFavoriteMutation();

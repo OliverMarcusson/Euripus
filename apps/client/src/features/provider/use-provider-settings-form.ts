@@ -15,6 +15,10 @@ import {
   triggerProviderSync,
   validateProvider,
 } from "@/lib/api"
+import {
+  STANDARD_QUERY_STALE_TIME_MS,
+  SYNC_STATUS_STALE_TIME_MS,
+} from "@/lib/query-cache"
 
 export const providerSchema = z.object({
   baseUrl: z.string().url(),
@@ -89,6 +93,7 @@ export function useProviderSettingsForm() {
   const providerQuery = useQuery({
     queryKey: ["provider"],
     queryFn: getProvider,
+    staleTime: STANDARD_QUERY_STALE_TIME_MS,
     refetchInterval: (query) => {
       const provider = query.state.data
       return provider?.status === "syncing" ? 1000 : false
@@ -97,6 +102,7 @@ export function useProviderSettingsForm() {
   const syncQuery = useQuery({
     queryKey: ["sync-status"],
     queryFn: getSyncStatus,
+    staleTime: SYNC_STATUS_STALE_TIME_MS,
     refetchInterval: (query) => {
       const latestJob = query.state.data
       return latestJob?.status === "queued" || latestJob?.status === "running"

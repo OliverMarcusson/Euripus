@@ -254,11 +254,11 @@ async fn store_epg_sources(
 async fn get_provider(
     State(state): State<AppState>,
     headers: HeaderMap,
-) -> ApiResult<Option<ProviderProfileResponse>> {
+) -> Result<Response, AppError> {
     let auth = require_auth(&state, &headers).await?;
     let provider = load_provider_profile_response(&state.pool, auth.user_id).await?;
 
-    Ok(Json(provider))
+    json_response_with_revalidation(&headers, &provider)
 }
 
 async fn validate_provider(
