@@ -27,6 +27,10 @@ import {
   pairReceiver,
   unpairReceiver,
 } from "@/lib/api";
+import {
+  REMOTE_QUERY_STALE_TIME_MS,
+  STANDARD_QUERY_STALE_TIME_MS,
+} from "@/lib/query-cache";
 import { formatReceiverPlaybackSummary } from "@/lib/receiver-playback";
 import { formatDateTime, formatRelativeTime } from "@/lib/utils";
 import type { ThemePreference } from "@/store/theme-store";
@@ -47,14 +51,20 @@ export function SettingsPage() {
   const [pairCode, setPairCode] = useState("");
   const [rememberDevice, setRememberDevice] = useState(true);
   const [pairName, setPairName] = useState("");
-  const recentsQuery = useQuery({ queryKey: ["recents"], queryFn: getRecents });
+  const recentsQuery = useQuery({
+    queryKey: ["recents"],
+    queryFn: getRecents,
+    staleTime: STANDARD_QUERY_STALE_TIME_MS,
+  });
   const providerQuery = useQuery({
     queryKey: ["provider"],
     queryFn: getProvider,
+    staleTime: STANDARD_QUERY_STALE_TIME_MS,
   });
   const remoteDevicesQuery = useQuery({
     queryKey: ["remote", "receivers"],
     queryFn: getRemoteReceivers,
+    staleTime: REMOTE_QUERY_STALE_TIME_MS,
   });
   const favoriteMutation = useChannelFavoriteMutation();
   const pairMutation = useMutation({

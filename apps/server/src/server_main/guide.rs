@@ -184,29 +184,31 @@ async fn get_guide(
     State(state): State<AppState>,
     headers: HeaderMap,
     Query(query): Query<GuideOverviewQuery>,
-) -> ApiResult<GuideResponse> {
+) -> Result<Response, AppError> {
     let auth = require_auth(&state, &headers).await?;
     let visibility = load_channel_visibility_map(&state.pool, auth.user_id, None).await?;
-    let categories = fetch_guide_categories(
-        &state.pool,
-        auth.user_id,
-        &visible_channel_ids_from_map(&visibility),
-        query.with_epg_only.unwrap_or(false),
-    )
-    .await?;
-    Ok(Json(GuideResponse { categories }))
+    let payload = GuideResponse {
+        categories: fetch_guide_categories(
+            &state.pool,
+            auth.user_id,
+            &visible_channel_ids_from_map(&visibility),
+            query.with_epg_only.unwrap_or(false),
+        )
+        .await?,
+    };
+    json_response_with_revalidation(&headers, &payload)
 }
 
 async fn get_guide_preferences(
     State(state): State<AppState>,
     headers: HeaderMap,
-) -> ApiResult<GuidePreferencesResponse> {
+) -> Result<Response, AppError> {
     let auth = require_auth(&state, &headers).await?;
-    let included_category_ids = load_guide_preferences(&state.pool, auth.user_id).await?;
+    let payload = GuidePreferencesResponse {
+        included_category_ids: load_guide_preferences(&state.pool, auth.user_id).await?,
+    };
 
-    Ok(Json(GuidePreferencesResponse {
-        included_category_ids,
-    }))
+    json_response_with_revalidation(&headers, &payload)
 }
 
 async fn save_guide_preferences(
@@ -242,7 +244,7 @@ async fn get_guide_category(
     headers: HeaderMap,
     Path(category_id): Path<String>,
     Query(query): Query<GuideCategoryQuery>,
-) -> ApiResult<GuideCategoryResponse> {
+) -> Result<Response, AppError> {
     let auth = require_auth(&state, &headers).await?;
     let with_epg_only = query.with_epg_only.unwrap_or(false);
     let (offset, limit) = parse_guide_category_pagination(query)?;
@@ -281,12 +283,14 @@ async fn get_guide_category(
         .map(|row| map_guide_category_entry(&state, &request_base_url, auth.user_id, row))
         .collect::<Result<Vec<_>, _>>()?;
 
-    Ok(Json(GuideCategoryResponse {
+    let payload = GuideCategoryResponse {
         category,
         next_offset: next_guide_offset(offset, limit, total_count),
         total_count,
         entries,
-    }))
+    };
+
+    json_response_with_revalidation(&headers, &payload)
 }
 
 async fn get_channel_guide(
@@ -323,7 +327,7 @@ async fn get_channel_guide(
 async fn list_favorites(
     State(state): State<AppState>,
     headers: HeaderMap,
-) -> ApiResult<Vec<FavoriteEntryResponse>> {
+) -> Result<Response, AppError> {
     let auth = require_auth(&state, &headers).await?;
     let request_base_url = request_base_url(&state.config, &headers)?;
     let category_favorites = sqlx::query_as::<_, FavoriteCategoryRow>(
@@ -431,60 +435,60 @@ async fn list_favorites(
     .fetch_all(&state.pool)
     .await?;
 
-    Ok(Json(
-        category_favorites
-            .into_iter()
-            .map(|row| FavoriteEntryResponse::Category {
-                category: map_guide_category_summary(GuideCategorySummaryRow {
-                    id: row.id,
-                    name: row.name,
-                    channel_count: row.channel_count,
-                    live_now_count: row.live_now_count,
-                    is_favorite: row.is_favorite,
-                }),
-                order: row.sort_order,
-            })
-            .chain(
-                favorites
-                    .into_iter()
-                    .map(|row| {
-                        let order = row.sort_order;
-                        map_guide_category_entry(
-                            &state,
-                            &request_base_url,
-                            auth.user_id,
-                            GuideCategoryEntryRow {
-                                channel_id: row.channel_id,
-                                profile_id: row.profile_id,
-                                channel_name: row.channel_name,
-                                logo_url: row.logo_url,
-                                category_name: row.category_name,
-                                remote_stream_id: row.remote_stream_id,
-                                epg_channel_id: row.epg_channel_id,
-                                has_catchup: row.has_catchup,
-                                archive_duration_hours: row.archive_duration_hours,
-                                stream_extension: row.stream_extension,
-                                is_favorite: row.is_favorite,
-                                program_id: row.program_id,
-                                program_channel_id: row.program_channel_id,
-                                program_channel_name: row.program_channel_name,
-                                program_title: row.program_title,
-                                program_description: row.program_description,
-                                program_start_at: row.program_start_at,
-                                program_end_at: row.program_end_at,
-                                program_can_catchup: row.program_can_catchup,
-                            },
-                        )
-                        .map(|entry| FavoriteEntryResponse::Channel {
-                            channel: entry.channel,
-                            program: entry.program,
-                            order,
-                        })
+    let payload = category_favorites
+        .into_iter()
+        .map(|row| FavoriteEntryResponse::Category {
+            category: map_guide_category_summary(GuideCategorySummaryRow {
+                id: row.id,
+                name: row.name,
+                channel_count: row.channel_count,
+                live_now_count: row.live_now_count,
+                is_favorite: row.is_favorite,
+            }),
+            order: row.sort_order,
+        })
+        .chain(
+            favorites
+                .into_iter()
+                .map(|row| {
+                    let order = row.sort_order;
+                    map_guide_category_entry(
+                        &state,
+                        &request_base_url,
+                        auth.user_id,
+                        GuideCategoryEntryRow {
+                            channel_id: row.channel_id,
+                            profile_id: row.profile_id,
+                            channel_name: row.channel_name,
+                            logo_url: row.logo_url,
+                            category_name: row.category_name,
+                            remote_stream_id: row.remote_stream_id,
+                            epg_channel_id: row.epg_channel_id,
+                            has_catchup: row.has_catchup,
+                            archive_duration_hours: row.archive_duration_hours,
+                            stream_extension: row.stream_extension,
+                            is_favorite: row.is_favorite,
+                            program_id: row.program_id,
+                            program_channel_id: row.program_channel_id,
+                            program_channel_name: row.program_channel_name,
+                            program_title: row.program_title,
+                            program_description: row.program_description,
+                            program_start_at: row.program_start_at,
+                            program_end_at: row.program_end_at,
+                            program_can_catchup: row.program_can_catchup,
+                        },
+                    )
+                    .map(|entry| FavoriteEntryResponse::Channel {
+                        channel: entry.channel,
+                        program: entry.program,
+                        order,
                     })
-                    .collect::<Result<Vec<_>, _>>()?,
-            )
-            .collect(),
-    ))
+                })
+                .collect::<Result<Vec<_>, _>>()?,
+        )
+        .collect::<Vec<_>>();
+
+    json_response_with_revalidation(&headers, &payload)
 }
 
 async fn save_favorite_order(
@@ -700,7 +704,7 @@ async fn replace_favorite_category_order(
 async fn list_recents(
     State(state): State<AppState>,
     headers: HeaderMap,
-) -> ApiResult<Vec<RecentChannelResponse>> {
+) -> Result<Response, AppError> {
     let auth = require_auth(&state, &headers).await?;
     let rows = sqlx::query_as::<_, RecentChannelRow>(
         r#"
@@ -772,7 +776,7 @@ async fn list_recents(
         })
         .collect::<Result<Vec<_>, AppError>>()?;
 
-    Ok(Json(recents))
+    json_response_with_revalidation(&headers, &recents)
 }
 
 pub(super) const GUIDE_DEFAULT_LIMIT: i64 = 40;

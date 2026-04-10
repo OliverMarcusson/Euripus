@@ -466,6 +466,47 @@ async fn get_server_network_status(
     }))
 }
 
+fn json_response_with_revalidation<T: Serialize>(
+    headers: &HeaderMap,
+    payload: &T,
+) -> Result<Response, AppError> {
+    let body = serde_json::to_vec(payload).map_err(|error| AppError::Internal(anyhow!(error)))?;
+    let etag = format!("\"{:x}\"", Sha256::digest(&body));
+    let builder = Response::builder()
+        .header(header::CACHE_CONTROL, "private, no-cache")
+        .header(header::ETAG, &etag);
+
+    if if_none_match_matches(headers, &etag) {
+        return builder
+            .status(StatusCode::NOT_MODIFIED)
+            .body(Body::empty())
+            .map_err(|error| AppError::Internal(anyhow!(error)));
+    }
+
+    builder
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(body))
+        .map_err(|error| AppError::Internal(anyhow!(error)))
+}
+
+fn if_none_match_matches(headers: &HeaderMap, etag: &str) -> bool {
+    headers
+        .get(header::IF_NONE_MATCH)
+        .and_then(|value| value.to_str().ok())
+        .map(|value| {
+            value
+                .split(',')
+                .any(|candidate| matches_etag_candidate(candidate, etag))
+        })
+        .unwrap_or(false)
+}
+
+fn matches_etag_candidate(candidate: &str, etag: &str) -> bool {
+    let candidate = candidate.trim();
+    candidate == "*" || candidate == etag
+}
+
 async fn fetch_channels(pool: &PgPool, user_id: Uuid) -> Result<Vec<ChannelResponse>> {
     let channels = sqlx::query_as::<_, ChannelResponse>(
         r#"
@@ -1207,5 +1248,66 @@ mod tests {
 
         assert!(!visibility.is_hidden);
         assert!(!visibility.is_placeholder);
+    }
+
+    #[tokio::test]
+    async fn json_response_with_revalidation_returns_json_and_cache_headers() {
+        let payload = serde_json::json!({
+            "status": "ok",
+            "items": [1, 2, 3],
+        });
+
+        let response = json_response_with_revalidation(&HeaderMap::new(), &payload)
+            .expect("cached json response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get(header::CACHE_CONTROL)
+                .and_then(|value| value.to_str().ok()),
+            Some("private, no-cache")
+        );
+        assert!(
+            response.headers().contains_key(header::ETAG),
+            "etag header should be present"
+        );
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body");
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&body).expect("json body"),
+            payload
+        );
+    }
+
+    #[tokio::test]
+    async fn json_response_with_revalidation_returns_not_modified_for_matching_etag() {
+        let payload = serde_json::json!({
+            "status": "ok",
+        });
+        let initial =
+            json_response_with_revalidation(&HeaderMap::new(), &payload).expect("initial response");
+        let etag = initial
+            .headers()
+            .get(header::ETAG)
+            .and_then(|value| value.to_str().ok())
+            .expect("etag header")
+            .to_string();
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::IF_NONE_MATCH,
+            HeaderValue::from_str(&etag).expect("etag header value"),
+        );
+
+        let response =
+            json_response_with_revalidation(&headers, &payload).expect("not modified response");
+
+        assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body");
+        assert!(body.is_empty());
     }
 }

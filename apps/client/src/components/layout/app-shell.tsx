@@ -32,6 +32,7 @@ import {
   logout,
   selectRemoteControllerTarget,
 } from "@/lib/api";
+import { REMOTE_QUERY_STALE_TIME_MS } from "@/lib/query-cache";
 import { formatReceiverPlaybackSummary } from "@/lib/receiver-playback";
 import { cn } from "@/lib/utils";
 import { useAuthStore } from "@/store/auth-store";
@@ -71,12 +72,14 @@ export function AppShell() {
     queryFn: getRemoteReceivers,
     enabled: !!user,
     refetchInterval: user ? 5_000 : false,
+    staleTime: REMOTE_QUERY_STALE_TIME_MS,
   });
   const targetQuery = useQuery({
     queryKey: ["remote", "controller", "target"],
     queryFn: getRemoteControllerTarget,
     enabled: !!user,
     refetchInterval: user ? 5_000 : false,
+    staleTime: REMOTE_QUERY_STALE_TIME_MS,
   });
   const selectTargetMutation = useMutation({
     mutationFn: selectRemoteControllerTarget,

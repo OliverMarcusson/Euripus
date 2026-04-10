@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import type { GuidePreferences } from "@euripus/shared";
 import { getGuide, getGuidePreferences, saveGuidePreferences } from "@/lib/api";
+import { STANDARD_QUERY_STALE_TIME_MS } from "@/lib/query-cache";
 import { useGuideNavigationStore } from "@/store/guide-navigation-store";
 
 export function useGuidePageState() {
@@ -21,10 +22,12 @@ export function useGuidePageState() {
   const guideQuery = useQuery({
     queryKey: ["guide", "overview", { withEpgOnly: showOnlyChannelsWithEpg }],
     queryFn: () => getGuide(showOnlyChannelsWithEpg),
+    staleTime: STANDARD_QUERY_STALE_TIME_MS,
   });
   const preferencesQuery = useQuery({
     queryKey: ["guide", "preferences"],
     queryFn: getGuidePreferences,
+    staleTime: STANDARD_QUERY_STALE_TIME_MS,
   });
   const savePreferencesMutation = useMutation({
     mutationFn: saveGuidePreferences,

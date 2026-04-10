@@ -33,6 +33,7 @@ import {
   searchChannels,
   searchPrograms,
 } from "@/lib/api";
+import { SEARCH_QUERY_STALE_TIME_MS } from "@/lib/query-cache";
 import {
   canPlayProgram,
   formatTimeRange,
@@ -57,6 +58,7 @@ export function SearchPage() {
     initialPageParam: 0,
     getNextPageParam: (lastPage) => lastPage.nextOffset ?? undefined,
     enabled: hasQuery,
+    staleTime: SEARCH_QUERY_STALE_TIME_MS,
   });
   const programQuery = useInfiniteQuery({
     queryKey: ["search", "programs", debouncedQuery],
@@ -65,6 +67,7 @@ export function SearchPage() {
     initialPageParam: 0,
     getNextPageParam: (lastPage) => lastPage.nextOffset ?? undefined,
     enabled: hasQuery,
+    staleTime: SEARCH_QUERY_STALE_TIME_MS,
   });
   const favoriteMutation = useChannelFavoriteMutation();
   const playChannelMutation = useChannelPlaybackMutation();

@@ -4,6 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { getServerNetworkStatus } from "@/lib/api";
+import { SERVER_NETWORK_STALE_TIME_MS } from "@/lib/query-cache";
 import { cn, formatDateTime, formatRelativeTime } from "@/lib/utils";
 
 type ServerNetworkStatusCardProps = {
@@ -18,6 +19,7 @@ export function ServerNetworkStatusCard({
     queryFn: getServerNetworkStatus,
     refetchInterval: 60_000,
     retry: 1,
+    staleTime: SERVER_NETWORK_STALE_TIME_MS,
   });
   const status = statusQuery.data;
   const vpnLabel = status?.vpnProvider ? `${status.vpnProvider} active` : "VPN active";

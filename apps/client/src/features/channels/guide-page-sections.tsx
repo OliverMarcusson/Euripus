@@ -33,6 +33,7 @@ import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Toggle } from "@/components/ui/toggle";
 import { getGuideCategory } from "@/lib/api";
+import { STANDARD_QUERY_STALE_TIME_MS } from "@/lib/query-cache";
 import {
   cn,
   formatArchiveDuration,
@@ -273,6 +274,7 @@ export function GuideCategorySection({
     initialPageParam: 0,
     getNextPageParam: (lastPage) => lastPage.nextOffset ?? undefined,
     enabled: open,
+    staleTime: STANDARD_QUERY_STALE_TIME_MS,
   });
   const entries =
     categoryQuery.data?.pages.flatMap((page) => page.entries) ?? [];

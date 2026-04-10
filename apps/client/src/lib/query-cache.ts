@@ -1,0 +1,6 @@
+export const QUERY_CACHE_GC_TIME_MS = 5 * 60 * 1000;
+export const STANDARD_QUERY_STALE_TIME_MS = 15 * 1000;
+export const SEARCH_QUERY_STALE_TIME_MS = 60 * 1000;
+export const REMOTE_QUERY_STALE_TIME_MS = 5 * 1000;
+export const SYNC_STATUS_STALE_TIME_MS = 1 * 1000;
+export const SERVER_NETWORK_STALE_TIME_MS = 60 * 1000;
