@@ -1,18 +1,26 @@
-import type { SearchBackend } from "@euripus/shared";
-import { useInfiniteQuery } from "@tanstack/react-query";
+import type { SearchBackend, SearchFilterOptionsResponse } from "@euripus/shared";
+import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import {
   Clapperboard,
+  Filter,
   Heart,
   Play,
   Search as SearchIcon,
   TvMinimal,
 } from "lucide-react";
-import { useDeferredValue, useEffect, useRef, useState } from "react";
+import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { PageHeader } from "@/components/layout/page-header";
 import { ChannelAvatar } from "@/components/ui/channel-avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
 import {
   Empty,
   EmptyHeader,
@@ -20,6 +28,11 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty";
 import { Input } from "@/components/ui/input";
+import {
+  Popover,
+  PopoverAnchor,
+  PopoverContent,
+} from "@/components/ui/popover";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -30,12 +43,14 @@ import {
   useProgramPlaybackMutation,
 } from "@/hooks/use-playback-actions";
 import {
+  getSearchFilterOptions,
   searchChannels,
   searchPrograms,
 } from "@/lib/api";
 import { SEARCH_QUERY_STALE_TIME_MS } from "@/lib/query-cache";
 import {
   canPlayProgram,
+  cn,
   formatTimeRange,
   getProgramPlaybackState,
   type ProgramPlaybackState,
@@ -48,9 +63,19 @@ export function SearchPage() {
   const [activeTab, setActiveTab] = useState<"channels" | "programs">(
     "channels",
   );
+  const [selectionStart, setSelectionStart] = useState(0);
+  const [isSearchInputFocused, setIsSearchInputFocused] = useState(false);
+  const [highlightedOptionIndex, setHighlightedOptionIndex] = useState(0);
+  const [autocompleteDismissed, setAutocompleteDismissed] = useState(false);
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
   const deferredQuery = useDeferredValue(query);
   const debouncedQuery = useDebounce(deferredQuery, 250);
   const hasQuery = debouncedQuery.trim().length > 1;
+  const filterOptionsQuery = useQuery({
+    queryKey: ["search", "filter-options"],
+    queryFn: getSearchFilterOptions,
+    staleTime: SEARCH_QUERY_STALE_TIME_MS,
+  });
   const channelQuery = useInfiniteQuery({
     queryKey: ["search", "channels", debouncedQuery],
     queryFn: ({ pageParam }) =>
@@ -92,6 +117,41 @@ export function SearchPage() {
         <Badge variant="outline">{programTotal} programs</Badge>
       </>
     ) : null;
+  const guideState = useMemo(() => buildSearchGuideState(query), [query]);
+  const autocompleteState = useMemo(
+    () => getSearchAutocompleteState(query, selectionStart),
+    [query, selectionStart],
+  );
+  const autocompleteOptions = useMemo(
+    () =>
+      getSearchAutocompleteSuggestions(
+        filterOptionsQuery.data,
+        autocompleteState,
+        guideState.countries,
+      ),
+    [autocompleteState, filterOptionsQuery.data, guideState.countries],
+  );
+  const isAutocompleteOpen =
+    isSearchInputFocused &&
+    autocompleteState !== null &&
+    !autocompleteDismissed &&
+    !filterOptionsQuery.isError;
+
+  useEffect(() => {
+    setHighlightedOptionIndex(0);
+    setAutocompleteDismissed(false);
+  }, [
+    autocompleteState?.end,
+    autocompleteState?.kind,
+    autocompleteState?.start,
+    autocompleteState?.value,
+  ]);
+
+  useEffect(() => {
+    if (highlightedOptionIndex >= autocompleteOptions.length) {
+      setHighlightedOptionIndex(0);
+    }
+  }, [autocompleteOptions.length, highlightedOptionIndex]);
 
   useEffect(() => {
     if (!hasQuery) {
@@ -109,6 +169,72 @@ export function SearchPage() {
     }
   }, [channelTotal, hasQuery, programTotal]);
 
+  const updateSearchCursor = (input: HTMLInputElement) => {
+    const nextSelectionStart = input.selectionStart ?? input.value.length;
+    setSelectionStart(nextSelectionStart);
+  };
+
+  const applyAutocompleteOption = (option: string) => {
+    if (!autocompleteState) {
+      return;
+    }
+
+    const nextState = applySearchAutocompleteOption(
+      query,
+      autocompleteState,
+      option,
+    );
+    setQuery(nextState.query);
+    setSelectionStart(nextState.cursor);
+
+    requestAnimationFrame(() => {
+      searchInputRef.current?.focus();
+      searchInputRef.current?.setSelectionRange(
+        nextState.cursor,
+        nextState.cursor,
+      );
+    });
+  };
+
+  const handleSearchKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (!isAutocompleteOpen || filterOptionsQuery.isPending) {
+      return;
+    }
+
+    if (event.key === "Escape") {
+      event.preventDefault();
+      setAutocompleteDismissed(true);
+      return;
+    }
+
+    if (!autocompleteOptions.length) {
+      return;
+    }
+
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      setHighlightedOptionIndex((current) =>
+        current >= autocompleteOptions.length - 1 ? 0 : current + 1,
+      );
+      return;
+    }
+
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      setHighlightedOptionIndex((current) =>
+        current <= 0 ? autocompleteOptions.length - 1 : current - 1,
+      );
+      return;
+    }
+
+    if (event.key === "Enter") {
+      event.preventDefault();
+      applyAutocompleteOption(
+        autocompleteOptions[highlightedOptionIndex] ?? autocompleteOptions[0],
+      );
+    }
+  };
+
   return (
     <div className="flex flex-col gap-6">
       <PageHeader
@@ -118,17 +244,89 @@ export function SearchPage() {
 
       <Card className="rounded-none border-0 bg-transparent shadow-none sm:border-border/80 sm:bg-gradient-to-r sm:from-card sm:via-card sm:to-primary/5 sm:shadow-sm">
         <CardContent className="px-0 pt-0 pb-0 sm:px-6 sm:pt-5 sm:pb-6">
-          <div className="relative">
-            <SearchIcon
-              className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground"
-              aria-hidden="true"
-            />
-            <Input
-              data-search-input="true"
-              className="pl-10"
-              placeholder="Search"
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
+          <div className="grid gap-3">
+            <Popover open={isAutocompleteOpen}>
+              <PopoverAnchor asChild>
+                <div className="relative">
+                  <SearchIcon
+                    className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground"
+                    aria-hidden="true"
+                  />
+                  <Input
+                    ref={searchInputRef}
+                    data-search-input="true"
+                    className="pl-10"
+                    placeholder="Search"
+                    value={query}
+                    onChange={(event) => {
+                      setQuery(event.target.value);
+                      updateSearchCursor(event.target);
+                    }}
+                    onFocus={(event) => {
+                      setIsSearchInputFocused(true);
+                      updateSearchCursor(event.target);
+                    }}
+                    onBlur={() => setIsSearchInputFocused(false)}
+                    onClick={(event) => updateSearchCursor(event.currentTarget)}
+                    onKeyUp={(event) => updateSearchCursor(event.currentTarget)}
+                    onSelect={(event) => updateSearchCursor(event.currentTarget)}
+                    onKeyDown={handleSearchKeyDown}
+                  />
+                </div>
+              </PopoverAnchor>
+              <PopoverContent
+                align="start"
+                sideOffset={8}
+                className="w-[min(24rem,calc(100vw-2rem))] p-0"
+                onOpenAutoFocus={(event) => event.preventDefault()}
+              >
+                <Command shouldFilter={false}>
+                  {filterOptionsQuery.isPending ? (
+                    <div className="px-3 py-4 text-sm text-muted-foreground">
+                      Loading available filters...
+                    </div>
+                  ) : (
+                    <CommandList>
+                      <CommandEmpty>
+                        No {autocompleteState?.kind === "country" ? "countries" : "providers"} match that token yet.
+                      </CommandEmpty>
+                      <CommandGroup
+                        heading={
+                          autocompleteState?.kind === "country"
+                            ? "Countries"
+                            : "Providers"
+                        }
+                      >
+                        {autocompleteOptions.map((option, index) => (
+                          <CommandItem
+                            key={option}
+                            value={option}
+                            className={cn(
+                              "flex items-center justify-between gap-3",
+                              index === highlightedOptionIndex &&
+                                "bg-accent text-accent-foreground",
+                            )}
+                            onMouseDown={(event) => event.preventDefault()}
+                            onSelect={() => applyAutocompleteOption(option)}
+                          >
+                            <span>{option}</span>
+                            <span className="text-xs text-muted-foreground">
+                              {autocompleteState?.kind}:{option}
+                            </span>
+                          </CommandItem>
+                        ))}
+                      </CommandGroup>
+                    </CommandList>
+                  )}
+                </Command>
+              </PopoverContent>
+            </Popover>
+
+            <SearchGuide
+              state={guideState}
+              onApplySuggestion={(suggestion) =>
+                setQuery((current) => applySearchSuggestion(current, suggestion))
+              }
             />
           </div>
         </CardContent>
@@ -390,6 +588,338 @@ export function SearchPage() {
       ) : null}
     </div>
   );
+}
+
+type SearchGuideState = {
+  freeText: string;
+  countries: string[];
+  providers: string[];
+  ppv: boolean | null;
+  vip: boolean | null;
+  requireEpg: boolean;
+  suggestions: string[];
+};
+
+type SearchAutocompleteKind = "country" | "provider";
+
+type SearchAutocompleteState = {
+  kind: SearchAutocompleteKind;
+  start: number;
+  end: number;
+  value: string;
+};
+
+function getSearchAutocompleteState(
+  query: string,
+  selectionStart: number,
+): SearchAutocompleteState | null {
+  const cursor = Math.min(selectionStart, query.length);
+  let start = cursor;
+  while (start > 0 && !/\s/.test(query[start - 1] ?? "")) {
+    start -= 1;
+  }
+
+  let end = cursor;
+  while (end < query.length && !/\s/.test(query[end] ?? "")) {
+    end += 1;
+  }
+
+  const token = query.slice(start, end);
+  const normalizedToken = token.toLowerCase();
+  if (normalizedToken.startsWith("country:")) {
+    return {
+      kind: "country",
+      start,
+      end,
+      value: token.slice("country:".length).trim().toLowerCase(),
+    };
+  }
+
+  if (normalizedToken.startsWith("provider:")) {
+    return {
+      kind: "provider",
+      start,
+      end,
+      value: token.slice("provider:".length).trim().toLowerCase(),
+    };
+  }
+
+  return null;
+}
+
+function getSearchAutocompleteSuggestions(
+  options: SearchFilterOptionsResponse | undefined,
+  state: SearchAutocompleteState | null,
+  selectedCountries: string[],
+) {
+  if (!state) {
+    return [];
+  }
+
+  const source =
+    state.kind === "country"
+      ? options?.countries ?? []
+      : (options?.providers ?? [])
+          .filter(
+            (provider) =>
+              selectedCountries.length === 0 ||
+              provider.countryCodes.some((countryCode) =>
+                selectedCountries.includes(countryCode),
+              ),
+          )
+          .map((provider) => provider.value);
+
+  return source
+    .filter((option) => !state.value || option.includes(state.value))
+    .slice(0, 20);
+}
+
+function applySearchAutocompleteOption(
+  currentQuery: string,
+  state: SearchAutocompleteState,
+  option: string,
+) {
+  const replacement = `${state.kind}:${option.toLowerCase()}`;
+  const before = currentQuery.slice(0, state.start);
+  const after = currentQuery.slice(state.end);
+  const needsTrailingSpace = after.length === 0;
+  const nextQuery = `${before}${replacement}${needsTrailingSpace ? " " : ""}${after}`;
+  const cursor = before.length + replacement.length + (needsTrailingSpace ? 1 : 0);
+
+  return {
+    query: nextQuery,
+    cursor,
+  };
+}
+
+function SearchGuide({
+  state,
+  onApplySuggestion,
+}: {
+  state: SearchGuideState;
+  onApplySuggestion: (suggestion: string) => void;
+}) {
+  const hasActiveFilters =
+    state.countries.length > 0 ||
+    state.providers.length > 0 ||
+    state.ppv !== null ||
+    state.vip !== null ||
+    state.requireEpg;
+
+  return (
+    <div className="flex flex-col gap-2 rounded-xl border border-border/70 bg-background/70 px-3 py-3">
+      <div className="flex items-start gap-2">
+        <Filter className="mt-0.5 size-4 text-muted-foreground" aria-hidden="true" />
+        <div className="flex min-w-0 flex-1 flex-col gap-2">
+          <p className="text-sm text-muted-foreground">
+            {hasActiveFilters ? (
+              <span>
+                Search guide: {describeSearchGuideState(state)}
+              </span>
+            ) : (
+              <span>
+                Search guide: combine free text with filters like <code>country:se</code>,{" "}
+                <code>provider:viaplay</code>, <code>ppv</code>, <code>!ppv</code>,{" "}
+                <code>vip</code>, <code>!vip</code>, or <code>epg</code>.
+              </span>
+            )}
+          </p>
+
+          <div className="flex flex-wrap gap-2">
+            {state.suggestions.map((suggestion) => (
+              <Button
+                key={suggestion}
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-7 px-2 text-xs"
+                onClick={() => onApplySuggestion(suggestion)}
+              >
+                {suggestion}
+              </Button>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function buildSearchGuideState(query: string): SearchGuideState {
+  const parsed = parseSearchGuideQuery(query);
+  const suggestions = new Set<string>();
+
+  if (!parsed.freeText) {
+    suggestions.add("country:se");
+    suggestions.add("provider:viaplay");
+  }
+
+  if (!parsed.requireEpg) {
+    suggestions.add("epg");
+  }
+
+  if (parsed.ppv === null) {
+    suggestions.add("ppv");
+    suggestions.add("!ppv");
+  }
+
+  if (parsed.vip === null) {
+    suggestions.add("vip");
+    suggestions.add("!vip");
+  }
+
+  if (parsed.countries.length === 0) {
+    suggestions.add("country:se");
+  }
+
+  if (parsed.providers.length === 0) {
+    suggestions.add("provider:viaplay");
+  }
+
+  return {
+    ...parsed,
+    suggestions: Array.from(suggestions).slice(0, 6),
+  };
+}
+
+function parseSearchGuideQuery(query: string) {
+  const countries: string[] = [];
+  const providers: string[] = [];
+  let ppv: boolean | null = null;
+  let vip: boolean | null = null;
+  let requireEpg = false;
+
+  const freeText = query
+    .split(/\s+/)
+    .filter(Boolean)
+    .flatMap((token) => {
+      const normalizedToken = token.trim().toLowerCase();
+      if (!normalizedToken) {
+        return [];
+      }
+
+      if (normalizedToken.startsWith("country:")) {
+        const value = normalizedToken.slice("country:".length).trim();
+        if (value && !countries.includes(value)) {
+          countries.push(value);
+        }
+        return [];
+      }
+
+      if (normalizedToken.startsWith("provider:")) {
+        const value = normalizedToken.slice("provider:".length).trim();
+        if (value && !providers.includes(value)) {
+          providers.push(value);
+        }
+        return [];
+      }
+
+      if (normalizedToken === "ppv") {
+        ppv = true;
+        return [];
+      }
+
+      if (normalizedToken === "!ppv") {
+        ppv = false;
+        return [];
+      }
+
+      if (normalizedToken === "vip") {
+        vip = true;
+        return [];
+      }
+
+      if (normalizedToken === "!vip") {
+        vip = false;
+        return [];
+      }
+
+      if (normalizedToken === "epg") {
+        requireEpg = true;
+        return [];
+      }
+
+      return [token];
+    })
+    .join(" ")
+    .trim();
+
+  return {
+    freeText,
+    countries,
+    providers,
+    ppv,
+    vip,
+    requireEpg,
+  };
+}
+
+function describeSearchGuideState(state: SearchGuideState) {
+  const parts: string[] = [];
+
+  if (state.freeText) {
+    parts.push(`searching for "${state.freeText}"`);
+  }
+  if (state.countries.length) {
+    parts.push(`country ${state.countries.join(", ")}`);
+  }
+  if (state.providers.length) {
+    parts.push(`provider ${state.providers.join(", ")}`);
+  }
+  if (state.ppv === true) {
+    parts.push("PPV only");
+  }
+  if (state.ppv === false) {
+    parts.push("excluding PPV");
+  }
+  if (state.vip === true) {
+    parts.push("VIP only");
+  }
+  if (state.vip === false) {
+    parts.push("excluding VIP");
+  }
+  if (state.requireEpg) {
+    parts.push("EPG only");
+  }
+
+  return parts.join(" · ");
+}
+
+function applySearchSuggestion(currentQuery: string, suggestion: string) {
+  const tokens = currentQuery
+    .split(/\s+/)
+    .map((token) => token.trim())
+    .filter(Boolean);
+
+  const nextTokens = tokens.filter((token) => {
+    const normalizedToken = token.toLowerCase();
+    const normalizedSuggestion = suggestion.toLowerCase();
+
+    if (normalizedSuggestion.startsWith("country:")) {
+      return !normalizedToken.startsWith("country:");
+    }
+
+    if (normalizedSuggestion.startsWith("provider:")) {
+      return !normalizedToken.startsWith("provider:");
+    }
+
+    if (normalizedSuggestion === "ppv" || normalizedSuggestion === "!ppv") {
+      return normalizedToken !== "ppv" && normalizedToken !== "!ppv";
+    }
+
+    if (normalizedSuggestion === "vip" || normalizedSuggestion === "!vip") {
+      return normalizedToken !== "vip" && normalizedToken !== "!vip";
+    }
+
+    if (normalizedSuggestion === "epg") {
+      return normalizedToken !== "epg";
+    }
+
+    return true;
+  });
+
+  nextTokens.push(suggestion);
+  return nextTokens.join(" ").trim();
 }
 
 function ProgramStateBadge({ state }: { state: ProgramPlaybackState }) {

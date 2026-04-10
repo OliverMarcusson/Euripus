@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { Outlet, createRootRoute, createRoute, createRouter, Navigate } from "@tanstack/react-router";
 import { AppShell } from "@/components/layout/app-shell";
+import { AdminPage } from "@/features/admin/admin-page";
 import { AuthPage } from "@/features/auth/auth-page";
 import { FavoritesPage } from "@/features/channels/favorites-page";
 import { GuidePage } from "@/features/channels/guide-page";
@@ -76,6 +77,12 @@ const receiverRoute = createRoute({
   component: ReceiverPage,
 });
 
+const adminRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/admin",
+  component: AdminPage,
+});
+
 const guideRoute = createRoute({
   getParentRoute: () => authenticatedRoute,
   path: "/guide",
@@ -109,6 +116,7 @@ const indexRoute = createRoute({
 const routeTree = rootRoute.addChildren([
   indexRoute,
   authRoute,
+  adminRoute,
   receiverRoute,
   authenticatedRoute.addChildren([guideRoute, searchRoute, favoritesRoute, settingsRoute]),
 ]);

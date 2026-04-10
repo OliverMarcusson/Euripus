@@ -89,6 +89,107 @@ export type SearchBackendStatus = {
 
 export type SearchBackend = "meilisearch" | "postgres";
 
+export type SearchFilterProviderOption = {
+  value: string;
+  countryCodes: string[];
+};
+
+export type SearchFilterOptionsResponse = {
+  countries: string[];
+  providers: SearchFilterProviderOption[];
+};
+
+export type AdminPatternKind = "country" | "provider" | "flag";
+
+export type AdminMatchTarget =
+  | "channel_name"
+  | "category_name"
+  | "program_title"
+  | "channel_or_category"
+  | "any_text";
+
+export type AdminMatchMode = "prefix" | "contains" | "exact";
+
+export type AdminPattern = {
+  id: string;
+  pattern: string;
+};
+
+export type AdminPatternGroup = {
+  id: string;
+  kind: AdminPatternKind;
+  value: string;
+  normalizedValue: string;
+  matchTarget: AdminMatchTarget;
+  matchMode: AdminMatchMode;
+  priority: number;
+  enabled: boolean;
+  patternsText: string;
+  countryCodesText: string;
+  countryCodes: string[];
+  patterns: AdminPattern[];
+};
+
+export type AdminPatternGroupInput = {
+  kind: AdminPatternKind;
+  value: string;
+  matchTarget: AdminMatchTarget;
+  matchMode: AdminMatchMode;
+  priority: number;
+  enabled: boolean;
+  patternsText: string;
+  countryCodesText: string;
+};
+
+export type AdminPatternGroupImportInput = {
+  kind: string;
+  value: string;
+  matchTarget: string;
+  matchMode: string;
+  priority?: number;
+  enabled?: boolean;
+  patterns?: string[];
+  patternsText?: string;
+  countryCodes?: string[];
+};
+
+export type AdminPatternGroupImportRequest = {
+  groups: AdminPatternGroupImportInput[];
+};
+
+export type AdminPatternGroupImportError = {
+  index: number;
+  field: string;
+  message: string;
+};
+
+export type AdminSearchTestRequest = {
+  channelName?: string | null;
+  categoryName?: string | null;
+  programTitle?: string | null;
+};
+
+export type AdminSearchTestResponse = {
+  countryCode: string | null;
+  providerName: string | null;
+  isPpv: boolean;
+  isVip: boolean;
+  forceHasEpg: boolean;
+};
+
+export type AdminSearchQueryTestRequest = {
+  query: string;
+};
+
+export type AdminSearchQueryTestResponse = {
+  search: string;
+  countries: string[];
+  providers: string[];
+  ppv: boolean | null;
+  vip: boolean | null;
+  requireEpg: boolean;
+};
+
 export type Channel = {
   id: string;
   name: string;

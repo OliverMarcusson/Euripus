@@ -21,10 +21,11 @@ pub(in crate::server_main) struct ProviderAlias {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::server_main) struct ParsedSearch {
     pub(in crate::server_main) search: String,
-    pub(in crate::server_main) filter: Option<String>,
     pub(in crate::server_main) countries: Vec<String>,
-    pub(in crate::server_main) regions: Vec<String>,
     pub(in crate::server_main) providers: Vec<String>,
+    pub(in crate::server_main) ppv: Option<bool>,
+    pub(in crate::server_main) vip: Option<bool>,
+    pub(in crate::server_main) require_epg: bool,
 }
 
 #[derive(Debug, FromRow)]
@@ -250,118 +251,74 @@ fn add_synonym_group(synonyms: &mut HashMap<String, Vec<String>>, group: &[&str]
     }
 }
 
-pub(in crate::server_main) fn parse_search_query(
-    query: &str,
-    lexicon: &SearchLexicon,
-) -> ParsedSearch {
-    let trimmed = query.trim();
-    let mut remaining = trimmed.to_string();
+pub(in crate::server_main) fn parse_search_query(query: &str) -> ParsedSearch {
     let mut countries = Vec::new();
-    let mut regions = Vec::new();
     let mut providers = Vec::new();
-
-    if let Some(colon_index) = remaining.find(':') {
-        let prefix_candidate = normalize_prefix(&remaining[..colon_index]);
-        if !prefix_candidate.is_empty()
-            && lexicon.known_prefixes.contains(&prefix_candidate)
-            && !remaining[..colon_index].contains(' ')
-        {
-            if lexicon.country_prefixes.contains(&prefix_candidate) {
-                countries.push(prefix_candidate.clone());
-            } else {
-                regions.push(prefix_candidate.clone());
-            }
-            remaining = remaining[colon_index + 1..].trim().to_string();
-        }
-    }
-
-    let original_tokens = remaining
+    let mut ppv = None;
+    let mut vip = None;
+    let mut require_epg = false;
+    let search = query
         .split_whitespace()
-        .map(|token| token.to_string())
-        .collect::<Vec<_>>();
-    let normalized_tokens = original_tokens
-        .iter()
-        .map(|token| normalize_search_text(token))
-        .collect::<Vec<_>>();
-    let mut consumed = vec![false; original_tokens.len()];
-
-    for alias in lexicon
-        .provider_aliases
-        .iter()
-        .filter(|alias| is_high_confidence_provider_alias(alias))
-    {
-        if alias.alias_tokens.is_empty() || original_tokens.is_empty() {
-            continue;
-        }
-
-        let mut matched = false;
-        'search: for start in 0..normalized_tokens.len() {
-            for end in start + 1..=normalized_tokens.len().min(start + 3) {
-                if consumed[start..end].iter().any(|used| *used) {
-                    continue;
-                }
-                let candidate = normalized_tokens[start..end]
-                    .iter()
-                    .filter(|token| !token.is_empty())
-                    .cloned()
-                    .collect::<Vec<_>>()
-                    .join(" ");
-                if candidate == alias.normalized_alias {
-                    if !providers.iter().any(|provider| provider == &alias.key) {
-                        providers.push(alias.key.clone());
-                    }
-                    consumed[start..end].fill(true);
-                    matched = true;
-                    break 'search;
-                }
+        .filter_map(|token| {
+            let normalized_token = token.trim().to_ascii_lowercase();
+            if normalized_token.is_empty() {
+                return None;
             }
-        }
-
-        if matched && consumed.iter().all(|token| *token) {
-            break;
-        }
-    }
-
-    let search = original_tokens
-        .into_iter()
-        .zip(consumed)
-        .filter_map(|(token, used)| (!used).then_some(token))
+            if let Some(value) = normalized_token.strip_prefix("country:") {
+                let normalized_value = value.trim().to_ascii_lowercase();
+                if !normalized_value.is_empty()
+                    && !countries.iter().any(|country| country == &normalized_value)
+                {
+                    countries.push(normalized_value);
+                }
+                return None;
+            }
+            if let Some(value) = normalized_token.strip_prefix("provider:") {
+                let normalized_value = value.trim().to_ascii_lowercase();
+                if !normalized_value.is_empty()
+                    && !providers
+                        .iter()
+                        .any(|provider| provider == &normalized_value)
+                {
+                    providers.push(normalized_value);
+                }
+                return None;
+            }
+            if normalized_token == "ppv" {
+                ppv = Some(true);
+                return None;
+            }
+            if normalized_token == "!ppv" {
+                ppv = Some(false);
+                return None;
+            }
+            if normalized_token == "vip" {
+                vip = Some(true);
+                return None;
+            }
+            if normalized_token == "!vip" {
+                vip = Some(false);
+                return None;
+            }
+            if normalized_token == "epg" {
+                require_epg = true;
+                return None;
+            }
+            Some(token.to_string())
+        })
         .collect::<Vec<_>>()
         .join(" ")
         .trim()
         .to_string();
 
-    let mut clauses = Vec::new();
-    if !countries.is_empty() {
-        clauses.push(build_meili_filter_clause("country_code", &countries));
-    }
-    if !regions.is_empty() {
-        clauses.push(build_meili_filter_clause("region_code", &regions));
-    }
-    if !providers.is_empty() {
-        clauses.push(build_meili_filter_clause("provider_key", &providers));
-    }
-
     ParsedSearch {
         search,
-        filter: (!clauses.is_empty()).then(|| clauses.join(" AND ")),
         countries,
-        regions,
         providers,
+        ppv,
+        vip,
+        require_epg,
     }
-}
-
-fn is_high_confidence_provider_alias(alias: &ProviderAlias) -> bool {
-    if alias.alias_tokens.is_empty() {
-        return false;
-    }
-
-    if alias.alias_tokens.len() >= 2 {
-        return true;
-    }
-
-    let token = alias.alias_tokens[0].as_str();
-    token.len() >= 5 && token.chars().all(|ch| ch.is_ascii_alphabetic())
 }
 
 pub(in crate::server_main) fn build_meili_filter_clause(
@@ -382,12 +339,32 @@ pub(in crate::server_main) fn build_meili_filter_clause(
 
 pub(in crate::server_main) fn build_meili_search_filter(
     user_id: Uuid,
-    parsed_filter: Option<&str>,
+    parsed: &ParsedSearch,
+    include_hidden: bool,
 ) -> String {
-    match parsed_filter {
-        Some(filter) if !filter.is_empty() => format!(r#"user_id = "{user_id}" AND {filter}"#),
-        _ => format!(r#"user_id = "{user_id}""#),
+    let mut clauses = vec![format!(r#"user_id = "{user_id}""#)];
+    if !parsed.countries.is_empty() {
+        clauses.push(build_meili_filter_clause("country_code", &parsed.countries));
     }
+    if !parsed.providers.is_empty() {
+        clauses.push(build_meili_filter_clause(
+            "provider_name",
+            &parsed.providers,
+        ));
+    }
+    if let Some(ppv) = parsed.ppv {
+        clauses.push(format!("is_ppv = {ppv}"));
+    }
+    if let Some(vip) = parsed.vip {
+        clauses.push(format!("is_vip = {vip}"));
+    }
+    if parsed.require_epg {
+        clauses.push("has_epg = true".to_string());
+    }
+    if !include_hidden {
+        clauses.push("is_hidden = false".to_string());
+    }
+    clauses.join(" AND ")
 }
 
 pub(in crate::server_main) fn meili_channel_primary_limit(offset: i64, limit: i64) -> usize {
@@ -673,66 +650,55 @@ mod tests {
 
     #[test]
     fn parse_search_query_supports_filter_only_country_prefix() {
-        let parsed = parse_search_query("se:", &sample_search_lexicon());
+        let parsed = parse_search_query("country:se");
         assert_eq!(parsed.search, "");
-        assert_eq!(parsed.countries, vec!["SE".to_string()]);
-        assert_eq!(parsed.filter.as_deref(), Some(r#"country_code = "SE""#));
+        assert_eq!(parsed.countries, vec!["se".to_string()]);
     }
 
     #[test]
     fn parse_search_query_extracts_country_and_provider_filters() {
-        let parsed = parse_search_query("se: viaplay", &sample_search_lexicon());
+        let parsed = parse_search_query("country:se provider:viaplay");
         assert_eq!(parsed.search, "");
         assert_eq!(parsed.providers, vec!["viaplay".to_string()]);
-        assert_eq!(
-            parsed.filter.as_deref(),
-            Some(r#"country_code = "SE" AND provider_key = "viaplay""#)
-        );
+        assert_eq!(parsed.countries, vec!["se".to_string()]);
     }
 
     #[test]
-    fn parse_search_query_extracts_provider_from_tail_query() {
-        let parsed = parse_search_query("the masters viaplay", &sample_search_lexicon());
+    fn parse_search_query_extracts_provider_filter_with_free_text() {
+        let parsed = parse_search_query("the masters provider:viaplay");
         assert_eq!(parsed.search, "the masters");
         assert_eq!(parsed.providers, vec!["viaplay".to_string()]);
-        assert_eq!(
-            parsed.filter.as_deref(),
-            Some(r#"provider_key = "viaplay""#)
-        );
     }
 
     #[test]
-    fn parse_search_query_supports_provider_only_alias() {
-        let parsed = parse_search_query("sky sports", &sample_search_lexicon());
+    fn parse_search_query_supports_provider_only_operator() {
+        let parsed = parse_search_query("provider:sky");
         assert_eq!(parsed.search, "");
         assert_eq!(parsed.providers, vec!["sky".to_string()]);
-        assert_eq!(parsed.filter.as_deref(), Some(r#"provider_key = "sky""#));
     }
 
     #[test]
-    fn parse_search_query_keeps_channel_like_aliases_as_free_text() {
-        let parsed = parse_search_query("se tv3", &sample_search_lexicon());
+    fn parse_search_query_keeps_free_text_without_operators() {
+        let parsed = parse_search_query("se tv3");
         assert_eq!(parsed.search, "se tv3");
         assert!(parsed.providers.is_empty());
-        assert!(parsed.filter.is_none());
     }
 
     #[test]
     fn parse_search_query_leaves_broad_category_as_free_text() {
-        let parsed = parse_search_query("sports", &sample_search_lexicon());
+        let parsed = parse_search_query("sports");
         assert_eq!(parsed.search, "sports");
-        assert!(parsed.filter.is_none());
     }
 
     #[test]
-    fn parse_search_query_ignores_unknown_or_too_short_prefixes() {
-        let malformed = parse_search_query("zz: viaplay", &sample_search_lexicon());
-        assert_eq!(malformed.search, "zz:");
-        assert_eq!(malformed.providers, vec!["viaplay".to_string()]);
-
-        let too_short = parse_search_query("s: viaplay", &sample_search_lexicon());
-        assert_eq!(too_short.search, "s:");
-        assert_eq!(too_short.providers, vec!["viaplay".to_string()]);
+    fn parse_search_query_supports_boolean_filters() {
+        let parsed = parse_search_query("country:se provider:viaplay !ppv vip epg golf");
+        assert_eq!(parsed.search, "golf");
+        assert_eq!(parsed.countries, vec!["se".to_string()]);
+        assert_eq!(parsed.providers, vec!["viaplay".to_string()]);
+        assert_eq!(parsed.ppv, Some(false));
+        assert_eq!(parsed.vip, Some(true));
+        assert!(parsed.require_epg);
     }
 
     #[test]

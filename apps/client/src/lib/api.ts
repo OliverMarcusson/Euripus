@@ -1,4 +1,12 @@
 import type {
+  AdminPatternGroup,
+  AdminPatternGroupInput,
+  AdminPatternGroupImportError,
+  AdminPatternGroupImportRequest,
+  AdminSearchQueryTestRequest,
+  AdminSearchQueryTestResponse,
+  AdminSearchTestRequest,
+  AdminSearchTestResponse,
   ApiError,
   AuthSession,
   ChannelSearchResults,
@@ -26,6 +34,7 @@ import type {
   RemoteCommandAck,
   RemoteControllerTarget,
   RemotePlaybackCommand,
+  SearchFilterOptionsResponse,
   SearchBackendStatus,
   ServerNetworkStatus,
   SyncJob,
@@ -36,11 +45,30 @@ import { useAuthStore } from "@/store/auth-store";
 
 export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "/api";
 const CSRF_COOKIE_NAME = "euripus.csrf";
+const ADMIN_CSRF_COOKIE_NAME = "euripus.admin.csrf";
 
 type RequestOptions = {
   retry?: boolean;
   includeCsrf?: boolean;
 };
+
+type ApiErrorPayload = ApiError & {
+  details?: unknown;
+};
+
+export class ApiRequestError extends Error {
+  status: number;
+  code: string;
+  details?: unknown;
+
+  constructor(payload: ApiErrorPayload) {
+    super(payload.message);
+    this.name = "ApiRequestError";
+    this.status = payload.status;
+    this.code = payload.error;
+    this.details = payload.details;
+  }
+}
 
 function readCookie(name: string) {
   if (typeof document === "undefined") {
@@ -117,6 +145,44 @@ async function request<T>(
   return (await response.json()) as T;
 }
 
+async function adminRequest<T>(
+  path: string,
+  init: RequestInit = {},
+  { includeCsrf = false }: Pick<RequestOptions, "includeCsrf"> = {},
+): Promise<T> {
+  const headers = new Headers(init.headers);
+  withJsonHeaders(headers);
+
+  if (includeCsrf) {
+    const csrfToken = readCookie(ADMIN_CSRF_COOKIE_NAME);
+    if (csrfToken) {
+      headers.set("X-CSRF-Token", csrfToken);
+    }
+  }
+
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    ...init,
+    headers,
+    credentials: "include",
+  });
+
+  if (!response.ok) {
+    const fallback: ApiErrorPayload = {
+      error: "request_failed",
+      message: response.statusText,
+      status: response.status,
+    };
+    const payload = (await response.json().catch(() => fallback)) as ApiErrorPayload;
+    throw new ApiRequestError(payload);
+  }
+
+  if (response.status === 204) {
+    return undefined as T;
+  }
+
+  return (await response.json()) as T;
+}
+
 export async function register(payload: RegisterPayload) {
   return request<AuthSession>(
     "/auth/register",
@@ -169,6 +235,131 @@ export function getServerNetworkStatus() {
 
 export function getSearchBackendStatus() {
   return request<SearchBackendStatus>("/search/status");
+}
+
+export function getSearchFilterOptions() {
+  return request<SearchFilterOptionsResponse>("/search/filter-options");
+}
+
+export function getAdminPatternGroups() {
+  return adminRequest<AdminPatternGroup[]>("/admin/search/pattern-groups");
+}
+
+export function adminLogin(password: string) {
+  return adminRequest<void>(
+    "/admin/auth/login",
+    {
+      method: "POST",
+      body: JSON.stringify({ password }),
+    },
+    { includeCsrf: false },
+  );
+}
+
+export function adminLogout() {
+  return adminRequest<void>(
+    "/admin/auth/logout",
+    {
+      method: "POST",
+    },
+    { includeCsrf: true },
+  );
+}
+
+export function createAdminPatternGroup(payload: AdminPatternGroupInput) {
+  return adminRequest<AdminPatternGroup>(
+    "/admin/search/pattern-groups",
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+    },
+    { includeCsrf: true },
+  );
+}
+
+export function importAdminPatternGroups(payload: AdminPatternGroupImportRequest) {
+  return adminRequest<AdminPatternGroup[]>(
+    "/admin/search/pattern-group-import",
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+    },
+    { includeCsrf: true },
+  );
+}
+
+export function updateAdminPatternGroup(
+  id: string,
+  payload: AdminPatternGroupInput,
+) {
+  return adminRequest<AdminPatternGroup>(
+    `/admin/search/pattern-groups/${id}`,
+    {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    },
+    { includeCsrf: true },
+  );
+}
+
+export function deleteAdminPatternGroup(id: string) {
+  return adminRequest<void>(
+    `/admin/search/pattern-groups/${id}`,
+    {
+      method: "DELETE",
+    },
+    { includeCsrf: true },
+  );
+}
+
+export function deleteAllAdminPatternGroups() {
+  return adminRequest<void>(
+    "/admin/search/pattern-groups",
+    {
+      method: "DELETE",
+    },
+    { includeCsrf: true },
+  );
+}
+
+export function testAdminSearchPatterns(payload: AdminSearchTestRequest) {
+  return adminRequest<AdminSearchTestResponse>(
+    "/admin/search/test",
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+    },
+    { includeCsrf: true },
+  );
+}
+
+export function testAdminSearchQuery(payload: AdminSearchQueryTestRequest) {
+  return adminRequest<AdminSearchQueryTestResponse>(
+    "/admin/search/test-query",
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+    },
+    { includeCsrf: true },
+  );
+}
+
+export function getAdminImportErrors(error: unknown): AdminPatternGroupImportError[] {
+  if (error instanceof ApiRequestError && Array.isArray(error.details)) {
+    return error.details.filter(isAdminImportError);
+  }
+
+  return [];
+}
+
+function isAdminImportError(value: unknown): value is AdminPatternGroupImportError {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as { index?: unknown }).index === "number" &&
+    typeof (value as { field?: unknown }).field === "string" &&
+    typeof (value as { message?: unknown }).message === "string"
+  );
 }
 
 export function getSessions() {
@@ -410,13 +601,13 @@ async function receiverRequest<T>(
     headers,
   });
   if (!response.ok) {
-    const fallback: ApiError = {
+    const fallback: ApiErrorPayload = {
       error: "request_failed",
       message: response.statusText,
       status: response.status,
     };
-    const payload = (await response.json().catch(() => fallback)) as ApiError;
-    throw new Error(payload.message);
+    const payload = (await response.json().catch(() => fallback)) as ApiErrorPayload;
+    throw new ApiRequestError(payload);
   }
   if (response.status === 204) {
     return undefined as T;

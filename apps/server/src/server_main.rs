@@ -52,7 +52,7 @@ use meilisearch_sdk::{
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256, Sha384};
-use sqlx::{FromRow, PgPool, Postgres, Transaction, postgres::PgPoolOptions};
+use sqlx::{FromRow, PgPool, Postgres, QueryBuilder, Transaction, postgres::PgPoolOptions};
 use tokio::signal;
 use tokio::sync::{RwLock, broadcast};
 use tokio::task::{JoinHandle, JoinSet};
@@ -66,6 +66,7 @@ use tracing::{error, info, warn};
 use url::Url;
 use uuid::Uuid;
 
+mod admin;
 mod app;
 mod auth;
 mod error;
@@ -163,6 +164,20 @@ struct SearchBackendStatusResponse {
     total_documents: Option<i64>,
 }
 
+#[derive(Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct SearchFilterProviderOptionResponse {
+    value: String,
+    country_codes: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SearchFilterOptionsResponse {
+    countries: Vec<String>,
+    providers: Vec<SearchFilterProviderOptionResponse>,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ChannelSearchResponse {
@@ -195,6 +210,32 @@ struct SearchQuery {
     q: String,
     offset: Option<i64>,
     limit: Option<i64>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum AdminSearchPatternKind {
+    Country,
+    Provider,
+    Flag,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum AdminSearchMatchTarget {
+    ChannelName,
+    CategoryName,
+    ProgramTitle,
+    ChannelOrCategory,
+    AnyText,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum AdminSearchMatchMode {
+    Prefix,
+    Contains,
+    Exact,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -281,9 +322,10 @@ struct MeiliChannelDoc {
     subtitle: Option<String>,
     category_name_raw: Option<String>,
     country_code: Option<String>,
-    region_code: Option<String>,
-    provider_key: Option<String>,
-    provider_labels: Vec<String>,
+    provider_name: Option<String>,
+    is_ppv: bool,
+    is_vip: bool,
+    has_epg: bool,
     broad_categories: Vec<String>,
     event_titles: Vec<String>,
     event_keywords: Vec<String>,
@@ -305,9 +347,10 @@ struct MeiliProgramDoc {
     profile_id: String,
     entity_id: String,
     country_code: Option<String>,
-    region_code: Option<String>,
-    provider_key: Option<String>,
-    provider_labels: Vec<String>,
+    provider_name: Option<String>,
+    is_ppv: bool,
+    is_vip: bool,
+    has_epg: bool,
     broad_categories: Vec<String>,
     channel_name: Option<String>,
     title: String,
@@ -324,9 +367,9 @@ struct MeiliProgramDoc {
 #[derive(Debug, Clone)]
 struct ChannelProgramMetadata {
     country_code: Option<String>,
-    region_code: Option<String>,
-    provider_key: Option<String>,
-    provider_labels: Vec<String>,
+    provider_name: Option<String>,
+    is_ppv: bool,
+    is_vip: bool,
     broad_categories: Vec<String>,
     is_hidden: bool,
 }
@@ -345,9 +388,14 @@ struct MeiliChannelRow {
     profile_id: Uuid,
     name: String,
     category_name: Option<String>,
+    search_country_code: Option<String>,
+    search_provider_name: Option<String>,
+    search_is_ppv: bool,
+    search_is_vip: bool,
     has_catchup: bool,
     archive_duration_hours: Option<i32>,
     epg_channel_id: Option<String>,
+    has_epg: bool,
     updated_at: DateTime<Utc>,
 }
 
@@ -358,6 +406,10 @@ struct MeiliProgramRow {
     channel_id: Option<Uuid>,
     channel_name: Option<String>,
     category_name: Option<String>,
+    search_country_code: Option<String>,
+    search_provider_name: Option<String>,
+    search_is_ppv: bool,
+    search_is_vip: bool,
     title: String,
     description: Option<String>,
     start_at: DateTime<Utc>,

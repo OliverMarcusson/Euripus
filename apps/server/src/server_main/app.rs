@@ -380,6 +380,7 @@ async fn recover_interrupted_syncs(pool: &PgPool) -> Result<InterruptedSyncRecov
 pub(super) fn shared_api_router() -> Router<AppState> {
     Router::new()
         .route("/server/network", get(get_server_network_status))
+        .merge(admin::browser_router())
         .merge(auth::shared_router())
         .merge(provider::shared_router())
         .merge(guide::shared_router())
