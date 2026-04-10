@@ -31,6 +31,7 @@ import { Progress } from "@/components/ui/progress";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Toggle } from "@/components/ui/toggle";
 import { getGuideCategory } from "@/lib/api";
 import {
   cn,
@@ -48,9 +49,11 @@ type GuideCategoryFilterCardProps = {
   preferencesReady: boolean;
   saving: boolean;
   selectedCategoryIds: string[];
+  showOnlyChannelsWithEpg: boolean;
   onFilterInputChange: (value: string) => void;
   onApplyFilter: () => void;
   onReset: () => void;
+  onToggleEpgOnly: (pressed: boolean) => void;
   onToggleCategory: (categoryId: string) => void;
 };
 
@@ -61,6 +64,7 @@ type GuideCategorySectionProps = {
   activeFavoriteChannelId?: string;
   categoryFavoritePending: boolean;
   activeFavoriteCategoryId?: string;
+  showOnlyChannelsWithEpg: boolean;
   onToggle: (nextOpen: boolean) => void;
   onToggleCategoryFavorite: (category: GuideCategorySummary) => void;
   onFavorite: (channel: Channel) => void;
@@ -74,9 +78,11 @@ export function GuideCategoryFilterCard({
   preferencesReady,
   saving,
   selectedCategoryIds,
+  showOnlyChannelsWithEpg,
   onFilterInputChange,
   onApplyFilter,
   onReset,
+  onToggleEpgOnly,
   onToggleCategory,
 }: GuideCategoryFilterCardProps) {
   const [open, setOpen] = useState(false);
@@ -160,6 +166,17 @@ export function GuideCategoryFilterCard({
               />
             </div>
 
+            <div className="flex flex-wrap items-center gap-2">
+              <Toggle
+                variant="outline"
+                pressed={showOnlyChannelsWithEpg}
+                onPressedChange={onToggleEpgOnly}
+                aria-label="Hide channels without EPG"
+              >
+                Hide channels without EPG
+              </Toggle>
+            </div>
+
             <ScrollArea
               type="always"
               className="h-[28rem] rounded-none border-0 bg-transparent sm:rounded-2xl sm:border sm:border-border/70 sm:bg-background/70"
@@ -238,15 +255,21 @@ export function GuideCategorySection({
   activeFavoriteChannelId,
   categoryFavoritePending,
   activeFavoriteCategoryId,
+  showOnlyChannelsWithEpg,
   onToggle,
   onToggleCategoryFavorite,
   onFavorite,
   onPlay,
 }: GuideCategorySectionProps) {
   const categoryQuery = useInfiniteQuery({
-    queryKey: ["guide", "category", category.id],
+    queryKey: ["guide", "category", category.id, { withEpgOnly: showOnlyChannelsWithEpg }],
     queryFn: ({ pageParam }) =>
-      getGuideCategory(category.id, pageParam, GUIDE_PAGE_SIZE),
+      getGuideCategory(
+        category.id,
+        pageParam,
+        GUIDE_PAGE_SIZE,
+        showOnlyChannelsWithEpg,
+      ),
     initialPageParam: 0,
     getNextPageParam: (lastPage) => lastPage.nextOffset ?? undefined,
     enabled: open,

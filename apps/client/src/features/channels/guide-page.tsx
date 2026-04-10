@@ -61,9 +61,11 @@ export function GuidePage() {
           preferencesReady={!guideState.preferencesQuery.isPending}
           saving={guideState.savePreferencesMutation.isPending}
           selectedCategoryIds={guideState.validSelectedCategoryIds}
+          showOnlyChannelsWithEpg={guideState.showOnlyChannelsWithEpg}
           onFilterInputChange={guideState.setFilterInput}
           onApplyFilter={guideState.applyFilter}
           onReset={() => guideState.updateIncludedCategoryIds([])}
+          onToggleEpgOnly={guideState.setShowOnlyChannelsWithEpg}
           onToggleCategory={guideState.toggleIncludedCategory}
         />
       ) : null}
@@ -113,6 +115,7 @@ export function GuidePage() {
                     activeFavoriteChannelId={favoriteMutation.variables?.id}
                     categoryFavoritePending={categoryFavoriteMutation.isPending}
                     activeFavoriteCategoryId={categoryFavoriteMutation.variables?.id}
+                    showOnlyChannelsWithEpg={guideState.showOnlyChannelsWithEpg}
                     onToggle={(nextOpen) =>
                       guideState.toggleCategory(category.id, nextOpen)}
                     onToggleCategoryFavorite={(nextCategory) =>

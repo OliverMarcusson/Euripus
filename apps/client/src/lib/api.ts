@@ -213,8 +213,14 @@ export function getChannelGuide(id: string) {
   return request<Program[]>(`/guide/channel/${id}`);
 }
 
-export function getGuide() {
-  return request<GuideResponse>("/guide");
+export function getGuide(withEpgOnly = false) {
+  const params = new URLSearchParams();
+  if (withEpgOnly) {
+    params.set("withEpgOnly", "true");
+  }
+
+  const suffix = params.size ? `?${params.toString()}` : "";
+  return request<GuideResponse>(`/guide${suffix}`);
 }
 
 export function getGuidePreferences() {
@@ -228,11 +234,19 @@ export function saveGuidePreferences(payload: GuidePreferences) {
   });
 }
 
-export function getGuideCategory(categoryId: string, offset = 0, limit = 40) {
+export function getGuideCategory(
+  categoryId: string,
+  offset = 0,
+  limit = 40,
+  withEpgOnly = false,
+) {
   const params = new URLSearchParams({
     offset: offset.toString(),
     limit: limit.toString(),
   });
+  if (withEpgOnly) {
+    params.set("withEpgOnly", "true");
+  }
   return request<GuideCategoryResponse>(
     `/guide/category/${encodeURIComponent(categoryId)}?${params.toString()}`,
   );
