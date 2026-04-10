@@ -359,9 +359,9 @@ fn target_requires_browser_hls_preflight(
     legacy_stream_extension: Option<&str>,
 ) -> bool {
     matches!(target, PlaybackTarget::Browser)
-        && matches!(
+        && !matches!(
             resolve_effective_playback_format(output_format, legacy_stream_extension),
-            Ok(PlaybackStreamFormat::Ts)
+            Ok(PlaybackStreamFormat::Hls)
         )
 }
 
@@ -708,7 +708,7 @@ mod tests {
     }
 
     #[test]
-    fn browser_targets_require_hls_preflight_for_ts_streams() {
+    fn browser_targets_require_hls_preflight_for_non_hls_streams() {
         assert!(target_requires_browser_hls_preflight(
             PlaybackTarget::Browser,
             "m3u8",
@@ -727,6 +727,16 @@ mod tests {
         assert!(!target_requires_browser_hls_preflight(
             PlaybackTarget::ReceiverWeb,
             "ts",
+            None,
+        ));
+        assert!(target_requires_browser_hls_preflight(
+            PlaybackTarget::Browser,
+            "m3u8",
+            Some("mp4"),
+        ));
+        assert!(target_requires_browser_hls_preflight(
+            PlaybackTarget::Browser,
+            "legacy",
             None,
         ));
     }
