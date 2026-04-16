@@ -25,6 +25,10 @@ import {
   resumeRemotePlayback,
   stopRemotePlayback,
 } from "@/lib/api";
+import {
+  resolveRemoteTargetDevice,
+  useRemoteControllerTargetQuery,
+} from "@/hooks/use-remote-control-state";
 import { logPlaybackDiagnostic } from "@/lib/playback-diagnostics";
 import { receiverPlaybackBadgeLabel } from "@/lib/receiver-playback";
 import { usePlayerStore } from "@/store/player-store";
@@ -38,7 +42,15 @@ export function PlayerView() {
   const setLoading = usePlayerStore((state) => state.setLoading);
   const setPlayback = usePlayerStore((state) => state.setPlayback);
   const setSource = usePlayerStore((state) => state.setSource);
-  const remoteTarget = useRemoteControllerStore((state) => state.target);
+  const remoteTargetSelection = useRemoteControllerStore((state) => state.target);
+  const remoteTargetQuery = useRemoteControllerTargetQuery({
+    enabled: !!remoteTargetSelection,
+    refetchInterval: remoteTargetSelection ? 5_000 : false,
+  });
+  const remoteTarget = resolveRemoteTargetDevice(
+    remoteTargetSelection,
+    remoteTargetQuery.data?.device,
+  );
   const [minimized, setMinimized] = useState(false);
   const recoveryInFlightRef = useRef(false);
 

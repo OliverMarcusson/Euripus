@@ -88,11 +88,14 @@ export function useCategoryFavoriteMutation() {
         ];
       });
     },
-    onSettled: async () => {
+    onError: async () => {
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["guide"] }),
+        queryClient.invalidateQueries({ queryKey: ["guide", "overview"] }),
         queryClient.invalidateQueries({ queryKey: ["favorites"] }),
       ]);
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["favorites"] });
     },
   });
 }

@@ -1,5 +1,5 @@
-import { useEffect } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useState } from "react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link, Outlet, useRouterState } from "@tanstack/react-router";
 import {
   ChevronDown,
@@ -27,12 +27,14 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import {
   clearRemoteControllerTarget,
-  getRemoteControllerTarget,
-  getRemoteReceivers,
   logout,
   selectRemoteControllerTarget,
 } from "@/lib/api";
-import { REMOTE_QUERY_STALE_TIME_MS } from "@/lib/query-cache";
+import {
+  resolveRemoteTargetDevice,
+  useRemoteControllerTargetQuery,
+  useRemoteReceiversQuery,
+} from "@/hooks/use-remote-control-state";
 import { formatReceiverPlaybackSummary } from "@/lib/receiver-playback";
 import { cn } from "@/lib/utils";
 import { useAuthStore } from "@/store/auth-store";
@@ -46,47 +48,38 @@ const navigation = [
   { to: "/settings", label: "Settings", icon: Settings },
 ] as const;
 
-export function AppShell() {
+function RemoteTargetMenu({
+  compact = false,
+  userAuthenticated,
+}: {
+  compact?: boolean;
+  userAuthenticated: boolean;
+}) {
   const queryClient = useQueryClient();
-  const pathname = useRouterState({
-    select: (state) => state.location.pathname,
-  });
-  const user = useAuthStore((state) => state.user);
-  const clearSession = useAuthStore((state) => state.clearSession);
-  const hasPlayerSource = usePlayerStore((state) => !!state.source);
-  const setPlayerSource = usePlayerStore((state) => state.setSource);
+  const [open, setOpen] = useState(false);
   const remoteTarget = useRemoteControllerStore((state) => state.target);
   const setTargetSelection = useRemoteControllerStore(
     (state) => state.setTargetSelection,
   );
   const clearTarget = useRemoteControllerStore((state) => state.clearTarget);
-  const initials = (user?.username ?? "Guest")
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((part) => part[0]?.toUpperCase() ?? "")
-    .join("")
-    .slice(0, 2);
-  const devicesQuery = useQuery({
-    queryKey: ["remote", "receivers"],
-    queryFn: getRemoteReceivers,
-    enabled: !!user,
-    refetchInterval: user ? 5_000 : false,
-    staleTime: REMOTE_QUERY_STALE_TIME_MS,
+  const setPlayerSource = usePlayerStore((state) => state.setSource);
+  const shouldPollTarget = userAuthenticated && (open || !!remoteTarget);
+  const targetQuery = useRemoteControllerTargetQuery({
+    enabled: userAuthenticated,
+    refetchInterval: shouldPollTarget ? 5_000 : false,
   });
-  const targetQuery = useQuery({
-    queryKey: ["remote", "controller", "target"],
-    queryFn: getRemoteControllerTarget,
-    enabled: !!user,
-    refetchInterval: user ? 5_000 : false,
-    staleTime: REMOTE_QUERY_STALE_TIME_MS,
+  const devicesQuery = useRemoteReceiversQuery({
+    enabled: userAuthenticated && open,
+    refetchInterval: open ? 5_000 : false,
   });
   const selectTargetMutation = useMutation({
     mutationFn: selectRemoteControllerTarget,
     onSuccess: async (selection) => {
       setTargetSelection(selection);
       setPlayerSource(null);
-      await queryClient.invalidateQueries({ queryKey: ["remote"] });
+      queryClient.setQueryData(["remote", "controller", "target"], selection);
+      await queryClient.invalidateQueries({ queryKey: ["remote", "receivers"] });
+      setOpen(false);
     },
   });
   const clearTargetMutation = useMutation({
@@ -94,27 +87,20 @@ export function AppShell() {
     onSuccess: async () => {
       clearTarget();
       setPlayerSource(null);
-      await queryClient.invalidateQueries({ queryKey: ["remote"] });
+      queryClient.setQueryData(["remote", "controller", "target"], null);
+      await queryClient.invalidateQueries({ queryKey: ["remote", "receivers"] });
+      setOpen(false);
     },
   });
   const remoteDevices = devicesQuery.data ?? [];
+  const resolvedTarget = resolveRemoteTargetDevice(
+    remoteTarget,
+    targetQuery.data?.device,
+  );
+  const buttonLabel = resolvedTarget?.name ?? remoteTarget?.name ?? "This device";
 
-  useEffect(() => {
-    if (!user) {
-      clearTarget();
-      return;
-    }
-
-    setTargetSelection(targetQuery.data ?? null);
-  }, [clearTarget, setTargetSelection, targetQuery.data, user]);
-
-  async function handleLogout() {
-    await logout();
-    clearSession();
-  }
-
-  const RemoteTargetMenu = ({ compact = false }: { compact?: boolean }) => (
-    <DropdownMenu>
+  return (
+    <DropdownMenu open={open} onOpenChange={setOpen}>
       <DropdownMenuTrigger asChild>
         <Button
           variant={remoteTarget ? "default" : "outline"}
@@ -122,9 +108,7 @@ export function AppShell() {
           className={cn("shrink-0", compact ? "h-9 px-3" : "justify-start")}
         >
           <MonitorUp className="size-4" />
-          <span className={cn(compact ? "ml-2" : "ml-3")}>
-            {remoteTarget ? remoteTarget.name : "This device"}
-          </span>
+          <span className={cn(compact ? "ml-2" : "ml-3")}>{buttonLabel}</span>
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-72">
@@ -153,7 +137,9 @@ export function AppShell() {
             </DropdownMenuItem>
           ))
         ) : (
-          <DropdownMenuItem disabled>No paired screens online</DropdownMenuItem>
+          <DropdownMenuItem disabled>
+            {devicesQuery.isPending ? "Loading screens..." : "No paired screens online"}
+          </DropdownMenuItem>
         )}
         <DropdownMenuSeparator />
         <DropdownMenuItem asChild>
@@ -162,6 +148,61 @@ export function AppShell() {
       </DropdownMenuContent>
     </DropdownMenu>
   );
+}
+
+function RemoteTargetStatusBanner() {
+  const remoteTarget = useRemoteControllerStore((state) => state.target);
+  const targetQuery = useRemoteControllerTargetQuery({
+    enabled: !!remoteTarget,
+    refetchInterval: remoteTarget ? 5_000 : false,
+  });
+  const resolvedTarget = resolveRemoteTargetDevice(
+    remoteTarget,
+    targetQuery.data?.device,
+  );
+
+  if (!remoteTarget) {
+    return null;
+  }
+
+  return (
+    <div className="shrink-0 border-b border-border/40 bg-primary/5 px-4 py-2 text-sm text-foreground/80 md:px-8">
+      <div className="mx-auto w-full max-w-[1240px] text-center">
+        Controlling <span className="font-semibold">{remoteTarget.name}</span>
+        {resolvedTarget?.currentPlayback
+          ? ` - ${formatReceiverPlaybackSummary(resolvedTarget)}`
+          : ""}
+      </div>
+    </div>
+  );
+}
+
+export function AppShell() {
+  const pathname = useRouterState({
+    select: (state) => state.location.pathname,
+  });
+  const user = useAuthStore((state) => state.user);
+  const clearSession = useAuthStore((state) => state.clearSession);
+  const hasPlayerSource = usePlayerStore((state) => !!state.source);
+  const clearTarget = useRemoteControllerStore((state) => state.clearTarget);
+  const initials = (user?.username ?? "Guest")
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase() ?? "")
+    .join("")
+    .slice(0, 2);
+
+  useEffect(() => {
+    if (!user) {
+      clearTarget();
+    }
+  }, [clearTarget, user]);
+
+  async function handleLogout() {
+    await logout();
+    clearSession();
+  }
 
   const MobileTopHeader = () => (
     <div className="z-20 flex h-14 shrink-0 items-center justify-between border-b border-border/40 bg-sidebar px-4 md:hidden">
@@ -170,7 +211,7 @@ export function AppShell() {
         <span className="text-sm font-semibold tracking-tight">Euripus</span>
       </div>
       <div className="flex items-center gap-2">
-        <RemoteTargetMenu compact />
+        <RemoteTargetMenu compact userAuthenticated={!!user} />
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button variant="ghost" size="icon" className="size-8 rounded-full">
@@ -256,7 +297,7 @@ export function AppShell() {
 
         <div className="px-3 py-3">
           <div className="mb-3">
-            <RemoteTargetMenu />
+            <RemoteTargetMenu userAuthenticated={!!user} />
           </div>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -306,17 +347,7 @@ export function AppShell() {
 
       <div className="relative flex min-w-0 flex-1 flex-col overflow-hidden md:flex-row">
         <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
-          {remoteTarget ? (
-            <div className="shrink-0 border-b border-border/40 bg-primary/5 px-4 py-2 text-sm text-foreground/80 md:px-8">
-              <div className="mx-auto w-full max-w-[1240px] text-center">
-                Controlling{" "}
-                <span className="font-semibold">{remoteTarget.name}</span>
-                {remoteTarget.currentPlayback
-                  ? ` - ${formatReceiverPlaybackSummary(remoteTarget)}`
-                  : ""}
-              </div>
-            </div>
-          ) : null}
+          <RemoteTargetStatusBanner />
 
           <ScrollArea className="z-0 min-h-0 min-w-0 flex-1 bg-background/50 outline-none">
             <main className="relative mx-auto flex min-h-full w-full max-w-[1240px] flex-col overflow-x-hidden p-4 md:p-8">

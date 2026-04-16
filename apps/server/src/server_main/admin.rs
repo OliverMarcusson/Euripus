@@ -1014,9 +1014,7 @@ fn spawn_admin_reindex(state: AppState) {
         };
 
         for user_id in user_ids {
-            if let Err(error) =
-                search::indexing::rebuild_search_documents(&state.pool, user_id).await
-            {
+            if let Err(error) = search::indexing::rebuild_search_documents(&state, user_id).await {
                 warn!(user_id = %user_id, "failed to rebuild search documents after admin rule change: {error:?}");
                 continue;
             }

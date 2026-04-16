@@ -6,7 +6,7 @@ import type {
   SyncJob,
 } from "@euripus/shared"
 import { useEffect, useState } from "react"
-import { useForm } from "react-hook-form"
+import { useForm, useWatch } from "react-hook-form"
 import { z } from "zod"
 import {
   getProvider,
@@ -153,7 +153,10 @@ export function useProviderSettingsForm() {
 
   const provider = providerQuery.data
   const latestJob = syncQuery.data
-  const watchedEpgSources = form.watch("epgSources")
+  const watchedEpgSources = useWatch({
+    control: form.control,
+    name: "epgSources",
+  })
   const syncProgressValue = latestJob ? getSyncProgressValue(latestJob) : 0
   const syncErrorMessage =
     syncMutation.error instanceof Error ? syncMutation.error.message : null

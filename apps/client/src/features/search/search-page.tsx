@@ -1,4 +1,9 @@
-import type { SearchBackend, SearchFilterOptionsResponse } from "@euripus/shared";
+import type {
+  Channel,
+  Program,
+  SearchBackend,
+  SearchFilterOptionsResponse,
+} from "@euripus/shared";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import {
   Clapperboard,
@@ -8,7 +13,7 @@ import {
   Search as SearchIcon,
   TvMinimal,
 } from "lucide-react";
-import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { PageHeader } from "@/components/layout/page-header";
 import { ChannelAvatar } from "@/components/ui/channel-avatar";
 import { Badge } from "@/components/ui/badge";
@@ -57,6 +62,10 @@ import {
 } from "@/lib/utils";
 
 const SEARCH_PAGE_SIZE = 30;
+const HEAVY_ROW_STYLE = {
+  contentVisibility: "auto",
+  containIntrinsicSize: "120px",
+} as const;
 
 export function SearchPage() {
   const [query, setQuery] = useState("");
@@ -68,8 +77,7 @@ export function SearchPage() {
   const [highlightedOptionIndex, setHighlightedOptionIndex] = useState(0);
   const [autocompleteDismissed, setAutocompleteDismissed] = useState(false);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
-  const deferredQuery = useDeferredValue(query);
-  const debouncedQuery = useDebounce(deferredQuery, 250);
+  const debouncedQuery = useDebounce(query, 250);
   const hasQuery = debouncedQuery.trim().length > 1;
   const filterOptionsQuery = useQuery({
     queryKey: ["search", "filter-options"],
@@ -98,8 +106,14 @@ export function SearchPage() {
   const playChannelMutation = useChannelPlaybackMutation();
   const playProgramMutation = useProgramPlaybackMutation();
 
-  const channels = channelQuery.data?.pages.flatMap((page) => page.items) ?? [];
-  const programs = programQuery.data?.pages.flatMap((page) => page.items) ?? [];
+  const channels = useMemo(
+    () => channelQuery.data?.pages.flatMap((page) => page.items) ?? [],
+    [channelQuery.data],
+  );
+  const programs = useMemo(
+    () => programQuery.data?.pages.flatMap((page) => page.items) ?? [],
+    [programQuery.data],
+  );
   const channelTotal = channelQuery.data?.pages[0]?.totalCount ?? 0;
   const programTotal = programQuery.data?.pages[0]?.totalCount ?? 0;
   const channelBackend = channelQuery.data?.pages[0]?.backend;
@@ -109,14 +123,17 @@ export function SearchPage() {
     hasQuery &&
     ((channelQuery.isPending && !channels.length) ||
       (programQuery.isPending && !programs.length));
-  const headerMeta =
-    hasQuery ? (
-      <>
-        <Badge variant="accent">{totalMatches} matches</Badge>
-        <Badge variant="outline">{channelTotal} channels</Badge>
-        <Badge variant="outline">{programTotal} programs</Badge>
-      </>
-    ) : null;
+  const headerMeta = useMemo(
+    () =>
+      hasQuery ? (
+        <>
+          <Badge variant="accent">{totalMatches} matches</Badge>
+          <Badge variant="outline">{channelTotal} channels</Badge>
+          <Badge variant="outline">{programTotal} programs</Badge>
+        </>
+      ) : null,
+    [channelTotal, hasQuery, programTotal, totalMatches],
+  );
   const guideState = useMemo(() => buildSearchGuideState(query), [query]);
   const autocompleteState = useMemo(
     () => getSearchAutocompleteState(query, selectionStart),
@@ -169,78 +186,107 @@ export function SearchPage() {
     }
   }, [channelTotal, hasQuery, programTotal]);
 
-  const updateSearchCursor = (input: HTMLInputElement) => {
+  const updateSearchCursor = useCallback((input: HTMLInputElement) => {
     const nextSelectionStart = input.selectionStart ?? input.value.length;
     setSelectionStart(nextSelectionStart);
-  };
+  }, []);
 
-  const applyAutocompleteOption = (option: string) => {
-    if (!autocompleteState) {
-      return;
-    }
+  const applyAutocompleteOption = useCallback(
+    (option: string) => {
+      if (!autocompleteState) {
+        return;
+      }
 
-    const nextState = applySearchAutocompleteOption(
-      query,
-      autocompleteState,
-      option,
-    );
-    setQuery(nextState.query);
-    setSelectionStart(nextState.cursor);
-
-    requestAnimationFrame(() => {
-      searchInputRef.current?.focus();
-      searchInputRef.current?.setSelectionRange(
-        nextState.cursor,
-        nextState.cursor,
+      const nextState = applySearchAutocompleteOption(
+        query,
+        autocompleteState,
+        option,
       );
-    });
-  };
+      setQuery(nextState.query);
+      setSelectionStart(nextState.cursor);
 
-  const handleSearchKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
-    if (!isAutocompleteOpen || filterOptionsQuery.isPending) {
-      return;
-    }
+      requestAnimationFrame(() => {
+        searchInputRef.current?.focus();
+        searchInputRef.current?.setSelectionRange(
+          nextState.cursor,
+          nextState.cursor,
+        );
+      });
+    },
+    [autocompleteState, query],
+  );
 
-    if (event.key === "Escape") {
-      event.preventDefault();
-      setAutocompleteDismissed(true);
-      return;
-    }
+  const handleSearchKeyDown = useCallback(
+    (event: React.KeyboardEvent<HTMLInputElement>) => {
+      if (!isAutocompleteOpen || filterOptionsQuery.isPending) {
+        return;
+      }
 
-    if (!autocompleteOptions.length) {
-      return;
-    }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setAutocompleteDismissed(true);
+        return;
+      }
 
-    if (event.key === "ArrowDown") {
-      event.preventDefault();
-      setHighlightedOptionIndex((current) =>
-        current >= autocompleteOptions.length - 1 ? 0 : current + 1,
-      );
-      return;
-    }
+      if (!autocompleteOptions.length) {
+        return;
+      }
 
-    if (event.key === "ArrowUp") {
-      event.preventDefault();
-      setHighlightedOptionIndex((current) =>
-        current <= 0 ? autocompleteOptions.length - 1 : current - 1,
-      );
-      return;
-    }
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        setHighlightedOptionIndex((current) =>
+          current >= autocompleteOptions.length - 1 ? 0 : current + 1,
+        );
+        return;
+      }
 
-    if (event.key === "Enter") {
-      event.preventDefault();
-      applyAutocompleteOption(
-        autocompleteOptions[highlightedOptionIndex] ?? autocompleteOptions[0],
-      );
-    }
-  };
+      if (event.key === "ArrowUp") {
+        event.preventDefault();
+        setHighlightedOptionIndex((current) =>
+          current <= 0 ? autocompleteOptions.length - 1 : current - 1,
+        );
+        return;
+      }
+
+      if (event.key === "Enter") {
+        event.preventDefault();
+        applyAutocompleteOption(
+          autocompleteOptions[highlightedOptionIndex] ?? autocompleteOptions[0],
+        );
+      }
+    },
+    [
+      applyAutocompleteOption,
+      autocompleteOptions,
+      filterOptionsQuery.isPending,
+      highlightedOptionIndex,
+      isAutocompleteOpen,
+    ],
+  );
+
+  const handleToggleFavorite = useCallback(
+    (channel: Channel) => favoriteMutation.mutate(channel),
+    [favoriteMutation],
+  );
+  const handlePlayChannel = useCallback(
+    (channelId: string) => playChannelMutation.mutate(channelId),
+    [playChannelMutation],
+  );
+  const handlePlayProgram = useCallback(
+    (program: Program, playbackState: ProgramPlaybackState) => {
+      if (playbackState === "live" && program.channelId) {
+        playChannelMutation.mutate(program.channelId);
+        return;
+      }
+
+      playProgramMutation.mutate(program.id);
+    },
+    [playChannelMutation, playProgramMutation],
+  );
 
   return (
     <div className="flex flex-col gap-6">
-      <PageHeader
-        title="Master Search"
-        meta={headerMeta}
-      />
+      <PageHeader title="Master Search" meta={headerMeta} />
 
       <Card className="rounded-none border-0 bg-transparent shadow-none sm:border-border/80 sm:bg-gradient-to-r sm:from-card sm:via-card sm:to-primary/5 sm:shadow-sm">
         <CardContent className="px-0 pt-0 pb-0 sm:px-6 sm:pt-5 sm:pb-6">
@@ -367,228 +413,310 @@ export function SearchPage() {
         </Card>
       ) : null}
 
-      {hasQuery && !isInitialLoading ? (
-        <Tabs
-          value={activeTab}
-          onValueChange={(value) =>
-            setActiveTab(value as "channels" | "programs")
-          }
-          className="flex flex-col gap-4"
-        >
-          <TabsList>
-            <TabsTrigger value="channels">
-              <span>Channels ({channelTotal})</span>
-              <SearchBackendBadge backend={channelBackend} compact />
-            </TabsTrigger>
-            <TabsTrigger value="programs">
-              <span>Programs ({programTotal})</span>
-              <SearchBackendBadge backend={programBackend} compact />
-            </TabsTrigger>
-          </TabsList>
-
-          <TabsContent value="channels" className="mt-0">
-            <Card className="rounded-none border-0 bg-transparent shadow-none sm:rounded-xl sm:border sm:bg-card sm:shadow-sm">
-              <CardHeader className="px-0 pt-0 pb-4 sm:px-6 sm:pt-6 sm:pb-0">
-                <div className="flex items-center justify-between gap-3">
-                  <CardTitle>Channel matches</CardTitle>
-                  <SearchBackendBadge backend={channelBackend} />
-                </div>
-              </CardHeader>
-              <CardContent className="p-0">
-                {channels.length ? (
-                  <>
-                    {channels.map((channel, index) => (
-                      <div key={channel.id}>
-                        {index > 0 ? <Separator /> : null}
-                        <div className="flex flex-col gap-4 p-5 lg:flex-row lg:items-center lg:justify-between">
-                          <div className="flex min-w-0 items-start gap-4">
-                            <ChannelAvatar
-                              name={channel.name}
-                              logoUrl={channel.logoUrl}
-                            />
-                            <div className="flex min-w-0 flex-1 flex-col gap-2">
-                              <div className="flex flex-wrap items-center gap-2">
-                                <h2 className="truncate text-base font-semibold">
-                                  {channel.name}
-                                </h2>
-                                {channel.categoryName ? (
-                                  <Badge variant="outline">
-                                    {channel.categoryName}
-                                  </Badge>
-                                ) : null}
-                                {channel.hasEpg ? (
-                                  <Badge variant="outline">EPG</Badge>
-                                ) : null}
-                                {channel.hasCatchup ? (
-                                  <Badge variant="live">Catch-up</Badge>
-                                ) : null}
-                                {channel.isFavorite ? (
-                                  <Badge variant="accent">Favorite</Badge>
-                                ) : null}
-                              </div>
-                              {channel.streamExtension ? (
-                                <p className="text-sm text-muted-foreground">
-                                  {channel.streamExtension.toUpperCase()}
-                                </p>
-                              ) : null}
-                            </div>
-                          </div>
-                          <div className="flex flex-wrap items-center gap-2">
-                            <Button
-                              variant="secondary"
-                              size="sm"
-                              onClick={() => favoriteMutation.mutate(channel)}
-                              disabled={
-                                favoriteMutation.isPending &&
-                                favoriteMutation.variables?.id === channel.id
-                              }
-                            >
-                              <Heart data-icon="inline-start" />
-                              {channel.isFavorite ? "Unfavorite" : "Favorite"}
-                            </Button>
-                            <Button
-                              size="sm"
-                              onClick={() =>
-                                playChannelMutation.mutate(channel.id)
-                              }
-                              disabled={playChannelMutation.isPending}
-                            >
-                              <Play data-icon="inline-start" />
-                              Play
-                            </Button>
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                    <LoadMoreTrigger
-                      hasNextPage={channelQuery.hasNextPage}
-                      isFetchingNextPage={channelQuery.isFetchingNextPage}
-                      onLoadMore={() => channelQuery.fetchNextPage()}
-                    />
-                  </>
-                ) : (
-                  <Empty className="border-0">
-                    <EmptyHeader>
-                      <EmptyMedia variant="icon">
-                        <TvMinimal aria-hidden="true" />
-                      </EmptyMedia>
-                      <EmptyTitle>No channel matches</EmptyTitle>
-                    </EmptyHeader>
-                  </Empty>
-                )}
-              </CardContent>
-            </Card>
-          </TabsContent>
-
-          <TabsContent value="programs" className="mt-0">
-            <Card className="rounded-none border-0 bg-transparent shadow-none sm:rounded-xl sm:border sm:bg-card sm:shadow-sm">
-              <CardHeader className="px-0 pt-0 pb-4 sm:px-6 sm:pt-6 sm:pb-0">
-                <div className="flex items-center justify-between gap-3">
-                  <CardTitle>EPG matches</CardTitle>
-                  <SearchBackendBadge backend={programBackend} />
-                </div>
-              </CardHeader>
-              <CardContent className="p-0">
-                {programs.length ? (
-                  <>
-                    {programs.map((program, index) => {
-                      const playbackState = getProgramPlaybackState(program);
-
-                      return (
-                        <div key={program.id}>
-                          {index > 0 ? <Separator /> : null}
-                          <div className="flex flex-col gap-4 p-5 lg:flex-row lg:items-center lg:justify-between">
-                            <div className="flex min-w-0 items-start gap-4">
-                              <ChannelAvatar
-                                name={program.channelName ?? program.title}
-                                className="size-10"
-                              />
-                              <div className="flex min-w-0 flex-1 flex-col gap-2">
-                                <div className="flex flex-wrap items-center gap-2">
-                                  <h2 className="truncate text-base font-semibold">
-                                    {program.title}
-                                  </h2>
-                                  {program.channelName ? (
-                                    <Badge variant="outline">
-                                      {program.channelName}
-                                    </Badge>
-                                  ) : null}
-                                  <ProgramStateBadge state={playbackState} />
-                                </div>
-                                {program.description ? (
-                                  <p className="text-sm text-muted-foreground">
-                                    {program.description}
-                                  </p>
-                                ) : null}
-                              </div>
-                            </div>
-                            <div className="flex items-center gap-3 self-start lg:self-center">
-                              <Badge variant="outline">
-                                {formatTimeRange(
-                                  program.startAt,
-                                  program.endAt,
-                                )}
-                              </Badge>
-                              {canPlayProgram(program) ? (
-                                <Button
-                                  size="sm"
-                                  variant="secondary"
-                                  onClick={() => {
-                                    if (
-                                      playbackState === "live" &&
-                                      program.channelId
-                                    ) {
-                                      playChannelMutation.mutate(
-                                        program.channelId,
-                                      );
-                                      return;
-                                    }
-                                    playProgramMutation.mutate(program.id);
-                                  }}
-                                  disabled={
-                                    playChannelMutation.isPending ||
-                                    playProgramMutation.isPending
-                                  }
-                                >
-                                  <Play data-icon="inline-start" />
-                                  Play
-                                </Button>
-                              ) : (
-                                <span className="text-sm text-muted-foreground">
-                                  {playbackState === "upcoming"
-                                    ? "Upcoming only"
-                                    : "Info only"}
-                                </span>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })}
-                    <LoadMoreTrigger
-                      hasNextPage={programQuery.hasNextPage}
-                      isFetchingNextPage={programQuery.isFetchingNextPage}
-                      onLoadMore={() => programQuery.fetchNextPage()}
-                    />
-                  </>
-                ) : (
-                  <Empty className="border-0">
-                    <EmptyHeader>
-                      <EmptyMedia variant="icon">
-                        <Clapperboard aria-hidden="true" />
-                      </EmptyMedia>
-                      <EmptyTitle>No EPG matches</EmptyTitle>
-                    </EmptyHeader>
-                  </Empty>
-                )}
-              </CardContent>
-            </Card>
-          </TabsContent>
-        </Tabs>
-      ) : null}
+      <SearchResults
+        activeTab={activeTab}
+        channelBackend={channelBackend}
+        channelTotal={channelTotal}
+        channels={channels}
+        channelsHasNextPage={channelQuery.hasNextPage}
+        channelsLoadingMore={channelQuery.isFetchingNextPage}
+        favoritePending={favoriteMutation.isPending}
+        favoritePendingChannelId={favoriteMutation.variables?.id}
+        hasQuery={hasQuery}
+        isInitialLoading={isInitialLoading}
+        onActiveTabChange={setActiveTab}
+        onLoadMoreChannels={() => channelQuery.fetchNextPage()}
+        onLoadMorePrograms={() => programQuery.fetchNextPage()}
+        onPlayChannel={handlePlayChannel}
+        onPlayProgram={handlePlayProgram}
+        onToggleFavorite={handleToggleFavorite}
+        playPending={playChannelMutation.isPending || playProgramMutation.isPending}
+        programBackend={programBackend}
+        programTotal={programTotal}
+        programs={programs}
+        programsHasNextPage={programQuery.hasNextPage}
+        programsLoadingMore={programQuery.isFetchingNextPage}
+      />
     </div>
   );
 }
+
+const ChannelSearchRow = memo(function ChannelSearchRow({
+  channel,
+  favoritePending,
+  playPending,
+  onPlay,
+  onToggleFavorite,
+}: {
+  channel: Channel;
+  favoritePending: boolean;
+  playPending: boolean;
+  onPlay: (channelId: string) => void;
+  onToggleFavorite: (channel: Channel) => void;
+}) {
+  return (
+    <div className="flex flex-col gap-4 p-5 lg:flex-row lg:items-center lg:justify-between">
+      <div className="flex min-w-0 items-start gap-4">
+        <ChannelAvatar name={channel.name} logoUrl={channel.logoUrl} />
+        <div className="flex min-w-0 flex-1 flex-col gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <h2 className="truncate text-base font-semibold">{channel.name}</h2>
+            {channel.categoryName ? (
+              <Badge variant="outline">{channel.categoryName}</Badge>
+            ) : null}
+            {channel.hasEpg ? <Badge variant="outline">EPG</Badge> : null}
+            {channel.hasCatchup ? <Badge variant="live">Catch-up</Badge> : null}
+            {channel.isFavorite ? <Badge variant="accent">Favorite</Badge> : null}
+          </div>
+          {channel.streamExtension ? (
+            <p className="text-sm text-muted-foreground">
+              {channel.streamExtension.toUpperCase()}
+            </p>
+          ) : null}
+        </div>
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <Button
+          variant="secondary"
+          size="sm"
+          onClick={() => onToggleFavorite(channel)}
+          disabled={favoritePending}
+        >
+          <Heart data-icon="inline-start" />
+          {channel.isFavorite ? "Unfavorite" : "Favorite"}
+        </Button>
+        <Button size="sm" onClick={() => onPlay(channel.id)} disabled={playPending}>
+          <Play data-icon="inline-start" />
+          Play
+        </Button>
+      </div>
+    </div>
+  );
+});
+
+const ProgramSearchRow = memo(function ProgramSearchRow({
+  program,
+  playPending,
+  onPlay,
+}: {
+  program: Program;
+  playPending: boolean;
+  onPlay: (program: Program, playbackState: ProgramPlaybackState) => void;
+}) {
+  const playbackState = getProgramPlaybackState(program);
+
+  return (
+    <div className="flex flex-col gap-4 p-5 lg:flex-row lg:items-center lg:justify-between">
+      <div className="flex min-w-0 items-start gap-4">
+        <ChannelAvatar
+          name={program.channelName ?? program.title}
+          className="size-10"
+        />
+        <div className="flex min-w-0 flex-1 flex-col gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <h2 className="truncate text-base font-semibold">{program.title}</h2>
+            {program.channelName ? (
+              <Badge variant="outline">{program.channelName}</Badge>
+            ) : null}
+            <ProgramStateBadge state={playbackState} />
+          </div>
+          {program.description ? (
+            <p className="text-sm text-muted-foreground">{program.description}</p>
+          ) : null}
+        </div>
+      </div>
+      <div className="flex items-center gap-3 self-start lg:self-center">
+        <Badge variant="outline">
+          {formatTimeRange(program.startAt, program.endAt)}
+        </Badge>
+        {canPlayProgram(program) ? (
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={() => onPlay(program, playbackState)}
+            disabled={playPending}
+          >
+            <Play data-icon="inline-start" />
+            Play
+          </Button>
+        ) : (
+          <span className="text-sm text-muted-foreground">
+            {playbackState === "upcoming" ? "Upcoming only" : "Info only"}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+});
+
+const SearchResults = memo(function SearchResults({
+  activeTab,
+  channelBackend,
+  channelTotal,
+  channels,
+  channelsHasNextPage,
+  channelsLoadingMore,
+  favoritePending,
+  favoritePendingChannelId,
+  hasQuery,
+  isInitialLoading,
+  onActiveTabChange,
+  onLoadMoreChannels,
+  onLoadMorePrograms,
+  onPlayChannel,
+  onPlayProgram,
+  onToggleFavorite,
+  playPending,
+  programBackend,
+  programTotal,
+  programs,
+  programsHasNextPage,
+  programsLoadingMore,
+}: {
+  activeTab: "channels" | "programs";
+  channelBackend?: SearchBackend;
+  channelTotal: number;
+  channels: Channel[];
+  channelsHasNextPage: boolean;
+  channelsLoadingMore: boolean;
+  favoritePending: boolean;
+  favoritePendingChannelId?: string;
+  hasQuery: boolean;
+  isInitialLoading: boolean;
+  onActiveTabChange: (value: "channels" | "programs") => void;
+  onLoadMoreChannels: () => void;
+  onLoadMorePrograms: () => void;
+  onPlayChannel: (channelId: string) => void;
+  onPlayProgram: (program: Program, playbackState: ProgramPlaybackState) => void;
+  onToggleFavorite: (channel: Channel) => void;
+  playPending: boolean;
+  programBackend?: SearchBackend;
+  programTotal: number;
+  programs: Program[];
+  programsHasNextPage: boolean;
+  programsLoadingMore: boolean;
+}) {
+  if (!hasQuery || isInitialLoading) {
+    return null;
+  }
+
+  const useDeferredRowPaint = channels.length > 40 || programs.length > 40;
+
+  return (
+    <Tabs
+      value={activeTab}
+      onValueChange={(value) => onActiveTabChange(value as "channels" | "programs")}
+      className="flex flex-col gap-4"
+    >
+      <TabsList>
+        <TabsTrigger value="channels">
+          <span>Channels ({channelTotal})</span>
+          <SearchBackendBadge backend={channelBackend} compact />
+        </TabsTrigger>
+        <TabsTrigger value="programs">
+          <span>Programs ({programTotal})</span>
+          <SearchBackendBadge backend={programBackend} compact />
+        </TabsTrigger>
+      </TabsList>
+
+      {activeTab === "channels" ? (
+        <TabsContent value="channels" className="mt-0">
+          <Card className="rounded-none border-0 bg-transparent shadow-none sm:rounded-xl sm:border sm:bg-card sm:shadow-sm">
+            <CardHeader className="px-0 pt-0 pb-4 sm:px-6 sm:pt-6 sm:pb-0">
+              <div className="flex items-center justify-between gap-3">
+                <CardTitle>Channel matches</CardTitle>
+                <SearchBackendBadge backend={channelBackend} />
+              </div>
+            </CardHeader>
+            <CardContent className="p-0">
+              {channels.length ? (
+                <>
+                  {channels.map((channel, index) => (
+                    <div
+                      key={channel.id}
+                      style={useDeferredRowPaint ? HEAVY_ROW_STYLE : undefined}
+                    >
+                      {index > 0 ? <Separator /> : null}
+                      <ChannelSearchRow
+                        channel={channel}
+                        favoritePending={
+                          favoritePending && favoritePendingChannelId === channel.id
+                        }
+                        playPending={playPending}
+                        onPlay={onPlayChannel}
+                        onToggleFavorite={onToggleFavorite}
+                      />
+                    </div>
+                  ))}
+                  <LoadMoreTrigger
+                    hasNextPage={channelsHasNextPage}
+                    isFetchingNextPage={channelsLoadingMore}
+                    onLoadMore={onLoadMoreChannels}
+                  />
+                </>
+              ) : (
+                <Empty className="border-0">
+                  <EmptyHeader>
+                    <EmptyMedia variant="icon">
+                      <TvMinimal aria-hidden="true" />
+                    </EmptyMedia>
+                    <EmptyTitle>No channel matches</EmptyTitle>
+                  </EmptyHeader>
+                </Empty>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+      ) : null}
+
+      {activeTab === "programs" ? (
+        <TabsContent value="programs" className="mt-0">
+          <Card className="rounded-none border-0 bg-transparent shadow-none sm:rounded-xl sm:border sm:bg-card sm:shadow-sm">
+            <CardHeader className="px-0 pt-0 pb-4 sm:px-6 sm:pt-6 sm:pb-0">
+              <div className="flex items-center justify-between gap-3">
+                <CardTitle>EPG matches</CardTitle>
+                <SearchBackendBadge backend={programBackend} />
+              </div>
+            </CardHeader>
+            <CardContent className="p-0">
+              {programs.length ? (
+                <>
+                  {programs.map((program, index) => (
+                    <div
+                      key={program.id}
+                      style={useDeferredRowPaint ? HEAVY_ROW_STYLE : undefined}
+                    >
+                      {index > 0 ? <Separator /> : null}
+                      <ProgramSearchRow
+                        program={program}
+                        playPending={playPending}
+                        onPlay={onPlayProgram}
+                      />
+                    </div>
+                  ))}
+                  <LoadMoreTrigger
+                    hasNextPage={programsHasNextPage}
+                    isFetchingNextPage={programsLoadingMore}
+                    onLoadMore={onLoadMorePrograms}
+                  />
+                </>
+              ) : (
+                <Empty className="border-0">
+                  <EmptyHeader>
+                    <EmptyMedia variant="icon">
+                      <Clapperboard aria-hidden="true" />
+                    </EmptyMedia>
+                    <EmptyTitle>No EPG matches</EmptyTitle>
+                  </EmptyHeader>
+                </Empty>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+      ) : null}
+    </Tabs>
+  );
+});
 
 type SearchGuideState = {
   freeText: string;

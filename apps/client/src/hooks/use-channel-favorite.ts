@@ -120,13 +120,16 @@ export function useChannelFavoriteMutation() {
         );
       });
     },
-    onSettled: async () => {
+    onError: async () => {
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["guide"] }),
         queryClient.invalidateQueries({ queryKey: ["favorites"] }),
-        queryClient.invalidateQueries({ queryKey: ["search"] }),
+        queryClient.invalidateQueries({ queryKey: ["guide", "category"] }),
+        queryClient.invalidateQueries({ queryKey: ["search", "channels"] }),
         queryClient.invalidateQueries({ queryKey: ["recents"] }),
       ]);
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["favorites"] });
     },
   });
 }

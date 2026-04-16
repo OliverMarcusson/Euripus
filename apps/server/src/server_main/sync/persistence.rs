@@ -180,11 +180,18 @@ pub(super) async fn persist_channel_sync_data(
     let deduped_channels = dedupe_channels(channels);
     let changed_category_remote_ids =
         changed_category_remote_ids(&existing_categories, &deduped_categories);
-    let channel_delta = determine_channel_sync_delta(
+    let mut channel_delta = determine_channel_sync_delta(
         &existing_channels,
         &deduped_channels,
         &changed_category_remote_ids,
     );
+    channel_delta.removed_program_ids = load_program_ids_for_channels(
+        &mut transaction,
+        user_id,
+        profile_id,
+        &channel_delta.removed_channel_ids,
+    )
+    .await?;
 
     bulk_upsert_categories(&mut transaction, user_id, profile_id, categories).await?;
     bulk_upsert_channels(&mut transaction, user_id, profile_id, channels).await?;
@@ -640,7 +647,36 @@ fn determine_channel_sync_delta(
     ChannelSyncDelta {
         changed_remote_stream_ids,
         removed_channel_ids,
+        removed_program_ids: Vec::new(),
     }
+}
+
+async fn load_program_ids_for_channels(
+    transaction: &mut Transaction<'_, Postgres>,
+    user_id: Uuid,
+    profile_id: Uuid,
+    channel_ids: &[Uuid],
+) -> Result<Vec<Uuid>> {
+    if channel_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    sqlx::query_scalar::<_, Uuid>(
+        r#"
+        SELECT id
+        FROM programs
+        WHERE user_id = $1
+          AND profile_id = $2
+          AND channel_id = ANY($3)
+        ORDER BY id ASC
+        "#,
+    )
+    .bind(user_id)
+    .bind(profile_id)
+    .bind(channel_ids)
+    .fetch_all(&mut **transaction)
+    .await
+    .map_err(Into::into)
 }
 
 async fn delete_stale_channels(

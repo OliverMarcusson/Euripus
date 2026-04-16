@@ -115,7 +115,7 @@ async fn list_channels(
     headers: HeaderMap,
 ) -> ApiResult<Vec<ChannelResponse>> {
     let auth = require_auth(&state, &headers).await?;
-    let visibility = load_channel_visibility_map(&state.pool, auth.user_id, None).await?;
+    let visibility = load_channel_visibility_map(&state, auth.user_id, None).await?;
     let visible_channel_ids = visibility
         .iter()
         .filter_map(|(id, visibility)| (!visibility.is_hidden).then_some(*id))
@@ -186,7 +186,7 @@ async fn get_guide(
     Query(query): Query<GuideOverviewQuery>,
 ) -> Result<Response, AppError> {
     let auth = require_auth(&state, &headers).await?;
-    let visibility = load_channel_visibility_map(&state.pool, auth.user_id, None).await?;
+    let visibility = load_channel_visibility_map(&state, auth.user_id, None).await?;
     let payload = GuideResponse {
         categories: fetch_guide_categories(
             &state.pool,
@@ -248,7 +248,7 @@ async fn get_guide_category(
     let auth = require_auth(&state, &headers).await?;
     let with_epg_only = query.with_epg_only.unwrap_or(false);
     let (offset, limit) = parse_guide_category_pagination(query)?;
-    let visibility = load_channel_visibility_map(&state.pool, auth.user_id, None).await?;
+    let visibility = load_channel_visibility_map(&state, auth.user_id, None).await?;
     let visible_channel_ids = visible_channel_ids_from_map(&visibility);
     let category = fetch_guide_category_summary(
         &state.pool,
@@ -1375,6 +1375,7 @@ mod tests {
             search_lexicons: Arc::new(DashMap::new()),
             session_cache: Arc::new(DashMap::new()),
             relay_profile_cache: Arc::new(DashMap::new()),
+            channel_visibility_cache: Arc::new(DashMap::new()),
             receiver_channels: Arc::new(DashMap::new()),
         }
     }

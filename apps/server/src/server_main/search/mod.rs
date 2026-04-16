@@ -82,7 +82,7 @@ async fn search_channels(
 ) -> ApiResult<ChannelSearchResponse> {
     let auth = require_auth(&state, &headers).await?;
     let (term, offset, limit, parsed) = parse_search_pagination(query)?;
-    let visibility = load_channel_visibility_map(&state.pool, auth.user_id, None).await?;
+    let visibility = load_channel_visibility_map(&state, auth.user_id, None).await?;
     let visible_channel_ids = visible_channel_ids_from_map(&visibility);
     let visible_channel_set = visible_channel_ids.iter().copied().collect::<HashSet<_>>();
     if indexing::meili_is_ready_for_user(&state, auth.user_id).await {
@@ -132,7 +132,7 @@ async fn search_programs(
 ) -> ApiResult<ProgramSearchResponse> {
     let auth = require_auth(&state, &headers).await?;
     let (term, offset, limit, parsed) = parse_search_pagination(query)?;
-    let visibility = load_channel_visibility_map(&state.pool, auth.user_id, None).await?;
+    let visibility = load_channel_visibility_map(&state, auth.user_id, None).await?;
     let visible_channel_ids = visible_channel_ids_from_map(&visibility);
     let visible_channel_set = visible_channel_ids.iter().copied().collect::<HashSet<_>>();
     if indexing::meili_is_ready_for_user(&state, auth.user_id).await {

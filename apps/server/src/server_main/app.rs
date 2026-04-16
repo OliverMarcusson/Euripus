@@ -49,6 +49,7 @@ pub async fn run() -> Result<()> {
         search_lexicons: Arc::new(DashMap::new()),
         session_cache: Arc::new(DashMap::new()),
         relay_profile_cache: Arc::new(DashMap::new()),
+        channel_visibility_cache: Arc::new(DashMap::new()),
         receiver_channels: Arc::new(DashMap::new()),
     };
 
