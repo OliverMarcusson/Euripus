@@ -1,5 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { PlaybackSource, ReceiverSession } from "@euripus/shared";
+import type {
+  PlaybackSource,
+  ReceiverPlaybackStatePayload,
+  ReceiverSession,
+} from "@euripus/shared";
 import { Tv } from "lucide-react";
 import {
   API_BASE_URL,
@@ -19,6 +23,7 @@ import { PlyrSurface } from "@/components/player/plyr-surface";
 
 const RECEIVER_STORAGE_KEY = "euripus-receiver-device";
 const RECEIVER_HEARTBEAT_MS = 15_000;
+const RECEIVER_PLAYBACK_SYNC_INTERVAL_MS = 3_000;
 const SEEK_COMPLETION_TOLERANCE_SECONDS = 1.5;
 
 type PendingCommand =
@@ -72,6 +77,18 @@ function formatPairingCode(code: string) {
   return code.split("").join(" ");
 }
 
+function normalizePlaybackSyncState(
+  payload: ReceiverPlaybackStatePayload,
+) {
+  return {
+    ...payload,
+    positionSeconds:
+      payload.positionSeconds == null ? null : Math.round(payload.positionSeconds),
+    durationSeconds:
+      payload.durationSeconds == null ? null : Math.round(payload.durationSeconds),
+  };
+}
+
 function describeVideoError(video: HTMLVideoElement | null) {
   const mediaError = video?.error;
   if (!mediaError) {
@@ -101,6 +118,29 @@ export function ReceiverPage() {
   const [playbackError, setPlaybackError] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const pendingCommandRef = useRef<PendingCommand | null>(null);
+  const sourceRef = useRef<PlaybackSource | null>(null);
+  const bufferingRef = useRef(false);
+  const playbackErrorRef = useRef<string | null>(null);
+  const lastPlaybackSyncRef = useRef<{
+    normalizedPayload: string;
+    sentAt: number;
+  } | null>(null);
+  const pendingPlaybackSyncTimerRef = useRef<number | null>(null);
+
+  const updateSourceState = (nextSource: PlaybackSource | null) => {
+    sourceRef.current = nextSource;
+    setSource(nextSource);
+  };
+
+  const updateBufferingState = (nextBuffering: boolean) => {
+    bufferingRef.current = nextBuffering;
+    setBuffering(nextBuffering);
+  };
+
+  const updatePlaybackErrorState = (nextPlaybackError: string | null) => {
+    playbackErrorRef.current = nextPlaybackError;
+    setPlaybackError(nextPlaybackError);
+  };
 
   useEffect(() => {
     let active = true;
@@ -142,6 +182,24 @@ export function ReceiverPage() {
   }, [initial.deviceKey, initial.receiverCredential]);
 
   useEffect(() => {
+    sourceRef.current = source;
+  }, [source]);
+
+  useEffect(() => {
+    bufferingRef.current = buffering;
+  }, [buffering]);
+
+  useEffect(() => {
+    playbackErrorRef.current = playbackError;
+  }, [playbackError]);
+
+  useEffect(() => () => {
+    if (pendingPlaybackSyncTimerRef.current != null) {
+      window.clearTimeout(pendingPlaybackSyncTimerRef.current);
+    }
+  }, []);
+
+  useEffect(() => {
     if (!session?.sessionToken) {
       return;
     }
@@ -164,11 +222,12 @@ export function ReceiverPage() {
         return;
       }
       if (payload.source.kind === "unsupported") {
-        setPlaybackError(
+        updatePlaybackErrorState(
           payload.source.unsupportedReason ??
             "This stream is not supported on the receiver.",
         );
-        setSource(payload.source);
+        updateBufferingState(false);
+        updateSourceState(payload.source);
         pendingCommandRef.current = null;
         void acknowledgeReceiverCommand(session.sessionToken, payload.command.id, {
           status: "failed",
@@ -178,8 +237,8 @@ export function ReceiverPage() {
         }).catch(() => undefined);
         return;
       }
-      setPlaybackError(null);
-      setBuffering(true);
+      updatePlaybackErrorState(null);
+      updateBufferingState(true);
       pendingCommandRef.current = {
         id: payload.command.id,
         kind: "playback_source",
@@ -187,7 +246,7 @@ export function ReceiverPage() {
       void acknowledgeReceiverCommand(session.sessionToken, payload.command.id, {
         status: "executing",
       }).catch(() => undefined);
-      setSource(payload.source);
+      updateSourceState(payload.source);
     });
     events.addEventListener("transport_command", (event) => {
       const payload = JSON.parse((event as MessageEvent<string>).data) as RemoteDeviceEventPayload;
@@ -216,14 +275,14 @@ export function ReceiverPage() {
         if (commandType === "pause") {
           void video.pause();
         } else if (commandType === "play") {
-          setPlaybackError(null);
+          updatePlaybackErrorState(null);
           void video.play().catch(() => undefined);
         } else if (commandType === "seek" && typeof payload.positionSeconds === "number") {
           video.currentTime = payload.positionSeconds;
         } else if (commandType === "stop") {
           video.pause();
-          setSource(null);
-          setBuffering(false);
+          updateSourceState(null);
+          updateBufferingState(false);
         }
       }
     });
@@ -247,58 +306,121 @@ export function ReceiverPage() {
       return;
     }
 
-    const video = videoRef.current;
-    const isBuffering =
-      !!source &&
-      source.kind !== "unsupported" &&
-      !playbackError &&
-      !!video &&
-      !video.paused &&
-      !video.ended &&
-      video.readyState < HTMLMediaElement.HAVE_FUTURE_DATA;
-    const sync = () =>
-      void updateReceiverPlaybackState(session.sessionToken, {
-        title: source?.title ?? null,
-        sourceKind: source?.kind ?? null,
-        live: source?.live ?? null,
-        catchup: source?.catchup ?? null,
+    const clearScheduledSync = () => {
+      if (pendingPlaybackSyncTimerRef.current != null) {
+        window.clearTimeout(pendingPlaybackSyncTimerRef.current);
+        pendingPlaybackSyncTimerRef.current = null;
+      }
+    };
+
+    const buildPlaybackPayload = (): ReceiverPlaybackStatePayload => {
+      const currentSource = sourceRef.current;
+      const currentPlaybackError = playbackErrorRef.current;
+      const video = videoRef.current;
+      const isBuffering =
+        !!currentSource &&
+        currentSource.kind !== "unsupported" &&
+        !currentPlaybackError &&
+        !!video &&
+        !video.paused &&
+        !video.ended &&
+        video.readyState < HTMLMediaElement.HAVE_FUTURE_DATA;
+
+      return {
+        title: currentSource?.title ?? null,
+        sourceKind: currentSource?.kind ?? null,
+        live: currentSource?.live ?? null,
+        catchup: currentSource?.catchup ?? null,
         paused: video ? video.paused : true,
-        buffering: isBuffering || buffering,
+        buffering: isBuffering || bufferingRef.current,
         positionSeconds: video ? video.currentTime : null,
-        durationSeconds: video && Number.isFinite(video.duration) ? video.duration : null,
-        errorMessage: playbackError,
-      }).catch(() => undefined);
+        durationSeconds:
+          video && Number.isFinite(video.duration) ? video.duration : null,
+        errorMessage: currentPlaybackError,
+      };
+    };
+
+    const syncPlaybackState = ({
+      immediate = false,
+      force = false,
+    }: {
+      immediate?: boolean;
+      force?: boolean;
+    } = {}) => {
+      const payload = buildPlaybackPayload();
+      const normalizedPayload = JSON.stringify(
+        normalizePlaybackSyncState(payload),
+      );
+      const lastSync = lastPlaybackSyncRef.current;
+      const now = Date.now();
+      const msSinceLastSync = lastSync ? now - lastSync.sentAt : Infinity;
+
+      if (!force && lastSync?.normalizedPayload === normalizedPayload) {
+        return;
+      }
+
+      if (!immediate && msSinceLastSync < RECEIVER_PLAYBACK_SYNC_INTERVAL_MS) {
+        if (pendingPlaybackSyncTimerRef.current == null) {
+          pendingPlaybackSyncTimerRef.current = window.setTimeout(() => {
+            pendingPlaybackSyncTimerRef.current = null;
+            syncPlaybackState({ force: true });
+          }, RECEIVER_PLAYBACK_SYNC_INTERVAL_MS - msSinceLastSync);
+        }
+        return;
+      }
+
+      clearScheduledSync();
+      lastPlaybackSyncRef.current = {
+        normalizedPayload,
+        sentAt: now,
+      };
+      void updateReceiverPlaybackState(session.sessionToken, payload).catch(
+        () => undefined,
+      );
+    };
 
     const maybeCompletePendingCommand = () => {
       const pending = pendingCommandRef.current;
       if (!pending) {
         return;
       }
-      if (playbackError) {
+
+      const currentPlaybackError = playbackErrorRef.current;
+      const currentSource = sourceRef.current;
+      const video = videoRef.current;
+
+      if (currentPlaybackError) {
         pendingCommandRef.current = null;
         void acknowledgeReceiverCommand(session.sessionToken, pending.id, {
           status: "failed",
-          errorMessage: playbackError,
+          errorMessage: currentPlaybackError,
         }).catch(() => undefined);
         return;
       }
-      if (pending.kind === "stop" && !source) {
+
+      if (pending.kind === "stop" && !currentSource) {
         pendingCommandRef.current = null;
         void acknowledgeReceiverCommand(session.sessionToken, pending.id, {
           status: "succeeded",
         }).catch(() => undefined);
         return;
       }
+
       if (!video) {
         return;
       }
-      if (pending.kind === "playback_source" && video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
+
+      if (
+        pending.kind === "playback_source" &&
+        video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA
+      ) {
         pendingCommandRef.current = null;
         void acknowledgeReceiverCommand(session.sessionToken, pending.id, {
           status: "succeeded",
         }).catch(() => undefined);
         return;
       }
+
       if (
         pending.kind === "play" &&
         !video.paused &&
@@ -310,6 +432,7 @@ export function ReceiverPage() {
         }).catch(() => undefined);
         return;
       }
+
       if (pending.kind === "pause" && video.paused) {
         pendingCommandRef.current = null;
         void acknowledgeReceiverCommand(session.sessionToken, pending.id, {
@@ -317,10 +440,12 @@ export function ReceiverPage() {
         }).catch(() => undefined);
         return;
       }
+
       if (
         pending.kind === "seek" &&
         pending.positionSeconds != null &&
-        Math.abs(video.currentTime - pending.positionSeconds) <= SEEK_COMPLETION_TOLERANCE_SECONDS &&
+        Math.abs(video.currentTime - pending.positionSeconds) <=
+          SEEK_COMPLETION_TOLERANCE_SECONDS &&
         !video.seeking
       ) {
         pendingCommandRef.current = null;
@@ -330,64 +455,89 @@ export function ReceiverPage() {
       }
     };
 
-    sync();
+    syncPlaybackState({ immediate: true, force: true });
     maybeCompletePendingCommand();
+
+    const video = videoRef.current;
     if (!video) {
-      return;
+      return () => {
+        clearScheduledSync();
+      };
     }
+
     const handleWaiting = () => {
-      setBuffering(true);
-      sync();
+      updateBufferingState(true);
+      syncPlaybackState();
       maybeCompletePendingCommand();
     };
     const handlePlaying = () => {
-      setBuffering(false);
-      setPlaybackError(null);
-      sync();
+      updateBufferingState(false);
+      updatePlaybackErrorState(null);
+      syncPlaybackState({ immediate: true });
       maybeCompletePendingCommand();
     };
     const handleCanPlay = () => {
-      setBuffering(false);
-      sync();
+      updateBufferingState(false);
+      syncPlaybackState();
       maybeCompletePendingCommand();
     };
     const handlePause = () => {
-      setBuffering(false);
-      sync();
+      updateBufferingState(false);
+      syncPlaybackState({ immediate: true });
+      maybeCompletePendingCommand();
+    };
+    const handlePlay = () => {
+      updatePlaybackErrorState(null);
+      syncPlaybackState({ immediate: true });
+      maybeCompletePendingCommand();
+    };
+    const handleTimeUpdate = () => {
+      syncPlaybackState();
+    };
+    const handleSeeked = () => {
+      updateBufferingState(false);
+      syncPlaybackState({ immediate: true });
+      maybeCompletePendingCommand();
+    };
+    const handleEnded = () => {
+      updateBufferingState(false);
+      syncPlaybackState({ immediate: true, force: true });
       maybeCompletePendingCommand();
     };
     const handleError = () => {
       const nextError = describeVideoError(video);
-      setBuffering(false);
-      setPlaybackError(nextError);
-      sync();
+      updateBufferingState(false);
+      updatePlaybackErrorState(nextError);
+      syncPlaybackState({ immediate: true, force: true });
       maybeCompletePendingCommand();
     };
+
     video.addEventListener("pause", handlePause);
-    video.addEventListener("play", sync);
+    video.addEventListener("play", handlePlay);
     video.addEventListener("playing", handlePlaying);
     video.addEventListener("canplay", handleCanPlay);
     video.addEventListener("loadeddata", handleCanPlay);
-    video.addEventListener("timeupdate", sync);
+    video.addEventListener("timeupdate", handleTimeUpdate);
     video.addEventListener("waiting", handleWaiting);
     video.addEventListener("seeking", handleWaiting);
-    video.addEventListener("seeked", handleCanPlay);
-    video.addEventListener("ended", handlePause);
+    video.addEventListener("seeked", handleSeeked);
+    video.addEventListener("ended", handleEnded);
     video.addEventListener("error", handleError);
     return () => {
+      clearScheduledSync();
       video.removeEventListener("pause", handlePause);
-      video.removeEventListener("play", sync);
+      video.removeEventListener("play", handlePlay);
       video.removeEventListener("playing", handlePlaying);
       video.removeEventListener("canplay", handleCanPlay);
       video.removeEventListener("loadeddata", handleCanPlay);
-      video.removeEventListener("timeupdate", sync);
+      video.removeEventListener("timeupdate", handleTimeUpdate);
       video.removeEventListener("waiting", handleWaiting);
       video.removeEventListener("seeking", handleWaiting);
-      video.removeEventListener("seeked", handleCanPlay);
-      video.removeEventListener("ended", handlePause);
+      video.removeEventListener("seeked", handleSeeked);
+      video.removeEventListener("ended", handleEnded);
       video.removeEventListener("error", handleError);
     };
-  }, [buffering, playbackError, session?.sessionToken, source]);
+  }, [session?.sessionToken, source]);
 
   if (pairingCode) {
     return (

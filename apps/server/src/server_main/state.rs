@@ -15,7 +15,15 @@ pub(super) struct AppState {
     pub(super) search_lexicons: Arc<DashMap<Uuid, Arc<SearchLexicon>>>,
     pub(super) session_cache: Arc<DashMap<(Uuid, Uuid), Instant>>,
     pub(super) relay_profile_cache: Arc<DashMap<(Uuid, Uuid), Instant>>,
+    pub(super) channel_visibility_cache:
+        Arc<DashMap<(Uuid, Option<Uuid>), CachedChannelVisibilityMap>>,
     pub(super) receiver_channels: Arc<DashMap<Uuid, broadcast::Sender<ReceiverEventPayload>>>,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct CachedChannelVisibilityMap {
+    pub(super) values: Arc<HashMap<Uuid, ChannelVisibility>>,
+    pub(super) expires_at: Instant,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

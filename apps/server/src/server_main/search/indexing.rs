@@ -7,6 +7,9 @@ struct ChannelSearchBuildRow {
     id: Uuid,
     name: String,
     category_name: Option<String>,
+    search_provider_name: Option<String>,
+    search_is_ppv: bool,
+    search_is_vip: bool,
     has_catchup: bool,
     epg_channel_id: Option<String>,
 }
@@ -17,6 +20,9 @@ struct ProgramSearchBuildRow {
     channel_id: Option<Uuid>,
     channel_name: Option<String>,
     category_name: Option<String>,
+    search_provider_name: Option<String>,
+    search_is_ppv: bool,
+    search_is_vip: bool,
     title: String,
     description: Option<String>,
     start_at: DateTime<Utc>,
@@ -34,20 +40,19 @@ struct SearchDocumentInsertRow {
     ends_at: Option<DateTime<Utc>>,
 }
 
-pub(in crate::server_main) async fn rebuild_search_documents(
+async fn load_channel_search_build_rows(
     pool: &PgPool,
     user_id: Uuid,
-) -> Result<()> {
-    let visibility = load_channel_visibility_map(pool, user_id, None).await?;
-    let visible_channel_ids = visible_channel_ids_from_map(&visibility);
-    let compiled_rules = rules::load_compiled_rules(pool).await?;
-
-    let channel_rows = sqlx::query_as::<_, ChannelSearchBuildRow>(
+) -> Result<Vec<ChannelSearchBuildRow>> {
+    sqlx::query_as::<_, ChannelSearchBuildRow>(
         r#"
         SELECT
           c.id,
           c.name,
           cc.name AS category_name,
+          c.search_provider_name,
+          c.search_is_ppv,
+          c.search_is_vip,
           c.has_catchup,
           c.epg_channel_id
         FROM channels c
@@ -57,33 +62,53 @@ pub(in crate::server_main) async fn rebuild_search_documents(
     )
     .bind(user_id)
     .fetch_all(pool)
-    .await?;
+    .await
+    .map_err(Into::into)
+}
 
-    let channel_event_titles = load_channel_event_titles(pool, user_id, None).await?;
-    let mut channel_metadata = HashMap::<Uuid, rules::EvaluatedAdminMetadata>::new();
-    let mut channel_updates = Vec::with_capacity(channel_rows.len());
-    let mut document_rows = Vec::new();
+async fn load_program_search_build_rows(
+    pool: &PgPool,
+    user_id: Uuid,
+) -> Result<Vec<ProgramSearchBuildRow>> {
+    sqlx::query_as::<_, ProgramSearchBuildRow>(
+        r#"
+        SELECT
+          p.id,
+          p.channel_id,
+          p.channel_name,
+          cc.name AS category_name,
+          p.search_provider_name,
+          p.search_is_ppv,
+          p.search_is_vip,
+          p.title,
+          p.description,
+          p.start_at,
+          p.end_at
+        FROM programs p
+        LEFT JOIN channels c ON c.id = p.channel_id
+        LEFT JOIN channel_categories cc ON cc.id = c.category_id
+        WHERE p.user_id = $1
+        "#,
+    )
+    .bind(user_id)
+    .fetch_all(pool)
+    .await
+    .map_err(Into::into)
+}
 
-    for row in &channel_rows {
-        let event_titles = channel_event_titles
-            .get(&row.id)
-            .cloned()
-            .unwrap_or_default();
-        let metadata = rules::evaluate_patterns(
-            &compiled_rules,
-            rules::AdminSearchEvaluationInput {
-                channel_name: Some(&row.name),
-                category_name: row.category_name.as_deref(),
-                program_title: event_titles.first().map(String::as_str),
-            },
-        );
-        let search_text = format!(
+fn build_channel_search_document_row(row: &ChannelSearchBuildRow) -> SearchDocumentInsertRow {
+    SearchDocumentInsertRow {
+        entity_type: "channel",
+        entity_id: row.id,
+        title: row.name.clone(),
+        subtitle: row.category_name.clone(),
+        search_text: format!(
             "{} {} {} {} {} {} {}",
             row.name,
             row.category_name.as_deref().unwrap_or_default(),
-            metadata.provider_name.as_deref().unwrap_or_default(),
-            if metadata.is_ppv { "ppv" } else { "" },
-            if metadata.is_vip { "vip" } else { "" },
+            row.search_provider_name.as_deref().unwrap_or_default(),
+            if row.search_is_ppv { "ppv" } else { "" },
+            if row.search_is_vip { "vip" } else { "" },
             if row
                 .epg_channel_id
                 .as_deref()
@@ -100,19 +125,59 @@ pub(in crate::server_main) async fn rebuild_search_documents(
             }
         )
         .trim()
-        .to_string();
+        .to_string(),
+        starts_at: None,
+        ends_at: None,
+    }
+}
 
-        if visible_channel_ids.contains(&row.id) {
-            document_rows.push(SearchDocumentInsertRow {
-                entity_type: "channel",
-                entity_id: row.id,
-                title: row.name.clone(),
-                subtitle: row.category_name.clone(),
-                search_text,
-                starts_at: None,
-                ends_at: None,
-            });
-        }
+fn build_program_search_document_row(row: &ProgramSearchBuildRow) -> SearchDocumentInsertRow {
+    SearchDocumentInsertRow {
+        entity_type: "program",
+        entity_id: row.id,
+        title: row.title.clone(),
+        subtitle: row.channel_name.clone(),
+        search_text: format!(
+            "{} {} {} {} {} {}",
+            row.title,
+            row.channel_name.as_deref().unwrap_or_default(),
+            row.description.as_deref().unwrap_or_default(),
+            row.search_provider_name.as_deref().unwrap_or_default(),
+            if row.search_is_ppv { "ppv" } else { "" },
+            if row.search_is_vip { "vip" } else { "" }
+        )
+        .trim()
+        .to_string(),
+        starts_at: Some(row.start_at),
+        ends_at: Some(row.end_at),
+    }
+}
+
+pub(in crate::server_main) async fn refresh_search_metadata(
+    state: &AppState,
+    user_id: Uuid,
+) -> Result<()> {
+    let started_at = Instant::now();
+    let pool = &state.pool;
+    let compiled_rules = rules::load_compiled_rules(pool).await?;
+    let channel_rows = load_channel_search_build_rows(pool, user_id).await?;
+    let channel_event_titles = load_channel_event_titles(pool, user_id, None).await?;
+    let mut channel_metadata = HashMap::<Uuid, rules::EvaluatedAdminMetadata>::new();
+    let mut channel_updates = Vec::with_capacity(channel_rows.len());
+
+    for row in &channel_rows {
+        let event_titles = channel_event_titles
+            .get(&row.id)
+            .cloned()
+            .unwrap_or_default();
+        let metadata = rules::evaluate_patterns(
+            &compiled_rules,
+            rules::AdminSearchEvaluationInput {
+                channel_name: Some(&row.name),
+                category_name: row.category_name.as_deref(),
+                program_title: event_titles.first().map(String::as_str),
+            },
+        );
 
         channel_metadata.insert(row.id, metadata.clone());
         channel_updates.push((
@@ -126,38 +191,7 @@ pub(in crate::server_main) async fn rebuild_search_documents(
 
     apply_channel_search_metadata_updates(pool, &channel_updates).await?;
 
-    sqlx::query(
-        r#"
-        DELETE FROM search_documents
-        WHERE user_id = $1
-          AND entity_type IN ('channel', 'program')
-        "#,
-    )
-    .bind(user_id)
-    .execute(pool)
-    .await?;
-
-    let program_rows = sqlx::query_as::<_, ProgramSearchBuildRow>(
-        r#"
-        SELECT
-          p.id,
-          p.channel_id,
-          p.channel_name,
-          cc.name AS category_name,
-          p.title,
-          p.description,
-          p.start_at,
-          p.end_at
-        FROM programs p
-        LEFT JOIN channels c ON c.id = p.channel_id
-        LEFT JOIN channel_categories cc ON cc.id = c.category_id
-        WHERE p.user_id = $1
-        "#,
-    )
-    .bind(user_id)
-    .fetch_all(pool)
-    .await?;
-
+    let program_rows = load_program_search_build_rows(pool, user_id).await?;
     let mut program_updates = Vec::with_capacity(program_rows.len());
     for row in &program_rows {
         let metadata = row
@@ -174,34 +208,6 @@ pub(in crate::server_main) async fn rebuild_search_documents(
                 )
             });
 
-        let search_text = format!(
-            "{} {} {} {} {} {}",
-            row.title,
-            row.channel_name.as_deref().unwrap_or_default(),
-            row.description.as_deref().unwrap_or_default(),
-            metadata.provider_name.as_deref().unwrap_or_default(),
-            if metadata.is_ppv { "ppv" } else { "" },
-            if metadata.is_vip { "vip" } else { "" }
-        )
-        .trim()
-        .to_string();
-
-        if row
-            .channel_id
-            .map(|channel_id| visible_channel_ids.contains(&channel_id))
-            .unwrap_or(true)
-        {
-            document_rows.push(SearchDocumentInsertRow {
-                entity_type: "program",
-                entity_id: row.id,
-                title: row.title.clone(),
-                subtitle: row.channel_name.clone(),
-                search_text,
-                starts_at: Some(row.start_at),
-                ends_at: Some(row.end_at),
-            });
-        }
-
         program_updates.push((
             row.id,
             metadata.country_code,
@@ -212,9 +218,75 @@ pub(in crate::server_main) async fn rebuild_search_documents(
     }
 
     apply_program_search_metadata_updates(pool, &program_updates).await?;
+
+    info!(
+        user_id = %user_id,
+        channel_rows = channel_rows.len(),
+        program_rows = program_rows.len(),
+        elapsed_ms = started_at.elapsed().as_millis() as u64,
+        "refreshed PostgreSQL search metadata"
+    );
+    Ok(())
+}
+
+pub(in crate::server_main) async fn rebuild_postgres_search_documents(
+    state: &AppState,
+    user_id: Uuid,
+) -> Result<()> {
+    let started_at = Instant::now();
+    let pool = &state.pool;
+    let visibility = load_channel_visibility_map(state, user_id, None).await?;
+    let visible_channel_ids = visible_channel_ids_from_map(&visibility);
+    let channel_rows = load_channel_search_build_rows(pool, user_id).await?;
+    let channel_documents = channel_rows
+        .iter()
+        .filter(|row| visible_channel_ids.contains(&row.id))
+        .map(build_channel_search_document_row)
+        .collect::<Vec<_>>();
+
+    sqlx::query(
+        r#"
+        DELETE FROM search_documents
+        WHERE user_id = $1
+          AND entity_type IN ('channel', 'program')
+        "#,
+    )
+    .bind(user_id)
+    .execute(pool)
+    .await?;
+
+    let program_rows = load_program_search_build_rows(pool, user_id).await?;
+    let program_documents = program_rows
+        .iter()
+        .filter(|row| {
+            row.channel_id
+                .map(|channel_id| visible_channel_ids.contains(&channel_id))
+                .unwrap_or(true)
+        })
+        .map(build_program_search_document_row)
+        .collect::<Vec<_>>();
+
+    let mut document_rows = Vec::with_capacity(channel_documents.len() + program_documents.len());
+    document_rows.extend(channel_documents.iter().cloned());
+    document_rows.extend(program_documents.iter().cloned());
     insert_search_documents(pool, user_id, &document_rows).await?;
 
+    info!(
+        user_id = %user_id,
+        channel_documents = channel_documents.len(),
+        program_documents = program_documents.len(),
+        elapsed_ms = started_at.elapsed().as_millis() as u64,
+        "rebuilt PostgreSQL fallback search documents"
+    );
     Ok(())
+}
+
+pub(in crate::server_main) async fn rebuild_search_documents(
+    state: &AppState,
+    user_id: Uuid,
+) -> Result<()> {
+    refresh_search_metadata(state, user_id).await?;
+    rebuild_postgres_search_documents(state, user_id).await
 }
 
 async fn apply_channel_search_metadata_updates(
@@ -671,26 +743,46 @@ pub(in crate::server_main) fn channel_doc_contains_term(doc: &MeiliChannelDoc, t
         || doc.search_text.to_ascii_lowercase().contains(&term)
 }
 
+async fn load_search_source_counts(
+    pool: &PgPool,
+    user_id: Option<Uuid>,
+) -> Result<SearchDocumentCountsRow> {
+    match user_id {
+        Some(user_id) => sqlx::query_as::<_, SearchDocumentCountsRow>(
+            r#"
+            SELECT
+              (SELECT COUNT(*) FROM channels WHERE user_id = $1) AS channel_documents,
+              (SELECT COUNT(*) FROM programs WHERE user_id = $1) AS program_documents
+            "#,
+        )
+        .bind(user_id)
+        .fetch_one(pool)
+        .await
+        .map_err(Into::into),
+        None => sqlx::query_as::<_, SearchDocumentCountsRow>(
+            r#"
+            SELECT
+              (SELECT COUNT(*) FROM channels) AS channel_documents,
+              (SELECT COUNT(*) FROM programs) AS program_documents
+            "#,
+        )
+        .fetch_one(pool)
+        .await
+        .map_err(Into::into),
+    }
+}
+
 pub(in crate::server_main) async fn load_search_index_counts(
     client: &MeilisearchClient,
     pool: &PgPool,
 ) -> Result<SearchIndexCounts> {
-    let postgres_counts = sqlx::query_as::<_, SearchDocumentCountsRow>(
-        r#"
-        SELECT
-          COUNT(*) FILTER (WHERE entity_type = 'channel') AS channel_documents,
-          COUNT(*) FILTER (WHERE entity_type = 'program') AS program_documents
-        FROM search_documents
-        "#,
-    )
-    .fetch_one(pool)
-    .await?;
+    let source_counts = load_search_source_counts(pool, None).await?;
     let channels_stats = client.index("channels").get_stats().await?;
     let programs_stats = client.index("programs").get_stats().await?;
 
     Ok(SearchIndexCounts {
-        postgres_channel_documents: postgres_counts.channel_documents,
-        postgres_program_documents: postgres_counts.program_documents,
+        postgres_channel_documents: source_counts.channel_documents,
+        postgres_program_documents: source_counts.program_documents,
         meili_channel_documents: channels_stats.number_of_documents as i64,
         meili_program_documents: programs_stats.number_of_documents as i64,
     })
@@ -701,18 +793,7 @@ pub(in crate::server_main) async fn load_search_index_counts_for_user(
     pool: &PgPool,
     user_id: Uuid,
 ) -> Result<SearchIndexCounts> {
-    let postgres_counts = sqlx::query_as::<_, SearchDocumentCountsRow>(
-        r#"
-        SELECT
-          COUNT(*) FILTER (WHERE entity_type = 'channel') AS channel_documents,
-          COUNT(*) FILTER (WHERE entity_type = 'program') AS program_documents
-        FROM search_documents
-        WHERE user_id = $1
-        "#,
-    )
-    .bind(user_id)
-    .fetch_one(pool)
-    .await?;
+    let source_counts = load_search_source_counts(pool, Some(user_id)).await?;
 
     let filter = format!("user_id = \"{user_id}\"");
     let channel_results = client
@@ -733,8 +814,8 @@ pub(in crate::server_main) async fn load_search_index_counts_for_user(
         .await?;
 
     Ok(SearchIndexCounts {
-        postgres_channel_documents: postgres_counts.channel_documents,
-        postgres_program_documents: postgres_counts.program_documents,
+        postgres_channel_documents: source_counts.channel_documents,
+        postgres_program_documents: source_counts.program_documents,
         meili_channel_documents: channel_results
             .estimated_total_hits
             .map(|value| value as i64)
@@ -914,21 +995,21 @@ pub(in crate::server_main) async fn load_meili_bootstrap_user_ids(
 ) -> Result<Vec<Uuid>> {
     let user_ids = sqlx::query_scalar::<_, Uuid>(
         r#"
-        SELECT DISTINCT user_id
-        FROM search_documents
+        SELECT DISTINCT pp.user_id
+        FROM provider_profiles pp
         WHERE NOT EXISTS (
           SELECT 1
-          FROM provider_profiles pp
-          WHERE pp.user_id = search_documents.user_id
-            AND pp.status = 'syncing'
+          FROM provider_profiles syncing_pp
+          WHERE syncing_pp.user_id = pp.user_id
+            AND syncing_pp.status = 'syncing'
         )
           AND NOT EXISTS (
             SELECT 1
             FROM sync_jobs sj
-            WHERE sj.user_id = search_documents.user_id
+            WHERE sj.user_id = pp.user_id
               AND sj.status IN ('queued', 'running')
         )
-        ORDER BY user_id ASC
+        ORDER BY pp.user_id ASC
         "#,
     )
     .fetch_all(pool)
@@ -1015,6 +1096,7 @@ mod tests {
             search_lexicons: Arc::new(DashMap::new()),
             session_cache: Arc::new(DashMap::new()),
             relay_profile_cache: Arc::new(DashMap::new()),
+            channel_visibility_cache: Arc::new(DashMap::new()),
             receiver_channels: Arc::new(DashMap::new()),
         }
     }
@@ -1387,6 +1469,60 @@ async fn load_channel_event_titles(
         .collect::<HashMap<_, _>>())
 }
 
+async fn load_channel_event_titles_for_channels(
+    pool: &PgPool,
+    user_id: Uuid,
+    profile_id: Uuid,
+    channel_ids: &[Uuid],
+) -> Result<HashMap<Uuid, Vec<String>>> {
+    if channel_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let rows = sqlx::query_as::<_, ChannelEventTitlesRow>(
+        r#"
+        WITH ranked AS (
+          SELECT
+            p.channel_id,
+            p.title,
+            ROW_NUMBER() OVER (
+              PARTITION BY p.channel_id
+              ORDER BY
+                CASE
+                  WHEN p.start_at <= NOW() AND p.end_at >= NOW() THEN 0
+                  WHEN p.start_at > NOW() THEN 1
+                  ELSE 2
+                END,
+                p.start_at ASC,
+                p.title ASC
+            ) AS rank
+          FROM programs p
+          WHERE p.user_id = $1
+            AND p.profile_id = $2
+            AND p.channel_id = ANY($3)
+            AND p.end_at > NOW() - ($4 * INTERVAL '1 hour')
+            AND p.start_at < NOW() + ($5 * INTERVAL '1 day')
+        )
+        SELECT channel_id, array_agg(title ORDER BY rank) AS titles
+        FROM ranked
+        WHERE rank <= 3
+        GROUP BY channel_id
+        "#,
+    )
+    .bind(user_id)
+    .bind(profile_id)
+    .bind(channel_ids)
+    .bind(EPG_RETENTION_PAST_HOURS)
+    .bind(EPG_RETENTION_FUTURE_DAYS)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|row| (row.channel_id, row.titles))
+        .collect::<HashMap<_, _>>())
+}
+
 async fn delete_meili_documents(
     meili: &MeilisearchClient,
     index_name: &str,
@@ -1405,6 +1541,420 @@ async fn delete_meili_documents(
         )
         .await?;
     Ok(())
+}
+
+async fn delete_meili_document_ids(
+    meili: &MeilisearchClient,
+    index_name: &str,
+    document_ids: &[String],
+) -> Result<()> {
+    if document_ids.is_empty() {
+        return Ok(());
+    }
+
+    meili
+        .index(index_name)
+        .delete_documents(document_ids)
+        .await?
+        .wait_for_completion(
+            meili,
+            Some(MEILI_TASK_POLL_INTERVAL),
+            Some(MEILI_TASK_TIMEOUT),
+        )
+        .await?;
+    Ok(())
+}
+
+fn build_meili_channel_doc(
+    user_id_str: &str,
+    row: &MeiliChannelRow,
+    event_titles: &[String],
+) -> (MeiliChannelDoc, ChannelProgramMetadata) {
+    let broad_categories = derive_broad_categories(&format!(
+        "{} {} {}",
+        row.name,
+        row.category_name.as_deref().unwrap_or_default(),
+        event_titles.join(" ")
+    ));
+    let event_keywords = derive_event_keywords(&format!("{} {}", row.name, event_titles.join(" ")));
+    let is_placeholder_channel = is_placeholder_channel_name(&row.name);
+    let is_event_channel = detect_event_channel(&row.name)
+        || event_titles.iter().any(|title| detect_event_channel(title));
+    let mut sort_rank = 2;
+    if is_placeholder_channel {
+        sort_rank = 5;
+    } else if is_event_channel {
+        sort_rank = 0;
+    } else if broad_categories.iter().any(|category| category == "sports") {
+        sort_rank = 1;
+    }
+    let visibility =
+        classify_channel_visibility(&row.name, row.category_name.as_deref(), event_titles);
+
+    let doc = MeiliChannelDoc {
+        id: format!("{}_{}", user_id_str, row.id),
+        user_id: user_id_str.to_string(),
+        profile_id: row.profile_id.to_string(),
+        entity_id: row.id.to_string(),
+        channel_name: row.name.clone(),
+        subtitle: row.category_name.clone(),
+        category_name_raw: row.category_name.clone(),
+        country_code: row.search_country_code.clone(),
+        provider_name: row.search_provider_name.clone(),
+        is_ppv: row.search_is_ppv,
+        is_vip: row.search_is_vip,
+        has_epg: row.has_epg,
+        broad_categories,
+        event_titles: event_titles.to_vec(),
+        event_keywords: event_keywords.clone(),
+        is_event_channel,
+        is_placeholder_channel,
+        is_hidden: visibility.is_hidden,
+        has_catchup: row.has_catchup,
+        archive_duration_hours: row.archive_duration_hours,
+        epg_channel_id: row.epg_channel_id.clone(),
+        search_text: format!(
+            "{} {} {} {} {} {} {} {} {}",
+            row.name,
+            row.category_name.as_deref().unwrap_or_default(),
+            event_titles.join(" "),
+            event_keywords.join(" "),
+            row.search_provider_name.as_deref().unwrap_or_default(),
+            if row.search_is_ppv { "ppv" } else { "" },
+            if row.search_is_vip { "vip" } else { "" },
+            if row.has_epg { "epg" } else { "" },
+            if row.has_catchup {
+                "catchup archive"
+            } else {
+                "live"
+            }
+        )
+        .trim()
+        .to_string(),
+        sort_rank,
+        updated_at: row.updated_at.timestamp(),
+    };
+    let metadata = ChannelProgramMetadata {
+        country_code: doc.country_code.clone(),
+        provider_name: doc.provider_name.clone(),
+        is_ppv: doc.is_ppv,
+        is_vip: doc.is_vip,
+        broad_categories: doc.broad_categories.clone(),
+        is_hidden: doc.is_hidden,
+    };
+
+    (doc, metadata)
+}
+
+fn build_meili_program_doc(
+    user_id_str: &str,
+    row: &MeiliProgramRow,
+    now: DateTime<Utc>,
+    channel_program_metadata: &HashMap<Uuid, ChannelProgramMetadata>,
+) -> MeiliProgramDoc {
+    let (country_code, provider_name, is_ppv, is_vip, broad_categories, is_hidden, has_epg) = row
+        .channel_id
+        .and_then(|channel_id| channel_program_metadata.get(&channel_id))
+        .map(|metadata| {
+            (
+                metadata.country_code.clone(),
+                metadata.provider_name.clone(),
+                metadata.is_ppv,
+                metadata.is_vip,
+                metadata.broad_categories.clone(),
+                metadata.is_hidden,
+                true,
+            )
+        })
+        .unwrap_or_else(|| {
+            let broad_categories = derive_broad_categories(&format!(
+                "{} {} {}",
+                row.title,
+                row.channel_name.as_deref().unwrap_or_default(),
+                row.description.as_deref().unwrap_or_default()
+            ));
+            (
+                row.search_country_code.clone(),
+                row.search_provider_name.clone(),
+                row.search_is_ppv,
+                row.search_is_vip,
+                broad_categories,
+                false,
+                true,
+            )
+        });
+
+    MeiliProgramDoc {
+        id: format!("{}_{}", user_id_str, row.id),
+        user_id: user_id_str.to_string(),
+        profile_id: row.profile_id.to_string(),
+        entity_id: row.id.to_string(),
+        country_code,
+        provider_name: provider_name.clone(),
+        is_ppv,
+        is_vip,
+        has_epg,
+        broad_categories: broad_categories.clone(),
+        channel_name: row.channel_name.clone(),
+        title: row.title.clone(),
+        description: row.description.clone(),
+        search_text: format!(
+            "{} {} {} {} {} {} {}",
+            row.title,
+            row.channel_name.as_deref().unwrap_or_default(),
+            row.description.as_deref().unwrap_or_default(),
+            provider_name.as_deref().unwrap_or_default(),
+            if is_ppv { "ppv" } else { "" },
+            if is_vip { "vip" } else { "" },
+            broad_categories.join(" ")
+        )
+        .trim()
+        .to_string(),
+        starts_at: row.start_at.timestamp(),
+        ends_at: row.end_at.timestamp(),
+        can_catchup: row.can_catchup,
+        channel_id: row.channel_id.map(|value| value.to_string()),
+        is_hidden,
+        sort_priority: if row.channel_id.is_some() && row.start_at <= now && row.end_at >= now {
+            0
+        } else if row.channel_id.is_some() && row.end_at <= now && row.can_catchup {
+            1
+        } else if row.start_at > now {
+            2
+        } else {
+            3
+        },
+    }
+}
+
+async fn load_meili_channel_batch(
+    pool: &PgPool,
+    user_id: Uuid,
+    profile_id: Option<Uuid>,
+    last_channel_id: Option<Uuid>,
+) -> Result<Vec<MeiliChannelRow>> {
+    sqlx::query_as::<_, MeiliChannelRow>(
+        r#"
+        SELECT
+          c.id,
+          c.profile_id,
+          c.name,
+          cc.name AS category_name,
+          c.search_country_code,
+          c.search_provider_name,
+          c.search_is_ppv,
+          c.search_is_vip,
+          c.has_catchup,
+          c.archive_duration_hours,
+          c.epg_channel_id,
+          EXISTS(
+            SELECT 1
+            FROM programs p
+            WHERE p.user_id = c.user_id
+              AND p.channel_id = c.id
+              AND p.end_at > NOW() - ($5 * INTERVAL '1 hour')
+              AND p.start_at < NOW() + ($6 * INTERVAL '1 day')
+          ) AS has_epg,
+          c.updated_at
+        FROM channels c
+        LEFT JOIN channel_categories cc ON cc.id = c.category_id
+        WHERE c.user_id = $1
+          AND ($2::uuid IS NULL OR c.profile_id = $2)
+          AND ($3::uuid IS NULL OR c.id > $3)
+        ORDER BY c.id ASC
+        LIMIT $4
+        "#,
+    )
+    .bind(user_id)
+    .bind(profile_id)
+    .bind(last_channel_id)
+    .bind(MEILI_INDEX_BATCH_SIZE)
+    .bind(EPG_RETENTION_PAST_HOURS)
+    .bind(EPG_RETENTION_FUTURE_DAYS)
+    .fetch_all(pool)
+    .await
+    .map_err(Into::into)
+}
+
+async fn load_meili_channel_rows_for_remote_stream_ids(
+    pool: &PgPool,
+    user_id: Uuid,
+    profile_id: Uuid,
+    remote_stream_ids: &[i32],
+) -> Result<Vec<MeiliChannelRow>> {
+    if remote_stream_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    sqlx::query_as::<_, MeiliChannelRow>(
+        r#"
+        SELECT
+          c.id,
+          c.profile_id,
+          c.name,
+          cc.name AS category_name,
+          c.search_country_code,
+          c.search_provider_name,
+          c.search_is_ppv,
+          c.search_is_vip,
+          c.has_catchup,
+          c.archive_duration_hours,
+          c.epg_channel_id,
+          EXISTS(
+            SELECT 1
+            FROM programs p
+            WHERE p.user_id = c.user_id
+              AND p.channel_id = c.id
+              AND p.end_at > NOW() - ($4 * INTERVAL '1 hour')
+              AND p.start_at < NOW() + ($5 * INTERVAL '1 day')
+          ) AS has_epg,
+          c.updated_at
+        FROM channels c
+        LEFT JOIN channel_categories cc ON cc.id = c.category_id
+        WHERE c.user_id = $1
+          AND c.profile_id = $2
+          AND c.remote_stream_id = ANY($3)
+        ORDER BY c.id ASC
+        "#,
+    )
+    .bind(user_id)
+    .bind(profile_id)
+    .bind(remote_stream_ids)
+    .bind(EPG_RETENTION_PAST_HOURS)
+    .bind(EPG_RETENTION_FUTURE_DAYS)
+    .fetch_all(pool)
+    .await
+    .map_err(Into::into)
+}
+
+async fn load_meili_program_batch(
+    pool: &PgPool,
+    user_id: Uuid,
+    profile_id: Option<Uuid>,
+    last_program_id: Option<Uuid>,
+) -> Result<Vec<MeiliProgramRow>> {
+    sqlx::query_as::<_, MeiliProgramRow>(
+        r#"
+        SELECT
+          p.id,
+          p.profile_id,
+          p.channel_id,
+          p.channel_name,
+          cc.name AS category_name,
+          p.search_country_code,
+          p.search_provider_name,
+          p.search_is_ppv,
+          p.search_is_vip,
+          p.title,
+          p.description,
+          p.start_at,
+          p.end_at,
+          p.can_catchup
+        FROM programs p
+        LEFT JOIN channels c ON c.id = p.channel_id
+        LEFT JOIN channel_categories cc ON cc.id = c.category_id
+        WHERE p.user_id = $1
+          AND ($2::uuid IS NULL OR p.profile_id = $2)
+          AND ($3::uuid IS NULL OR p.id > $3)
+        ORDER BY p.id ASC
+        LIMIT $4
+        "#,
+    )
+    .bind(user_id)
+    .bind(profile_id)
+    .bind(last_program_id)
+    .bind(MEILI_INDEX_BATCH_SIZE)
+    .fetch_all(pool)
+    .await
+    .map_err(Into::into)
+}
+
+async fn load_meili_program_rows_for_channel_ids(
+    pool: &PgPool,
+    user_id: Uuid,
+    profile_id: Uuid,
+    channel_ids: &[Uuid],
+) -> Result<Vec<MeiliProgramRow>> {
+    if channel_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    sqlx::query_as::<_, MeiliProgramRow>(
+        r#"
+        SELECT
+          p.id,
+          p.profile_id,
+          p.channel_id,
+          p.channel_name,
+          cc.name AS category_name,
+          p.search_country_code,
+          p.search_provider_name,
+          p.search_is_ppv,
+          p.search_is_vip,
+          p.title,
+          p.description,
+          p.start_at,
+          p.end_at,
+          p.can_catchup
+        FROM programs p
+        LEFT JOIN channels c ON c.id = p.channel_id
+        LEFT JOIN channel_categories cc ON cc.id = c.category_id
+        WHERE p.user_id = $1
+          AND p.profile_id = $2
+          AND p.channel_id = ANY($3)
+        ORDER BY p.id ASC
+        "#,
+    )
+    .bind(user_id)
+    .bind(profile_id)
+    .bind(channel_ids)
+    .fetch_all(pool)
+    .await
+    .map_err(Into::into)
+}
+
+async fn load_meili_program_rows_by_ids(
+    pool: &PgPool,
+    user_id: Uuid,
+    profile_id: Uuid,
+    program_ids: &[Uuid],
+) -> Result<Vec<MeiliProgramRow>> {
+    if program_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    sqlx::query_as::<_, MeiliProgramRow>(
+        r#"
+        SELECT
+          p.id,
+          p.profile_id,
+          p.channel_id,
+          p.channel_name,
+          cc.name AS category_name,
+          p.search_country_code,
+          p.search_provider_name,
+          p.search_is_ppv,
+          p.search_is_vip,
+          p.title,
+          p.description,
+          p.start_at,
+          p.end_at,
+          p.can_catchup
+        FROM programs p
+        LEFT JOIN channels c ON c.id = p.channel_id
+        LEFT JOIN channel_categories cc ON cc.id = c.category_id
+        WHERE p.user_id = $1
+          AND p.profile_id = $2
+          AND p.id = ANY($3)
+        ORDER BY p.id ASC
+        "#,
+    )
+    .bind(user_id)
+    .bind(profile_id)
+    .bind(program_ids)
+    .fetch_all(pool)
+    .await
+    .map_err(Into::into)
 }
 
 async fn wait_for_pending_meili_batch(
@@ -1449,6 +1999,74 @@ async fn flush_pending_meili_batches(
     Ok(())
 }
 
+async fn upsert_meili_channel_docs(
+    meili: &MeilisearchClient,
+    user_id: Uuid,
+    profile_id: Uuid,
+    docs: &[MeiliChannelDoc],
+) -> Result<()> {
+    if docs.is_empty() {
+        return Ok(());
+    }
+
+    let index = meili.index("channels");
+    for (batch_index, chunk) in docs.chunks(MEILI_INDEX_BATCH_SIZE as usize).enumerate() {
+        index
+            .add_or_replace(chunk, Some("id"))
+            .await?
+            .wait_for_completion(
+                meili,
+                Some(MEILI_TASK_POLL_INTERVAL),
+                Some(MEILI_TASK_TIMEOUT),
+            )
+            .await?;
+        info!(
+            user_id = %user_id,
+            profile_id = %profile_id,
+            phase = "channel-delta",
+            batch = batch_index + 1,
+            indexed_documents = (batch_index + 1) * chunk.len(),
+            "completed Meilisearch delta batch"
+        );
+    }
+
+    Ok(())
+}
+
+async fn upsert_meili_program_docs(
+    meili: &MeilisearchClient,
+    user_id: Uuid,
+    profile_id: Uuid,
+    docs: &[MeiliProgramDoc],
+) -> Result<()> {
+    if docs.is_empty() {
+        return Ok(());
+    }
+
+    let index = meili.index("programs");
+    for (batch_index, chunk) in docs.chunks(MEILI_INDEX_BATCH_SIZE as usize).enumerate() {
+        index
+            .add_or_replace(chunk, Some("id"))
+            .await?
+            .wait_for_completion(
+                meili,
+                Some(MEILI_TASK_POLL_INTERVAL),
+                Some(MEILI_TASK_TIMEOUT),
+            )
+            .await?;
+        info!(
+            user_id = %user_id,
+            profile_id = %profile_id,
+            phase = "program-delta",
+            batch = batch_index + 1,
+            indexed_documents = (batch_index + 1) * chunk.len(),
+            "completed Meilisearch delta batch"
+        );
+    }
+
+    Ok(())
+}
+
 pub(in crate::server_main) async fn rebuild_meili_indexes(
     state: &AppState,
     meili: &MeilisearchClient,
@@ -1474,140 +2092,21 @@ pub(in crate::server_main) async fn rebuild_meili_indexes(
     let mut channel_program_metadata = HashMap::<Uuid, ChannelProgramMetadata>::new();
     let mut pending_channel_batches = VecDeque::new();
     loop {
-        let rows = sqlx::query_as::<_, MeiliChannelRow>(
-            r#"
-            SELECT
-              c.id,
-              c.profile_id,
-              c.name,
-              cc.name AS category_name,
-              c.search_country_code,
-              c.search_provider_name,
-              c.search_is_ppv,
-              c.search_is_vip,
-              c.has_catchup,
-              c.archive_duration_hours,
-              c.epg_channel_id,
-              EXISTS(
-                SELECT 1
-                FROM programs p
-                WHERE p.user_id = c.user_id
-                  AND p.channel_id = c.id
-                  AND p.end_at > NOW() - ($5 * INTERVAL '1 hour')
-                  AND p.start_at < NOW() + ($6 * INTERVAL '1 day')
-              ) AS has_epg,
-              c.updated_at
-            FROM channels c
-            LEFT JOIN channel_categories cc ON cc.id = c.category_id
-            WHERE c.user_id = $1
-              AND ($2::uuid IS NULL OR c.profile_id = $2)
-              AND ($3::uuid IS NULL OR c.id > $3)
-            ORDER BY c.id ASC
-            LIMIT $4
-            "#,
-        )
-        .bind(user_id)
-        .bind(profile_id)
-        .bind(last_channel_id)
-        .bind(MEILI_INDEX_BATCH_SIZE)
-        .bind(EPG_RETENTION_PAST_HOURS)
-        .bind(EPG_RETENTION_FUTURE_DAYS)
-        .fetch_all(pool)
-        .await?;
+        let rows = load_meili_channel_batch(pool, user_id, profile_id, last_channel_id).await?;
         if rows.is_empty() {
             break;
         }
 
         let batch_size = rows.len();
-        let docs = rows
-            .iter()
-            .map(|row| {
-                let event_titles = channel_event_titles
-                    .get(&row.id)
-                    .cloned()
-                    .unwrap_or_default();
-                let broad_categories = derive_broad_categories(&format!(
-                    "{} {} {}",
-                    row.name,
-                    row.category_name.as_deref().unwrap_or_default(),
-                    event_titles.join(" ")
-                ));
-                let event_keywords =
-                    derive_event_keywords(&format!("{} {}", row.name, event_titles.join(" ")));
-                let is_placeholder_channel = is_placeholder_channel_name(&row.name);
-                let is_event_channel = detect_event_channel(&row.name)
-                    || event_titles.iter().any(|title| detect_event_channel(title));
-                let mut sort_rank = 2;
-                if is_placeholder_channel {
-                    sort_rank = 5;
-                } else if is_event_channel {
-                    sort_rank = 0;
-                } else if broad_categories.iter().any(|category| category == "sports") {
-                    sort_rank = 1;
-                }
-                let visibility = classify_channel_visibility(
-                    &row.name,
-                    row.category_name.as_deref(),
-                    &event_titles,
-                );
-
-                MeiliChannelDoc {
-                    id: format!("{}_{}", user_id, row.id),
-                    user_id: user_id_str.clone(),
-                    profile_id: row.profile_id.to_string(),
-                    entity_id: row.id.to_string(),
-                    channel_name: row.name.clone(),
-                    subtitle: row.category_name.clone(),
-                    category_name_raw: row.category_name.clone(),
-                    country_code: row.search_country_code.clone(),
-                    provider_name: row.search_provider_name.clone(),
-                    is_ppv: row.search_is_ppv,
-                    is_vip: row.search_is_vip,
-                    has_epg: row.has_epg,
-                    broad_categories,
-                    event_titles: event_titles.clone(),
-                    event_keywords: event_keywords.clone(),
-                    is_event_channel,
-                    is_placeholder_channel,
-                    is_hidden: visibility.is_hidden,
-                    has_catchup: row.has_catchup,
-                    archive_duration_hours: row.archive_duration_hours,
-                    epg_channel_id: row.epg_channel_id.clone(),
-                    search_text: format!(
-                        "{} {} {} {} {} {} {} {} {}",
-                        row.name,
-                        row.category_name.as_deref().unwrap_or_default(),
-                        event_titles.join(" "),
-                        event_keywords.join(" "),
-                        row.search_provider_name.as_deref().unwrap_or_default(),
-                        if row.search_is_ppv { "ppv" } else { "" },
-                        if row.search_is_vip { "vip" } else { "" },
-                        if row.has_epg { "epg" } else { "" },
-                        if row.has_catchup {
-                            "catchup archive"
-                        } else {
-                            "live"
-                        }
-                    )
-                    .trim()
-                    .to_string(),
-                    sort_rank,
-                    updated_at: row.updated_at.timestamp(),
-                }
-            })
-            .collect::<Vec<_>>();
-        for (row, doc) in rows.iter().zip(docs.iter()) {
-            channel_program_metadata.insert(
-                row.id,
-                ChannelProgramMetadata {
-                    country_code: doc.country_code.clone(),
-                    provider_name: doc.provider_name.clone(),
-                    is_ppv: doc.is_ppv,
-                    is_vip: doc.is_vip,
-                    broad_categories: doc.broad_categories.clone(),
-                    is_hidden: doc.is_hidden,
-                },
-            );
+        let mut docs = Vec::with_capacity(batch_size);
+        for row in &rows {
+            let event_titles = channel_event_titles
+                .get(&row.id)
+                .cloned()
+                .unwrap_or_default();
+            let (doc, metadata) = build_meili_channel_doc(&user_id_str, row, &event_titles);
+            channel_program_metadata.insert(row.id, metadata);
+            docs.push(doc);
         }
         indexed_channel_docs += batch_size;
         indexed_channel_batches += 1;
@@ -1630,139 +2129,22 @@ pub(in crate::server_main) async fn rebuild_meili_indexes(
     let mut indexed_program_docs = 0usize;
     let mut indexed_program_batches = 0usize;
     let mut pending_program_batches = VecDeque::new();
+    let now = Utc::now();
     info!(
         user_id = %user_id,
         profile_id = ?profile_id,
         "starting Meilisearch program indexing phase"
     );
     loop {
-        let rows = sqlx::query_as::<_, MeiliProgramRow>(
-            r#"
-            SELECT
-              p.id,
-              p.profile_id,
-              p.channel_id,
-              p.channel_name,
-              cc.name AS category_name,
-              p.search_country_code,
-              p.search_provider_name,
-              p.search_is_ppv,
-              p.search_is_vip,
-              p.title,
-              p.description,
-              p.start_at,
-              p.end_at,
-              p.can_catchup
-            FROM programs p
-            LEFT JOIN channels c ON c.id = p.channel_id
-            LEFT JOIN channel_categories cc ON cc.id = c.category_id
-            WHERE p.user_id = $1
-              AND ($2::uuid IS NULL OR p.profile_id = $2)
-              AND ($3::uuid IS NULL OR p.id > $3)
-            ORDER BY p.id ASC
-            LIMIT $4
-            "#,
-        )
-        .bind(user_id)
-        .bind(profile_id)
-        .bind(last_program_id)
-        .bind(MEILI_INDEX_BATCH_SIZE)
-        .fetch_all(pool)
-        .await?;
+        let rows = load_meili_program_batch(pool, user_id, profile_id, last_program_id).await?;
         if rows.is_empty() {
             break;
         }
 
-        let now = Utc::now();
         let batch_size = rows.len();
         let docs = rows
             .iter()
-            .map(|row| {
-                let (
-                    country_code,
-                    provider_name,
-                    is_ppv,
-                    is_vip,
-                    broad_categories,
-                    is_hidden,
-                    has_epg,
-                ) = row
-                    .channel_id
-                    .and_then(|channel_id| channel_program_metadata.get(&channel_id))
-                    .map(|metadata| {
-                        (
-                            metadata.country_code.clone(),
-                            metadata.provider_name.clone(),
-                            metadata.is_ppv,
-                            metadata.is_vip,
-                            metadata.broad_categories.clone(),
-                            metadata.is_hidden,
-                            true,
-                        )
-                    })
-                    .unwrap_or_else(|| {
-                        let broad_categories = derive_broad_categories(&format!(
-                            "{} {} {}",
-                            row.title,
-                            row.channel_name.as_deref().unwrap_or_default(),
-                            row.description.as_deref().unwrap_or_default()
-                        ));
-                        (
-                            row.search_country_code.clone(),
-                            row.search_provider_name.clone(),
-                            row.search_is_ppv,
-                            row.search_is_vip,
-                            broad_categories,
-                            false,
-                            true,
-                        )
-                    });
-
-                MeiliProgramDoc {
-                    id: format!("{}_{}", user_id, row.id),
-                    user_id: user_id_str.clone(),
-                    profile_id: row.profile_id.to_string(),
-                    entity_id: row.id.to_string(),
-                    country_code,
-                    provider_name: provider_name.clone(),
-                    is_ppv,
-                    is_vip,
-                    has_epg,
-                    broad_categories: broad_categories.clone(),
-                    channel_name: row.channel_name.clone(),
-                    title: row.title.clone(),
-                    description: row.description.clone(),
-                    search_text: format!(
-                        "{} {} {} {} {} {} {}",
-                        row.title,
-                        row.channel_name.as_deref().unwrap_or_default(),
-                        row.description.as_deref().unwrap_or_default(),
-                        provider_name.as_deref().unwrap_or_default(),
-                        if is_ppv { "ppv" } else { "" },
-                        if is_vip { "vip" } else { "" },
-                        broad_categories.join(" ")
-                    )
-                    .trim()
-                    .to_string(),
-                    starts_at: row.start_at.timestamp(),
-                    ends_at: row.end_at.timestamp(),
-                    can_catchup: row.can_catchup,
-                    channel_id: row.channel_id.map(|value| value.to_string()),
-                    is_hidden,
-                    sort_priority: if row.channel_id.is_some()
-                        && row.start_at <= now
-                        && row.end_at >= now
-                    {
-                        0
-                    } else if row.channel_id.is_some() && row.end_at <= now && row.can_catchup {
-                        1
-                    } else if row.start_at > now {
-                        2
-                    } else {
-                        3
-                    },
-                }
-            })
+            .map(|row| build_meili_program_doc(&user_id_str, row, now, &channel_program_metadata))
             .collect::<Vec<_>>();
         indexed_program_docs += batch_size;
         indexed_program_batches += 1;
@@ -1798,17 +2180,91 @@ pub(in crate::server_main) async fn refresh_meili_channels_delta(
     profile_id: Uuid,
     changed_remote_stream_ids: &[i32],
     removed_channel_ids: &[Uuid],
+    removed_program_ids: &[Uuid],
 ) -> Result<()> {
     let started_at = Instant::now();
-    let _ = changed_remote_stream_ids;
-    let _ = removed_channel_ids;
-    rebuild_meili_indexes(state, meili, user_id, Some(profile_id)).await?;
+    if changed_remote_stream_ids.is_empty()
+        && removed_channel_ids.is_empty()
+        && removed_program_ids.is_empty()
+    {
+        info!(
+            user_id = %user_id,
+            profile_id = %profile_id,
+            "skipping Meilisearch delta refresh because no channel changes were detected"
+        );
+        return Ok(());
+    }
+
+    let pool = &state.pool;
+    let user_id_str = user_id.to_string();
+    let changed_channel_rows = load_meili_channel_rows_for_remote_stream_ids(
+        pool,
+        user_id,
+        profile_id,
+        changed_remote_stream_ids,
+    )
+    .await?;
+    let changed_channel_ids = changed_channel_rows
+        .iter()
+        .map(|row| row.id)
+        .collect::<Vec<_>>();
+    let channel_event_titles =
+        load_channel_event_titles_for_channels(pool, user_id, profile_id, &changed_channel_ids)
+            .await?;
+
+    let mut channel_program_metadata = HashMap::<Uuid, ChannelProgramMetadata>::new();
+    let mut changed_channel_docs = Vec::with_capacity(changed_channel_rows.len());
+    for row in &changed_channel_rows {
+        let event_titles = channel_event_titles
+            .get(&row.id)
+            .cloned()
+            .unwrap_or_default();
+        let (doc, metadata) = build_meili_channel_doc(&user_id_str, row, &event_titles);
+        channel_program_metadata.insert(row.id, metadata);
+        changed_channel_docs.push(doc);
+    }
+
+    let changed_program_rows =
+        load_meili_program_rows_for_channel_ids(pool, user_id, profile_id, &changed_channel_ids)
+            .await?;
+    let removed_program_rows =
+        load_meili_program_rows_by_ids(pool, user_id, profile_id, removed_program_ids).await?;
+    let mut program_rows_by_id = HashMap::<Uuid, MeiliProgramRow>::new();
+    for row in changed_program_rows
+        .into_iter()
+        .chain(removed_program_rows.into_iter())
+    {
+        program_rows_by_id.insert(row.id, row);
+    }
+    let now = Utc::now();
+    let changed_program_docs = program_rows_by_id
+        .values()
+        .map(|row| build_meili_program_doc(&user_id_str, row, now, &channel_program_metadata))
+        .collect::<Vec<_>>();
+
+    let removed_channel_doc_ids = removed_channel_ids
+        .iter()
+        .map(|channel_id| format!("{}_{}", user_id_str, channel_id))
+        .collect::<Vec<_>>();
+    let removed_program_doc_ids = removed_program_ids
+        .iter()
+        .map(|program_id| format!("{}_{}", user_id_str, program_id))
+        .collect::<Vec<_>>();
+
+    delete_meili_document_ids(meili, "channels", &removed_channel_doc_ids).await?;
+    delete_meili_document_ids(meili, "programs", &removed_program_doc_ids).await?;
+    upsert_meili_channel_docs(meili, user_id, profile_id, &changed_channel_docs).await?;
+    upsert_meili_program_docs(meili, user_id, profile_id, &changed_program_docs).await?;
 
     info!(
         user_id = %user_id,
         profile_id = %profile_id,
+        changed_channel_documents = changed_channel_docs.len(),
+        removed_channel_documents = removed_channel_ids.len(),
+        refreshed_program_documents = changed_program_docs.len(),
+        removed_program_documents = removed_program_ids.len(),
         elapsed_ms = started_at.elapsed().as_millis() as u64,
-        "finished Meilisearch profile rebuild"
+        "finished incremental Meilisearch delta refresh"
     );
     Ok(())
 }

@@ -8,6 +8,7 @@ mod scheduler;
 pub(super) struct ChannelSyncDelta {
     pub(super) changed_remote_stream_ids: Vec<i32>,
     pub(super) removed_channel_ids: Vec<Uuid>,
+    pub(super) removed_program_ids: Vec<Uuid>,
 }
 
 #[derive(Debug, Clone)]

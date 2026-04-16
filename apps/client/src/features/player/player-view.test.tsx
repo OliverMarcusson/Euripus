@@ -1,4 +1,5 @@
 import type { ReactElement } from "react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { Mock } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { PlaybackSource } from "@euripus/shared";
@@ -40,6 +41,7 @@ vi.mock("@/components/player/plyr-surface", () => ({
 }));
 
 vi.mock("@/lib/api", () => ({
+  getRemoteControllerTarget: vi.fn().mockResolvedValue(null),
   startChannelPlayback: vi.fn(),
   startProgramPlayback: vi.fn(),
   pauseRemotePlayback: vi.fn(),
@@ -58,6 +60,14 @@ const SOURCE: PlaybackSource = {
   title: "Arena Live",
 };
 
+function renderPlayerView() {
+  return render(
+    <QueryClientProvider client={new QueryClient()}>
+      <PlayerView />
+    </QueryClientProvider>,
+  );
+}
+
 describe("PlayerView", () => {
   beforeEach(() => {
     plyrSurface.mockClear();
@@ -70,7 +80,7 @@ describe("PlayerView", () => {
   });
 
   it("renders the empty state when no source is selected", () => {
-    render(<PlayerView />);
+    renderPlayerView();
 
     expect(screen.getByText("Choose a channel or program")).toBeInTheDocument();
     expect(plyrSurface).not.toHaveBeenCalled();
@@ -86,7 +96,7 @@ describe("PlayerView", () => {
       },
     });
 
-    render(<PlayerView />);
+    renderPlayerView();
 
     expect(screen.getByText("Unsupported in browser.")).toBeInTheDocument();
     expect(plyrSurface).not.toHaveBeenCalled();
@@ -98,7 +108,7 @@ describe("PlayerView", () => {
       source: SOURCE,
     });
 
-    render(<PlayerView />);
+    renderPlayerView();
 
     expect(plyrSurface).toHaveBeenCalledTimes(1);
     expect(plyrSurface).toHaveBeenCalledWith(
@@ -120,7 +130,7 @@ describe("PlayerView", () => {
       source: SOURCE,
     });
 
-    render(<PlayerView />);
+    renderPlayerView();
 
     fireEvent.click(screen.getAllByRole("button")[0]);
 

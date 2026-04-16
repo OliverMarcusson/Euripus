@@ -9,6 +9,7 @@ enum SearchRefreshScope {
         profile_id: Uuid,
         changed_remote_stream_ids: Vec<i32>,
         removed_channel_ids: Vec<Uuid>,
+        removed_program_ids: Vec<Uuid>,
     },
 }
 
@@ -455,6 +456,7 @@ async fn run_sync_job(
             profile_id,
             changed_remote_stream_ids: channel_delta.changed_remote_stream_ids,
             removed_channel_ids: channel_delta.removed_channel_ids,
+            removed_program_ids: channel_delta.removed_program_ids,
         }
     };
 
@@ -484,6 +486,7 @@ async fn run_sync_job(
     .bind(profile_id)
     .execute(&state.pool)
     .await?;
+    invalidate_channel_visibility_cache(&state, user_id, Some(profile_id));
     spawn_search_refresh(state.clone(), user_id, job_id, search_refresh_scope);
 
     Ok(())
@@ -499,11 +502,12 @@ fn spawn_search_refresh(
         let refresh_started_at = Instant::now();
         info!("sync job {job_id}: refreshing search indexes in background");
 
-        if let Err(error) = search::indexing::rebuild_search_documents(&state.pool, user_id).await {
-            warn!("sync job {job_id}: failed to rebuild PostgreSQL search documents: {error:?}");
+        if let Err(error) = search::indexing::refresh_search_metadata(&state, user_id).await {
+            warn!("sync job {job_id}: failed to refresh PostgreSQL search metadata: {error:?}");
             return;
         }
 
+        let mut rebuild_postgres_fallback = state.meili.is_none();
         if let Some(meili) = &state.meili {
             info!("sync job {job_id}: refreshing Meilisearch indexes in background");
             state.meili_bootstrapping_users.insert(user_id);
@@ -521,6 +525,7 @@ fn spawn_search_refresh(
                     profile_id,
                     changed_remote_stream_ids,
                     removed_channel_ids,
+                    removed_program_ids,
                 } => {
                     search::indexing::refresh_meili_channels_delta(
                         &state,
@@ -529,34 +534,86 @@ fn spawn_search_refresh(
                         *profile_id,
                         changed_remote_stream_ids,
                         removed_channel_ids,
+                        removed_program_ids,
                     )
                     .await
                 }
             };
-            state.meili_bootstrapping_users.remove(&user_id);
 
-            if let Err(error) = meili_refresh {
-                warn!("sync job {job_id}: failed to rebuild Meilisearch indexes: {error:?}");
-            } else if !matches!(
-                search::indexing::inspect_meili_readiness_for_user(
-                    meili,
-                    &state.pool,
-                    user_id,
-                    true
-                )
-                .await,
-                Ok(MeiliReadiness::Ready)
-            ) {
-                warn!(
-                    "sync job {job_id}: Meilisearch rebuild finished but the user index is still incomplete"
-                );
-            } else if let Err(error) = search::indexing::refresh_meili_readiness(&state).await {
-                warn!("sync job {job_id}: failed to refresh Meilisearch readiness: {error:?}");
-            } else {
-                info!("sync job {job_id}: finished Meilisearch background refresh");
+            let user_readiness = match meili_refresh {
+                Ok(()) => {
+                    search::indexing::inspect_meili_readiness_for_user(
+                        meili,
+                        &state.pool,
+                        user_id,
+                        true,
+                    )
+                    .await
+                }
+                Err(error) => {
+                    warn!("sync job {job_id}: failed to rebuild Meilisearch indexes: {error:?}");
+                    Err(error)
+                }
+            };
+
+            match user_readiness {
+                Ok(MeiliReadiness::Ready) => {
+                    state.meili_bootstrapping_users.remove(&user_id);
+                    rebuild_postgres_fallback = false;
+                    if let Err(error) = search::indexing::refresh_meili_readiness(&state).await {
+                        warn!(
+                            "sync job {job_id}: failed to refresh Meilisearch readiness: {error:?}"
+                        );
+                    } else {
+                        info!("sync job {job_id}: finished Meilisearch background refresh");
+                    }
+                }
+                Ok(MeiliReadiness::Bootstrapping) => {
+                    rebuild_postgres_fallback = true;
+                    warn!(
+                        "sync job {job_id}: Meilisearch rebuild finished but the user index is still incomplete"
+                    );
+                    if let Err(error) = search::indexing::refresh_meili_readiness(&state).await {
+                        warn!(
+                            "sync job {job_id}: failed to refresh Meilisearch readiness: {error:?}"
+                        );
+                    }
+                }
+                Ok(MeiliReadiness::Disabled) => {
+                    rebuild_postgres_fallback = true;
+                }
+                Err(error) => {
+                    rebuild_postgres_fallback = true;
+                    warn!(
+                        "sync job {job_id}: failed to inspect Meilisearch readiness for user after refresh: {error:?}"
+                    );
+                    if let Err(error) = search::indexing::refresh_meili_readiness(&state).await {
+                        warn!(
+                            "sync job {job_id}: failed to refresh Meilisearch readiness: {error:?}"
+                        );
+                    }
+                }
             }
         } else {
             info!("sync job {job_id}: Meilisearch is disabled; skipping Meilisearch refresh");
+        }
+
+        if rebuild_postgres_fallback {
+            info!(
+                "sync job {job_id}: rebuilding PostgreSQL fallback search documents in background"
+            );
+            if let Err(error) =
+                search::indexing::rebuild_postgres_search_documents(&state, user_id).await
+            {
+                warn!(
+                    "sync job {job_id}: failed to rebuild PostgreSQL search documents: {error:?}"
+                );
+                return;
+            }
+        } else {
+            info!(
+                "sync job {job_id}: skipping PostgreSQL fallback search rebuild because Meilisearch is healthy"
+            );
         }
 
         if state.meili.is_some()

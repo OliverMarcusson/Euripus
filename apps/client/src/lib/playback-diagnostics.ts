@@ -8,6 +8,22 @@ type PlaybackOwnershipHint =
   | "iptv-provider"
   | "unknown";
 
+function playbackDiagnosticsEnabled() {
+  if (import.meta.env.DEV) {
+    return true;
+  }
+
+  if (typeof window === "undefined") {
+    return false;
+  }
+
+  try {
+    return window.localStorage.getItem("euripus:playback-debug") === "1";
+  } catch {
+    return false;
+  }
+}
+
 function isRelayUrl(value: string | null | undefined) {
   if (!value) {
     return false;
@@ -38,6 +54,10 @@ export function logPlaybackDiagnostic(
   event: string,
   payload: PlaybackDiagnosticPayload,
 ) {
+  if (!playbackDiagnosticsEnabled()) {
+    return;
+  }
+
   const logger =
     level === "error"
       ? console.error
@@ -67,7 +87,7 @@ export function attachPlaybackSeekDebugging(
     live: boolean;
   },
 ) {
-  if (!import.meta.env.DEV) {
+  if (!playbackDiagnosticsEnabled()) {
     return () => undefined;
   }
 

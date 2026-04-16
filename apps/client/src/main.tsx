@@ -18,8 +18,8 @@ const queryClient = new QueryClient({
     queries: {
       staleTime: 0,
       gcTime: QUERY_CACHE_GC_TIME_MS,
-      refetchOnWindowFocus: true,
-      refetchOnReconnect: true,
+      refetchOnWindowFocus: false,
+      refetchOnReconnect: false,
     },
   },
 });

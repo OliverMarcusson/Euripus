@@ -88,7 +88,7 @@ use self::receiver::{ReceiverSessionRecord, load_receiver_device};
 
 pub use app::run;
 use error::{ApiResult, AppError};
-use state::{AppState, MeiliReadiness, MeiliSetup, SearchIndexCounts};
+use state::{AppState, CachedChannelVisibilityMap, MeiliReadiness, MeiliSetup, SearchIndexCounts};
 
 #[derive(Debug, Serialize, FromRow, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -470,6 +470,7 @@ const MEILI_TASK_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const MEILI_TASK_TIMEOUT: Duration = Duration::from_secs(300);
 const MEILI_SCHEMA_VERSION_KEY: &str = "__euripus_schema_version__";
 const MEILI_SCHEMA_VERSION: &str = "v3";
+const CHANNEL_VISIBILITY_CACHE_TTL: Duration = Duration::from_secs(15);
 const RECEIVER_TTL: Duration = Duration::from_secs(45);
 const RECEIVER_SESSION_TTL_HOURS: i64 = 12;
 const RECEIVER_PAIRING_CODE_MINUTES: i64 = 5;
@@ -799,10 +800,19 @@ fn classify_channel_visibility(
 }
 
 async fn load_channel_visibility_map(
-    pool: &PgPool,
+    state: &AppState,
     user_id: Uuid,
     profile_id: Option<Uuid>,
-) -> Result<HashMap<Uuid, ChannelVisibility>> {
+) -> Result<Arc<HashMap<Uuid, ChannelVisibility>>> {
+    let cache_key = (user_id, profile_id);
+    let now = Instant::now();
+    if let Some(cached) = state.channel_visibility_cache.get(&cache_key) {
+        if cached.expires_at > now {
+            return Ok(cached.values.clone());
+        }
+        state.channel_visibility_cache.remove(&cache_key);
+    }
+
     let rows = sqlx::query_as::<_, ChannelVisibilityRow>(
         r#"
         SELECT
@@ -817,7 +827,7 @@ async fn load_channel_visibility_map(
     )
     .bind(user_id)
     .bind(profile_id)
-    .fetch_all(pool)
+    .fetch_all(&state.pool)
     .await?;
 
     let titles = sqlx::query_as::<_, ChannelEventTitlesRow>(
@@ -854,23 +864,47 @@ async fn load_channel_visibility_map(
     .bind(profile_id)
     .bind(EPG_RETENTION_PAST_HOURS)
     .bind(EPG_RETENTION_FUTURE_DAYS)
-    .fetch_all(pool)
+    .fetch_all(&state.pool)
     .await?;
     let titles_by_channel = titles
         .into_iter()
         .map(|row| (row.channel_id, row.titles))
         .collect::<HashMap<_, _>>();
 
-    Ok(rows
-        .into_iter()
-        .map(|row| {
-            let event_titles = titles_by_channel.get(&row.id).cloned().unwrap_or_default();
-            (
-                row.id,
-                classify_channel_visibility(&row.name, row.category_name.as_deref(), &event_titles),
-            )
-        })
-        .collect())
+    let visibility: Arc<HashMap<Uuid, ChannelVisibility>> = Arc::new(
+        rows.into_iter()
+            .map(|row| {
+                let event_titles = titles_by_channel.get(&row.id).cloned().unwrap_or_default();
+                (
+                    row.id,
+                    classify_channel_visibility(
+                        &row.name,
+                        row.category_name.as_deref(),
+                        &event_titles,
+                    ),
+                )
+            })
+            .collect(),
+    );
+
+    state.channel_visibility_cache.insert(
+        cache_key,
+        CachedChannelVisibilityMap {
+            values: visibility.clone(),
+            expires_at: now + CHANNEL_VISIBILITY_CACHE_TTL,
+        },
+    );
+
+    Ok(visibility)
+}
+
+fn invalidate_channel_visibility_cache(state: &AppState, user_id: Uuid, profile_id: Option<Uuid>) {
+    state.channel_visibility_cache.remove(&(user_id, None));
+    if let Some(profile_id) = profile_id {
+        state
+            .channel_visibility_cache
+            .remove(&(user_id, Some(profile_id)));
+    }
 }
 
 fn visible_channel_ids_from_map(visibility: &HashMap<Uuid, ChannelVisibility>) -> Vec<Uuid> {
