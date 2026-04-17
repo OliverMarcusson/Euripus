@@ -38,4 +38,4 @@ services:
       gluetun:
         condition: service_started
       server:
-        condition: service_healthy
+        condition: service_started
