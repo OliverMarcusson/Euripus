@@ -1,0 +1,61 @@
+{
+  "workflowId": "ppv-favorites-review-20260417b",
+  "step": {
+    "id": "review-ppv-favorites",
+    "role": "reviewer",
+    "objective": "Review the implemented PPV favorites feature for correctness, regressions, API consistency, and test coverage. Focus on backend PPV favorites storage/API changes, shared Channel metadata additions, client routing/page/hooks changes, and whether regular favorites remain isolated from PPV favorites. Emit a concise verdict with only material issues, if any.",
+    "allowedReadPaths": [
+      "apps/client/src/components/layout/app-shell.tsx",
+      "apps/client/src/features/auth/settings-page.tsx",
+      "apps/client/src/features/channels/favorites-page.test.tsx",
+      "apps/client/src/features/channels/favorites-page.tsx",
+      "apps/client/src/features/channels/favorites-shared.tsx",
+      "apps/client/src/features/channels/guide-page-sections.tsx",
+      "apps/client/src/features/channels/guide-page.tsx",
+      "apps/client/src/features/channels/ppv-favorites-page.test.tsx",
+      "apps/client/src/features/channels/ppv-favorites-page.tsx",
+      "apps/client/src/features/search/search-page.tsx",
+      "apps/client/src/hooks/use-channel-favorite.ts",
+      "apps/client/src/hooks/use-ppv-favorite.ts",
+      "apps/client/src/lib/api.ts",
+      "apps/client/src/router.tsx",
+      "apps/server/migrations/0021_favorite_ppv_channels.sql",
+      "apps/server/src/server_main.rs",
+      "apps/server/src/server_main/guide.rs",
+      "apps/server/src/server_main/search/mod.rs",
+      "apps/server/src/server_main/search/queries.rs",
+      "packages/shared/src/index.ts"
+    ],
+    "timeoutMs": 600000,
+    "maxTurns": 40,
+    "retryLimit": 1
+  },
+  "rolePolicy": {
+    "role": "reviewer",
+    "model": {
+      "model": "gpt-5.4",
+      "reasoningEffort": "high"
+    },
+    "outputArtifactKind": "verdict",
+    "outputFileName": "verdict.md",
+    "allowRepoWrites": false,
+    "writableArtifactKinds": [
+      "verdict"
+    ]
+  },
+  "status": "failed",
+  "runId": "ppv-favorites-review-20260417b",
+  "attempt": 1,
+  "timeoutMs": 600000,
+  "retryLimit": 1,
+  "maxTurns": 40,
+  "upstreamArtifacts": [],
+  "completedAt": "2026-04-17T12:11:30.661Z",
+  "error": {
+    "name": "Error",
+    "message": "PI session did not produce assistant text",
+    "stack": "Error: PI session did not produce assistant text\n    at PiNativeRunner.execute (file:///home/oliver/.local/lib/node_modules/pi-faithless-subagents/dist/pi-runner.js:239:23)\n    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)"
+  },
+  "retryable": true,
+  "willRetry": true
+}

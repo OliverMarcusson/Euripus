@@ -1,0 +1,41 @@
+{
+  "workflowId": "ppv-timezone-explore-20260417",
+  "step": {
+    "id": "explore-ppv-timezone",
+    "role": "explorer",
+    "objective": "Inspect the Euripus codebase to find where PPV channel titles are generated and where event times/time zones are formatted. Identify the files, relevant functions/types, and likely change points needed to display PPV times in the user's correct local time zone instead of the source time zone. Emit a concise report with specific file paths and symbols.",
+    "allowedReadPaths": [
+      "Cargo.toml",
+      "README.md",
+      "src"
+    ],
+    "timeoutMs": 600000,
+    "maxTurns": 50,
+    "retryLimit": 1
+  },
+  "rolePolicy": {
+    "role": "explorer",
+    "model": {
+      "model": "gpt-5.4-mini",
+      "reasoningEffort": "medium"
+    },
+    "outputArtifactKind": "report",
+    "outputFileName": "report.md",
+    "allowRepoWrites": false,
+    "writableArtifactKinds": [
+      "report"
+    ]
+  },
+  "status": "completed",
+  "runId": "ppv-timezone-explore-20260417",
+  "attempt": 1,
+  "timeoutMs": 600000,
+  "retryLimit": 1,
+  "maxTurns": 50,
+  "upstreamArtifacts": [],
+  "progress": [
+    "tool:read_file"
+  ],
+  "artifactPath": "/home/oliver/src/Rust/Euripus/.pi/runs/ppv-timezone-explore-20260417/steps/explore-ppv-timezone/attempt-1/output/report.md",
+  "completedAt": "2026-04-17T10:37:09.388Z"
+}

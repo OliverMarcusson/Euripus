@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { formatEventChannelTitle } from "@/lib/utils";
+import {
+  formatEventChannelTitle,
+  getEventChannelPlaybackState,
+} from "@/lib/utils";
 
 describe("formatEventChannelTitle", () => {
   it("converts month-first event times with explicit source time zones", () => {
@@ -69,5 +72,29 @@ describe("formatEventChannelTitle", () => {
 
   it("leaves unrelated channel titles untouched", () => {
     expect(formatEventChannelTitle("Arena Live")).toBe("Arena Live");
+  });
+});
+
+describe("getEventChannelPlaybackState", () => {
+  it("marks explicit event-title timestamps in the near future as upcoming", () => {
+    expect(
+      getEventChannelPlaybackState(
+        "US (ESPN+ 034) | RBC Heritage: Spieth Featured Group (Second Round) Apr 17 2:00PM ET",
+        {
+          now: new Date("2026-04-17T17:00:00.000Z"),
+        },
+      ),
+    ).toBe("upcoming");
+  });
+
+  it("marks recent event-title timestamps as live when epg is missing", () => {
+    expect(
+      getEventChannelPlaybackState(
+        "US (ESPN+ 002) | RBC Heritage: Main Feed (Second Round) Apr 17 7:00AM ET",
+        {
+          now: new Date("2026-04-17T12:34:00.000Z"),
+        },
+      ),
+    ).toBe("live");
   });
 });

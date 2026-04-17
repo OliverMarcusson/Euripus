@@ -75,6 +75,12 @@ type EventChannelTitleFormatOptions = {
   now?: Date;
 };
 
+type EventChannelPlaybackOptions = {
+  referenceStartAt?: string | null;
+  now?: Date;
+  liveWindowHours?: number;
+};
+
 type EventTimestampMatch = {
   kind: "month-first" | "weekday-day-month";
   match: RegExpExecArray;
@@ -165,30 +171,46 @@ export function formatEventChannelTitle(
   title: string,
   options: EventChannelTitleFormatOptions = {},
 ) {
-  const eventMatch = detectEventTimestamp(title);
-  if (!eventMatch) {
+  const resolvedEvent = resolveEventChannelTimestamp(title, options);
+  if (!resolvedEvent) {
     return title;
   }
 
-  const referenceDate = parseReferenceDate(options.referenceStartAt);
-  const explicitSourceTimeZone = eventMatch.timeZoneToken
-    ? resolveSourceTimeZone(eventMatch.timeZoneToken)
-    : null;
-
-  const eventDate = explicitSourceTimeZone
-    ? inferEventDate(eventMatch, explicitSourceTimeZone, options.now ?? new Date())
-      ?? referenceDate
-    : referenceDate;
-  if (!eventDate) {
-    return title;
-  }
-
-  const replacement = formatEventTimestampReplacement(eventMatch, eventDate, {
-    includeTimeZoneLabel: Boolean(eventMatch.timeZoneToken),
+  const replacement = formatEventTimestampReplacement(resolvedEvent.eventMatch, resolvedEvent.eventDate, {
+    includeTimeZoneLabel: Boolean(resolvedEvent.eventMatch.timeZoneToken),
     targetTimeZone: options.targetTimeZone,
   });
 
-  return title.replace(eventMatch.match[0], replacement);
+  return title.replace(resolvedEvent.eventMatch.match[0], replacement);
+}
+
+export type EventChannelPlaybackState = "live" | "upcoming" | "info";
+
+export function getEventChannelPlaybackState(
+  title: string,
+  options: EventChannelPlaybackOptions = {},
+): EventChannelPlaybackState {
+  const resolvedEvent = resolveEventChannelTimestamp(title, options);
+  if (!resolvedEvent) {
+    return "info";
+  }
+
+  const now = (options.now ?? new Date()).getTime();
+  const startAt = resolvedEvent.eventDate.getTime();
+  if (Number.isNaN(startAt)) {
+    return "info";
+  }
+
+  if (startAt > now) {
+    return "upcoming";
+  }
+
+  const liveWindowHours = options.liveWindowHours ?? 10;
+  if (now - startAt <= liveWindowHours * 60 * 60 * 1000) {
+    return "live";
+  }
+
+  return "info";
 }
 
 export function getTimeProgress(startAt: string, endAt: string, now = Date.now()) {
@@ -239,6 +261,31 @@ export function getProgramPlaybackState(program: Program, now = Date.now()): Pro
 export function canPlayProgram(program: Program, now = Date.now()) {
   const state = getProgramPlaybackState(program, now);
   return state === "live" || state === "catchup";
+}
+
+function resolveEventChannelTimestamp(
+  title: string,
+  options: { referenceStartAt?: string | null; now?: Date },
+) {
+  const eventMatch = detectEventTimestamp(title);
+  if (!eventMatch) {
+    return null;
+  }
+
+  const referenceDate = parseReferenceDate(options.referenceStartAt);
+  const explicitSourceTimeZone = eventMatch.timeZoneToken
+    ? resolveSourceTimeZone(eventMatch.timeZoneToken)
+    : null;
+
+  const eventDate = explicitSourceTimeZone
+    ? inferEventDate(eventMatch, explicitSourceTimeZone, options.now ?? new Date())
+      ?? referenceDate
+    : referenceDate;
+  if (!eventDate) {
+    return null;
+  }
+
+  return { eventMatch, eventDate };
 }
 
 function detectEventTimestamp(title: string): EventTimestampMatch | null {
