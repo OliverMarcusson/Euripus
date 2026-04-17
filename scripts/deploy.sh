@@ -72,6 +72,17 @@ get_container_health() {
   "$container_cli" inspect -f "{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}" "$container_id" 2>/dev/null | head -n1 | tr -d '\r' || true
 }
 
+container_has_healthcheck() {
+  local container_id="$1"
+  if [[ -z "$container_id" ]]; then
+    return 1
+  fi
+
+  local has_healthcheck
+  has_healthcheck="$("$container_cli" inspect -f "{{if .Config.Healthcheck}}yes{{else}}no{{end}}" "$container_id" 2>/dev/null | head -n1 | tr -d '\r' || true)"
+  [[ "$has_healthcheck" == "yes" ]]
+}
+
 wait_for_service_health() {
   local service_name="$1"
   local timeout_seconds="${2:-180}"
@@ -204,6 +215,11 @@ wait_for_server_health() {
     server_status="${server_status//$'\r'/}"
 
     if [[ "$server_status" == *"healthy"* ]]; then
+      return 0
+    fi
+
+    if [[ "$server_status" == *"running"* ]] && ! container_has_healthcheck "$server_container_id"; then
+      warn "server container has no healthcheck configured; treating running state as ready"
       return 0
     fi
 
