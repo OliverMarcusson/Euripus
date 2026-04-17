@@ -23,6 +23,62 @@ default_compose_project_name() {
   basename "$repo_root" | tr '[:upper:]' '[:lower:]'
 }
 
+should_connect_external_sports_api() {
+  [[ "${EURIPUS_ENABLE_NORDVPN:-false}" == "true" ]] || return 1
+  local sports_api_base_url="${APP_SPORTS_API_BASE_URL:-}"
+  [[ "$sports_api_base_url" == http://sports-api* || "$sports_api_base_url" == https://sports-api* ]]
+}
+
+connect_external_sports_api_container() {
+  local container_name="${EURIPUS_SPORTS_API_CONTAINER_NAME:-sports-api}"
+  local project_name="${COMPOSE_PROJECT_NAME:-$(default_compose_project_name)}"
+  local network_name="${EURIPUS_SPORTS_API_NETWORK_NAME:-${project_name}_default}"
+
+  if ! "$container_cli" inspect "$container_name" >/dev/null 2>&1; then
+    warn "Sports API container '$container_name' was not found; leaving APP_SPORTS_API_BASE_URL as-is"
+    return 0
+  fi
+
+  local attached_networks
+  attached_networks="$(
+    "$container_cli" inspect -f '{{range $name, $_ := .NetworkSettings.Networks}}{{println $name}}{{end}}' \
+      "$container_name" 2>/dev/null | tr -d '\r'
+  )"
+  if printf '%s\n' "$attached_networks" | grep -Fx "$network_name" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  info "Connecting Sports API container '$container_name' to network '$network_name'"
+  if ! "$container_cli" network connect "$network_name" "$container_name" >/dev/null 2>&1; then
+    warn "failed to connect Sports API container '$container_name' to network '$network_name'"
+  fi
+}
+
+wait_for_external_sports_api_health() {
+  local timeout_seconds="${1:-420}"
+  local deadline=$((SECONDS + timeout_seconds))
+  local sports_api_base_url="${APP_SPORTS_API_BASE_URL:-http://sports-api:3000}"
+  local health_url="${sports_api_base_url%/}/health"
+
+  while (( SECONDS < deadline )); do
+    local server_container_id
+    if ! server_container_id="$(get_compose_service_container_id server)"; then
+      warn "failed to resolve server container id while waiting for Sports API health; retrying"
+      sleep 2
+      continue
+    fi
+
+    if "$container_cli" exec "$server_container_id" curl -fsS --max-time 5 "$health_url" >/dev/null 2>&1; then
+      return 0
+    fi
+
+    sleep 2
+  done
+
+  echo "Sports API at '$health_url' did not become healthy within $timeout_seconds seconds." >&2
+  return 1
+}
+
 get_compose_service_container_id() {
   local service_name="$1"
   local project_name="${COMPOSE_PROJECT_NAME:-$(default_compose_project_name)}"
@@ -268,6 +324,11 @@ fi
 : "${GHCR_USERNAME:?Set GHCR_USERNAME in the environment or $env_file before deploying.}"
 : "${GHCR_TOKEN:?Set GHCR_TOKEN in the environment or $env_file before deploying.}"
 
+if [[ "$EURIPUS_ENABLE_NORDVPN" == "true" && -f "$repo_root/apps/server/.env.nordvpn.server" ]]; then
+  # shellcheck disable=SC1090
+  source "$repo_root/apps/server/.env.nordvpn.server"
+fi
+
 export EURIPUS_SERVER_IMAGE EURIPUS_WEB_IMAGE EURIPUS_IMAGE_TAG EURIPUS_ENABLE_NORDVPN
 
 compose_files=(
@@ -299,8 +360,15 @@ info "Repairing SQLx migration checksums if needed"
 repair_sqlx_migration_checksums
 info "Starting remaining Euripus services"
 "${compose_cmd[@]}" "${compose_files[@]}" up -d meilisearch server web
+if should_connect_external_sports_api; then
+  connect_external_sports_api_container
+fi
 info "Waiting for server health"
 wait_for_server_health 180 || exit 1
+if should_connect_external_sports_api; then
+  info "Waiting for Sports API health"
+  wait_for_external_sports_api_health 420 || exit 1
+fi
 
 echo
 echo "Euripus deploy complete."

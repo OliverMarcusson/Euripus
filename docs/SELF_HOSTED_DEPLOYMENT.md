@@ -90,6 +90,15 @@ Copy `apps/server/.env.nordvpn.example` to `apps/server/.env.nordvpn`, then set 
 
 Use NordVPN service credentials for OpenVPN, not your regular Nord Account email and password.
 
+If you run `Euripus-Sports` as a separate Podman container on the same host, point the NordVPN server override at the container hostname instead of a host loopback port:
+
+```bash
+APP_SPORTS_API_BASE_URL=http://sports-api:3000
+```
+
+With that hostname configured, `bun run prod:start` and `bun run prod:reset` automatically connect the external `sports-api` container to the Euripus compose bridge so the server can reach it without going through `127.0.0.1`.
+Those scripts also wait for `GET /health` on the Sports API before reporting Euripus as ready, because the Sports API may spend several minutes doing its first refresh before it starts listening on port `3000`.
+
 Important limitation:
 
 - This only routes server-originated traffic through NordVPN.
