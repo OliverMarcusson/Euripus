@@ -33,7 +33,11 @@ import { logPlaybackDiagnostic } from "@/lib/playback-diagnostics";
 import { receiverPlaybackBadgeLabel } from "@/lib/receiver-playback";
 import { usePlayerStore } from "@/store/player-store";
 import { useRemoteControllerStore } from "@/store/remote-controller-store";
-import { cn, formatRelativeTime } from "@/lib/utils";
+import {
+  cn,
+  formatEventChannelTitle,
+  formatRelativeTime,
+} from "@/lib/utils";
 
 export function PlayerView() {
   const currentRequest = usePlayerStore((state) => state.currentRequest);
@@ -53,6 +57,12 @@ export function PlayerView() {
   );
   const [minimized, setMinimized] = useState(false);
   const recoveryInFlightRef = useRef(false);
+  const displaySourceTitle = source
+    ? formatEventChannelTitle(source.title)
+    : null;
+  const remotePlaybackTitle = remoteTarget?.currentPlayback
+    ? formatEventChannelTitle(remoteTarget.currentPlayback.title)
+    : null;
 
   const handleRecoveryNeeded = useCallback(async () => {
     if (!currentRequest || recoveryInFlightRef.current || loading) {
@@ -114,7 +124,7 @@ export function PlayerView() {
                 <Badge variant="outline">{remoteTarget.name}</Badge>
               </div>
               <h2 className="mt-3 text-lg font-semibold">
-                {remoteTarget.currentPlayback.title}
+                {remotePlaybackTitle}
               </h2>
               {remoteTarget.currentPlayback.errorMessage ? (
                 <p className="mt-2 text-sm text-amber-200/90">
@@ -183,7 +193,7 @@ export function PlayerView() {
             onClick={() => setMinimized(false)}
           >
             <span className="truncate text-sm font-bold tracking-tight text-foreground/95">
-              {source.title}
+              {displaySourceTitle}
             </span>
             <span className="truncate text-[10px] font-bold text-muted-foreground/80 uppercase tracking-widest">
               {source.kind} {source.live ? "LIVE" : ""}
@@ -266,7 +276,7 @@ export function PlayerView() {
 
             <div className="flex flex-col gap-2">
               <h2 className="text-[15px] font-bold tracking-tight text-foreground/95 md:text-xl">
-                {source.title}
+                {displaySourceTitle}
               </h2>
               <div className="flex flex-wrap items-center gap-2 md:hidden">
                 <Badge
@@ -297,7 +307,7 @@ export function PlayerView() {
             ) : (
               <div className="euripus-plyr-shell euripus-plyr-shell--local overflow-hidden rounded-2xl border border-border/40 bg-black/90 w-full ring-1 ring-white/10 shadow-[0_8px_32px_rgba(0,0,0,0.5)]">
                 <PlyrSurface
-                  ariaLabel={`Playing ${source.title}`}
+                  ariaLabel={`Playing ${displaySourceTitle}`}
                   className="contents"
                   onRecoveryNeeded={handleRecoveryNeeded}
                   source={source}

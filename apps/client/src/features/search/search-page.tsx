@@ -56,6 +56,7 @@ import { SEARCH_QUERY_STALE_TIME_MS } from "@/lib/query-cache";
 import {
   canPlayProgram,
   cn,
+  formatEventChannelTitle,
   formatTimeRange,
   getProgramPlaybackState,
   type ProgramPlaybackState,
@@ -454,13 +455,15 @@ const ChannelSearchRow = memo(function ChannelSearchRow({
   onPlay: (channelId: string) => void;
   onToggleFavorite: (channel: Channel) => void;
 }) {
+  const displayChannelName = formatEventChannelTitle(channel.name);
+
   return (
     <div className="flex flex-col gap-4 p-5 lg:flex-row lg:items-center lg:justify-between">
       <div className="flex min-w-0 items-start gap-4">
-        <ChannelAvatar name={channel.name} logoUrl={channel.logoUrl} />
+        <ChannelAvatar name={displayChannelName} logoUrl={channel.logoUrl} />
         <div className="flex min-w-0 flex-1 flex-col gap-2">
           <div className="flex flex-wrap items-center gap-2">
-            <h2 className="truncate text-base font-semibold">{channel.name}</h2>
+            <h2 className="truncate text-base font-semibold">{displayChannelName}</h2>
             {channel.categoryName ? (
               <Badge variant="outline">{channel.categoryName}</Badge>
             ) : null}
@@ -504,19 +507,24 @@ const ProgramSearchRow = memo(function ProgramSearchRow({
   onPlay: (program: Program, playbackState: ProgramPlaybackState) => void;
 }) {
   const playbackState = getProgramPlaybackState(program);
+  const displayChannelName = program.channelName
+    ? formatEventChannelTitle(program.channelName, {
+        referenceStartAt: program.startAt,
+      })
+    : null;
 
   return (
     <div className="flex flex-col gap-4 p-5 lg:flex-row lg:items-center lg:justify-between">
       <div className="flex min-w-0 items-start gap-4">
         <ChannelAvatar
-          name={program.channelName ?? program.title}
+          name={displayChannelName ?? program.title}
           className="size-10"
         />
         <div className="flex min-w-0 flex-1 flex-col gap-2">
           <div className="flex flex-wrap items-center gap-2">
             <h2 className="truncate text-base font-semibold">{program.title}</h2>
-            {program.channelName ? (
-              <Badge variant="outline">{program.channelName}</Badge>
+            {displayChannelName ? (
+              <Badge variant="outline">{displayChannelName}</Badge>
             ) : null}
             <ProgramStateBadge state={playbackState} />
           </div>

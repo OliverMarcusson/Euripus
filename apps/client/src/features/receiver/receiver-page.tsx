@@ -20,6 +20,7 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty";
 import { PlyrSurface } from "@/components/player/plyr-surface";
+import { formatEventChannelTitle } from "@/lib/utils";
 
 const RECEIVER_STORAGE_KEY = "euripus-receiver-device";
 const RECEIVER_HEARTBEAT_MS = 15_000;
@@ -117,6 +118,9 @@ export function ReceiverPage() {
   const [buffering, setBuffering] = useState(false);
   const [playbackError, setPlaybackError] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const displaySourceTitle = source
+    ? formatEventChannelTitle(source.title)
+    : null;
   const pendingCommandRef = useRef<PendingCommand | null>(null);
   const sourceRef = useRef<PlaybackSource | null>(null);
   const bufferingRef = useRef(false);
@@ -605,7 +609,7 @@ export function ReceiverPage() {
       ) : (
         <div className="euripus-plyr-shell euripus-plyr-shell--receiver relative h-screen w-screen">
           <PlyrSurface
-            ariaLabel={`Playing ${source.title}`}
+            ariaLabel={`Playing ${displaySourceTitle}`}
             className="contents"
             source={source}
             uiMode="receiver"
