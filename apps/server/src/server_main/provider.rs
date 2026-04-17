@@ -149,6 +149,28 @@ fn combine_provider_validation_message(message: &str, warning: Option<&str>) -> 
     }
 }
 
+fn stored_password_reentry_message() -> String {
+    "Stored provider password could not be decrypted. Re-enter your provider password and save the profile again.".to_string()
+}
+
+fn resolve_effective_password(
+    encryption_key: &[u8; 32],
+    existing_profile: Option<&ProviderProfileRecord>,
+    submitted_password: &str,
+    missing_password_message: &str,
+) -> Result<String, AppError> {
+    if !submitted_password.trim().is_empty() {
+        return Ok(submitted_password.to_string());
+    }
+
+    let Some(profile) = existing_profile else {
+        return Err(AppError::BadRequest(missing_password_message.to_string()));
+    };
+
+    decrypt_secret(encryption_key, &profile.password_encrypted)
+        .map_err(|_| AppError::BadRequest(stored_password_reentry_message()))
+}
+
 async fn browser_hls_warning_for_credentials(
     state: &AppState,
     credentials: &XtreamCredentials,
@@ -280,22 +302,12 @@ async fn validate_provider(
     .bind(auth.user_id)
     .fetch_optional(&state.pool)
     .await?;
-    let effective_password = if payload.password.trim().is_empty() {
-        existing_profile
-            .as_ref()
-            .map(|profile| {
-                decrypt_secret(&state.config.encryption_key, &profile.password_encrypted)
-            })
-            .transpose()?
-            .ok_or_else(|| {
-                AppError::BadRequest(
-                    "Enter your provider password when validating the profile for the first time."
-                        .to_string(),
-                )
-            })?
-    } else {
-        payload.password.clone()
-    };
+    let effective_password = resolve_effective_password(
+        &state.config.encryption_key,
+        existing_profile.as_ref(),
+        &payload.password,
+        "Enter your provider password when validating the profile for the first time.",
+    )?;
     let credentials = XtreamCredentials {
         base_url: payload.base_url,
         username: payload.username,
@@ -336,22 +348,12 @@ async fn save_provider(
     .bind(auth.user_id)
     .fetch_optional(&state.pool)
     .await?;
-    let effective_password = if payload.password.trim().is_empty() {
-        existing_profile
-            .as_ref()
-            .map(|profile| {
-                decrypt_secret(&state.config.encryption_key, &profile.password_encrypted)
-            })
-            .transpose()?
-            .ok_or_else(|| {
-                AppError::BadRequest(
-                    "Enter your provider password when saving the profile for the first time."
-                        .to_string(),
-                )
-            })?
-    } else {
-        payload.password.clone()
-    };
+    let effective_password = resolve_effective_password(
+        &state.config.encryption_key,
+        existing_profile.as_ref(),
+        &payload.password,
+        "Enter your provider password when saving the profile for the first time.",
+    )?;
     let credentials = XtreamCredentials {
         base_url: payload.base_url.clone(),
         username: payload.username.clone(),
@@ -428,6 +430,9 @@ async fn trigger_sync(
     .fetch_optional(&state.pool)
     .await?
     .ok_or_else(|| AppError::BadRequest("Connect a provider before starting sync".to_string()))?;
+
+    decrypt_secret(&state.config.encryption_key, &profile.password_encrypted)
+        .map_err(|_| AppError::BadRequest(stored_password_reentry_message()))?;
 
     sync::ensure_no_active_sync(&state.pool, profile.id).await?;
     let job =
