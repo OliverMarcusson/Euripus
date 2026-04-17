@@ -202,6 +202,8 @@ export type Channel = {
   archiveDurationHours: number | null;
   streamExtension: string | null;
   isFavorite: boolean;
+  isPpv?: boolean;
+  isPpvFavorite?: boolean;
 };
 
 export type Program = {
@@ -270,6 +272,10 @@ export type FavoriteEntry = FavoriteCategoryEntry | FavoriteChannelEntry;
 
 export type FavoriteOrderPayload = {
   categoryIds: string[];
+  channelIds: string[];
+};
+
+export type PpvFavoriteOrderPayload = {
   channelIds: string[];
 };
 

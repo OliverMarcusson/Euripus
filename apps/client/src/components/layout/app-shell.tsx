@@ -3,6 +3,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link, Outlet, useRouterState } from "@tanstack/react-router";
 import {
   ChevronDown,
+  Clapperboard,
   Heart,
   LogOut,
   MonitorUp,
@@ -45,6 +46,7 @@ const navigation = [
   { to: "/guide", label: "Guide", icon: TvMinimal },
   { to: "/search", label: "Search", icon: Search },
   { to: "/favorites", label: "Favorites", icon: Heart },
+  { to: "/favorites/ppv", label: "PPV", icon: Clapperboard },
   { to: "/settings", label: "Settings", icon: Settings },
 ] as const;
 

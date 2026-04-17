@@ -106,6 +106,8 @@ struct ChannelResponse {
     archive_duration_hours: Option<i32>,
     stream_extension: Option<String>,
     is_favorite: bool,
+    is_ppv: bool,
+    is_ppv_favorite: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -585,7 +587,12 @@ async fn fetch_channels(pool: &PgPool, user_id: Uuid) -> Result<Vec<ChannelRespo
           EXISTS(
             SELECT 1 FROM favorites f
             WHERE f.user_id = c.user_id AND f.channel_id = c.id
-          ) AS is_favorite
+          ) AS is_favorite,
+          c.search_is_ppv AS is_ppv,
+          EXISTS(
+            SELECT 1 FROM favorite_ppv_channels fpc
+            WHERE fpc.user_id = c.user_id AND fpc.channel_id = c.id
+          ) AS is_ppv_favorite
         FROM channels c
         LEFT JOIN channel_categories cc ON cc.id = c.category_id
         WHERE c.user_id = $1

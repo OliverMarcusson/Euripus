@@ -43,6 +43,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useChannelFavoriteMutation } from "@/hooks/use-channel-favorite";
 import { useDebounce } from "@/hooks/use-debounce";
+import { usePpvFavoriteMutation } from "@/hooks/use-ppv-favorite";
 import {
   useChannelPlaybackMutation,
   useProgramPlaybackMutation,
@@ -104,6 +105,7 @@ export function SearchPage() {
     staleTime: SEARCH_QUERY_STALE_TIME_MS,
   });
   const favoriteMutation = useChannelFavoriteMutation();
+  const ppvFavoriteMutation = usePpvFavoriteMutation();
   const playChannelMutation = useChannelPlaybackMutation();
   const playProgramMutation = useProgramPlaybackMutation();
 
@@ -269,6 +271,10 @@ export function SearchPage() {
     (channel: Channel) => favoriteMutation.mutate(channel),
     [favoriteMutation],
   );
+  const handleTogglePpvFavorite = useCallback(
+    (channel: Channel) => ppvFavoriteMutation.mutate(channel),
+    [ppvFavoriteMutation],
+  );
   const handlePlayChannel = useCallback(
     (channelId: string) => playChannelMutation.mutate(channelId),
     [playChannelMutation],
@@ -423,6 +429,8 @@ export function SearchPage() {
         channelsLoadingMore={channelQuery.isFetchingNextPage}
         favoritePending={favoriteMutation.isPending}
         favoritePendingChannelId={favoriteMutation.variables?.id}
+        ppvFavoritePending={ppvFavoriteMutation.isPending}
+        ppvFavoritePendingChannelId={ppvFavoriteMutation.variables?.id}
         hasQuery={hasQuery}
         isInitialLoading={isInitialLoading}
         onActiveTabChange={setActiveTab}
@@ -431,6 +439,7 @@ export function SearchPage() {
         onPlayChannel={handlePlayChannel}
         onPlayProgram={handlePlayProgram}
         onToggleFavorite={handleToggleFavorite}
+        onTogglePpvFavorite={handleTogglePpvFavorite}
         playPending={playChannelMutation.isPending || playProgramMutation.isPending}
         programBackend={programBackend}
         programTotal={programTotal}
@@ -445,15 +454,19 @@ export function SearchPage() {
 const ChannelSearchRow = memo(function ChannelSearchRow({
   channel,
   favoritePending,
+  ppvFavoritePending,
   playPending,
   onPlay,
   onToggleFavorite,
+  onTogglePpvFavorite,
 }: {
   channel: Channel;
   favoritePending: boolean;
+  ppvFavoritePending: boolean;
   playPending: boolean;
   onPlay: (channelId: string) => void;
   onToggleFavorite: (channel: Channel) => void;
+  onTogglePpvFavorite: (channel: Channel) => void;
 }) {
   const displayChannelName = formatEventChannelTitle(channel.name);
 
@@ -467,9 +480,11 @@ const ChannelSearchRow = memo(function ChannelSearchRow({
             {channel.categoryName ? (
               <Badge variant="outline">{channel.categoryName}</Badge>
             ) : null}
+            {channel.isPpv ? <Badge variant="accent">PPV</Badge> : null}
             {channel.hasEpg ? <Badge variant="outline">EPG</Badge> : null}
             {channel.hasCatchup ? <Badge variant="live">Catch-up</Badge> : null}
             {channel.isFavorite ? <Badge variant="accent">Favorite</Badge> : null}
+            {channel.isPpvFavorite ? <Badge variant="outline">PPV saved</Badge> : null}
           </div>
           {channel.streamExtension ? (
             <p className="text-sm text-muted-foreground">
@@ -488,6 +503,17 @@ const ChannelSearchRow = memo(function ChannelSearchRow({
           <Heart data-icon="inline-start" />
           {channel.isFavorite ? "Unfavorite" : "Favorite"}
         </Button>
+        {channel.isPpv ? (
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => onTogglePpvFavorite(channel)}
+            disabled={ppvFavoritePending}
+          >
+            <Clapperboard data-icon="inline-start" />
+            {channel.isPpvFavorite ? "Remove PPV" : "Save PPV"}
+          </Button>
+        ) : null}
         <Button size="sm" onClick={() => onPlay(channel.id)} disabled={playPending}>
           <Play data-icon="inline-start" />
           Play
@@ -566,6 +592,8 @@ const SearchResults = memo(function SearchResults({
   channelsLoadingMore,
   favoritePending,
   favoritePendingChannelId,
+  ppvFavoritePending,
+  ppvFavoritePendingChannelId,
   hasQuery,
   isInitialLoading,
   onActiveTabChange,
@@ -574,6 +602,7 @@ const SearchResults = memo(function SearchResults({
   onPlayChannel,
   onPlayProgram,
   onToggleFavorite,
+  onTogglePpvFavorite,
   playPending,
   programBackend,
   programTotal,
@@ -589,6 +618,8 @@ const SearchResults = memo(function SearchResults({
   channelsLoadingMore: boolean;
   favoritePending: boolean;
   favoritePendingChannelId?: string;
+  ppvFavoritePending: boolean;
+  ppvFavoritePendingChannelId?: string;
   hasQuery: boolean;
   isInitialLoading: boolean;
   onActiveTabChange: (value: "channels" | "programs") => void;
@@ -597,6 +628,7 @@ const SearchResults = memo(function SearchResults({
   onPlayChannel: (channelId: string) => void;
   onPlayProgram: (program: Program, playbackState: ProgramPlaybackState) => void;
   onToggleFavorite: (channel: Channel) => void;
+  onTogglePpvFavorite: (channel: Channel) => void;
   playPending: boolean;
   programBackend?: SearchBackend;
   programTotal: number;
@@ -650,9 +682,14 @@ const SearchResults = memo(function SearchResults({
                         favoritePending={
                           favoritePending && favoritePendingChannelId === channel.id
                         }
+                        ppvFavoritePending={
+                          ppvFavoritePending
+                          && ppvFavoritePendingChannelId === channel.id
+                        }
                         playPending={playPending}
                         onPlay={onPlayChannel}
                         onToggleFavorite={onToggleFavorite}
+                        onTogglePpvFavorite={onTogglePpvFavorite}
                       />
                     </div>
                   ))}

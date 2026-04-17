@@ -33,6 +33,7 @@ export function useChannelFavoriteMutation() {
 
       await Promise.all([
         queryClient.cancelQueries({ queryKey: ["favorites"] }),
+        queryClient.cancelQueries({ queryKey: ["favorites", "ppv"] }),
         queryClient.cancelQueries({ queryKey: ["guide"] }),
         queryClient.cancelQueries({ queryKey: ["search"] }),
         queryClient.cancelQueries({ queryKey: ["recents"] }),
@@ -75,6 +76,18 @@ export function useChannelFavoriteMutation() {
           ...categoryEntries,
           ...channelEntries.filter((favorite) => favorite.channel.id !== channel.id),
         ];
+      });
+
+      queryClient.setQueryData<FavoriteChannelEntry[]>(["favorites", "ppv"], (current) => {
+        if (!current) {
+          return current;
+        }
+
+        return current.map((favorite) =>
+          favorite.channel.id === channel.id
+            ? { ...favorite, channel: withFavorite(favorite.channel, nextIsFavorite) }
+            : favorite,
+        );
       });
 
       queryClient.setQueriesData<InfiniteData<GuideCategoryResponse, number>>(
@@ -123,13 +136,17 @@ export function useChannelFavoriteMutation() {
     onError: async () => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["favorites"] }),
+        queryClient.invalidateQueries({ queryKey: ["favorites", "ppv"] }),
         queryClient.invalidateQueries({ queryKey: ["guide", "category"] }),
         queryClient.invalidateQueries({ queryKey: ["search", "channels"] }),
         queryClient.invalidateQueries({ queryKey: ["recents"] }),
       ]);
     },
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["favorites"] });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["favorites"] }),
+        queryClient.invalidateQueries({ queryKey: ["favorites", "ppv"] }),
+      ]);
     },
   });
 }

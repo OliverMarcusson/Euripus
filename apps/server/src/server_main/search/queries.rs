@@ -15,6 +15,8 @@ pub(in crate::server_main) struct ChannelSearchRow {
     pub(in crate::server_main) archive_duration_hours: Option<i32>,
     pub(in crate::server_main) stream_extension: Option<String>,
     pub(in crate::server_main) is_favorite: bool,
+    pub(in crate::server_main) is_ppv: bool,
+    pub(in crate::server_main) is_ppv_favorite: bool,
 }
 
 #[derive(Debug, FromRow)]
@@ -79,7 +81,12 @@ pub(in crate::server_main) async fn search_channels_postgres(
                 EXISTS(
                   SELECT 1 FROM favorites f
                   WHERE f.user_id = c.user_id AND f.channel_id = c.id
-                ) AS is_favorite
+                ) AS is_favorite,
+                c.search_is_ppv AS is_ppv,
+                EXISTS(
+                  SELECT 1 FROM favorite_ppv_channels fpc
+                  WHERE fpc.user_id = c.user_id AND fpc.channel_id = c.id
+                ) AS is_ppv_favorite
               FROM channels c
               LEFT JOIN channel_categories cc ON cc.id = c.category_id
               WHERE c.user_id = $1
@@ -103,7 +110,9 @@ pub(in crate::server_main) async fn search_channels_postgres(
                 has_catchup,
                 archive_duration_hours,
                 stream_extension,
-                is_favorite
+                is_favorite,
+                is_ppv,
+                is_ppv_favorite
               FROM filtered
               WHERE NOT $9 OR has_epg
               ORDER BY
@@ -126,7 +135,9 @@ pub(in crate::server_main) async fn search_channels_postgres(
               has_catchup,
               archive_duration_hours,
               stream_extension,
-              is_favorite
+              is_favorite,
+              is_ppv,
+              is_ppv_favorite
             FROM page
             ORDER BY
               CASE WHEN has_epg THEN 0 ELSE 1 END,
@@ -215,7 +226,12 @@ pub(in crate::server_main) async fn search_channels_postgres(
               EXISTS(
                 SELECT 1 FROM favorites f
                 WHERE f.user_id = c.user_id AND f.channel_id = c.id
-              ) AS is_favorite
+              ) AS is_favorite,
+              c.search_is_ppv AS is_ppv,
+              EXISTS(
+                SELECT 1 FROM favorite_ppv_channels fpc
+                WHERE fpc.user_id = c.user_id AND fpc.channel_id = c.id
+              ) AS is_ppv_favorite
             FROM page
             JOIN channels c ON c.id = page.entity_id
             LEFT JOIN channel_categories cc ON cc.id = c.category_id
@@ -253,6 +269,8 @@ pub(in crate::server_main) async fn search_channels_postgres(
             archive_duration_hours: row.archive_duration_hours,
             stream_extension: row.stream_extension,
             is_favorite: row.is_favorite,
+            is_ppv: row.is_ppv,
+            is_ppv_favorite: row.is_ppv_favorite,
         })
         .collect::<Vec<_>>();
     rewrite_channel_logo_urls(state, headers, user_id, &mut items)?;

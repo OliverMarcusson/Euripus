@@ -20,6 +20,7 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { ProviderSettingsSection } from "@/features/provider/provider-settings-section";
 import { useChannelFavoriteMutation } from "@/hooks/use-channel-favorite";
 import { useChannelPlaybackMutation } from "@/hooks/use-playback-actions";
+import { usePpvFavoriteMutation } from "@/hooks/use-ppv-favorite";
 import {
   getProvider,
   getRecents,
@@ -71,6 +72,7 @@ export function SettingsPage() {
     staleTime: REMOTE_QUERY_STALE_TIME_MS,
   });
   const favoriteMutation = useChannelFavoriteMutation();
+  const ppvFavoriteMutation = usePpvFavoriteMutation();
   const pairMutation = useMutation({
     mutationFn: pairReceiver,
     onSuccess: async () => {
@@ -260,8 +262,14 @@ export function SettingsPage() {
                                   {recent.channel.categoryName}
                                 </Badge>
                               ) : null}
+                              {recent.channel.isPpv ? (
+                                <Badge variant="accent">PPV</Badge>
+                              ) : null}
                               {recent.channel.isFavorite ? (
                                 <Badge variant="accent">Favorite</Badge>
+                              ) : null}
+                              {recent.channel.isPpvFavorite ? (
+                                <Badge variant="outline">PPV saved</Badge>
                               ) : null}
                             </div>
                             <p className="text-sm text-muted-foreground">
@@ -288,6 +296,23 @@ export function SettingsPage() {
                               ? "Unfavorite"
                               : "Favorite"}
                           </Button>
+                          {recent.channel.isPpv ? (
+                            <Button
+                              variant="secondary"
+                              size="sm"
+                              onClick={() =>
+                                ppvFavoriteMutation.mutate(recent.channel)
+                              }
+                              disabled={
+                                ppvFavoriteMutation.isPending
+                                && ppvFavoriteMutation.variables?.id === recent.channel.id
+                              }
+                            >
+                              {recent.channel.isPpvFavorite
+                                ? "Remove PPV"
+                                : "Save PPV"}
+                            </Button>
+                          ) : null}
                           <Button
                             size="sm"
                             onClick={() =>
