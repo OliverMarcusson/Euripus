@@ -32,7 +32,11 @@ import {
   STANDARD_QUERY_STALE_TIME_MS,
 } from "@/lib/query-cache";
 import { formatReceiverPlaybackSummary } from "@/lib/receiver-playback";
-import { formatDateTime, formatRelativeTime } from "@/lib/utils";
+import {
+  formatDateTime,
+  formatEventChannelTitle,
+  formatRelativeTime,
+} from "@/lib/utils";
 import type { ThemePreference } from "@/store/theme-store";
 import { useThemeStore } from "@/store/theme-store";
 
@@ -232,19 +236,24 @@ export function SettingsPage() {
                 data-testid="recent-channels-scroll-area"
               >
                 <div className="flex flex-col gap-1.5 py-2">
-                  {recents.map((recent, index) => (
-                    <div key={recent.channel.id} className="group">
+                  {recents.map((recent, index) => {
+                    const displayChannelName = formatEventChannelTitle(
+                      recent.channel.name,
+                    );
+
+                    return (
+                      <div key={recent.channel.id} className="group">
                       <div className="flex flex-col gap-4 p-4 rounded-2xl transition-all duration-300 hover:bg-secondary/40 hover:shadow-md lg:flex-row lg:items-center lg:justify-between">
                         <div className="flex min-w-0 items-center gap-4">
                           <ChannelAvatar
-                            name={recent.channel.name}
+                            name={displayChannelName}
                             logoUrl={recent.channel.logoUrl}
                             className="size-10"
                           />
                           <div className="flex min-w-0 flex-1 flex-col gap-1">
                             <div className="flex flex-wrap items-center gap-2">
                               <h2 className="truncate text-sm font-semibold">
-                                {recent.channel.name}
+                                {displayChannelName}
                               </h2>
                               {recent.channel.categoryName ? (
                                 <Badge variant="outline">
@@ -292,7 +301,8 @@ export function SettingsPage() {
                         </div>
                       </div>
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </ScrollArea>
             ) : (

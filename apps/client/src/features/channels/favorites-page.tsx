@@ -23,6 +23,7 @@ import { getFavorites, reorderFavorites } from "@/lib/api";
 import { STANDARD_QUERY_STALE_TIME_MS } from "@/lib/query-cache";
 import {
   formatArchiveDuration,
+  formatEventChannelTitle,
   formatTimeRange,
   getProgramPlaybackState,
   getTimeProgress,
@@ -191,14 +192,19 @@ export function FavoritesPage() {
                 reorderPending={reorderMutation.isPending}
               />
             ))}
-            {channelFavorites.map(({ channel, program }, index) => (
-              <div key={channel.id} className="group">
+            {channelFavorites.map(({ channel, program }, index) => {
+              const displayChannelName = formatEventChannelTitle(channel.name, {
+                referenceStartAt: program?.startAt,
+              });
+
+              return (
+                <div key={channel.id} className="group">
                 {index > 0 || categoryFavorites.length > 0 ? <Separator /> : null}
                 <div className="flex flex-col gap-4 p-4 transition-colors hover:bg-muted/30 sm:gap-5 sm:p-5">
                   <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-start">
                     <div className="flex min-w-0 flex-1 items-start gap-3 sm:gap-4">
                       <ChannelAvatar
-                        name={channel.name}
+                        name={displayChannelName}
                         logoUrl={channel.logoUrl}
                         className="h-12 w-12 shrink-0 rounded-xl ring-1 ring-border/10 sm:h-14 sm:w-14 sm:rounded-2xl"
                         fallbackClassName="rounded-xl sm:rounded-2xl"
@@ -206,7 +212,7 @@ export function FavoritesPage() {
                       <div className="flex min-w-0 flex-1 flex-col gap-1.5 pt-0.5">
                         <div className="flex min-w-0 flex-wrap items-center gap-2">
                           <h2 className="min-w-0 break-words text-base font-semibold tracking-tight sm:text-lg">
-                            {channel.name}
+                            {displayChannelName}
                           </h2>
                           {channel.streamExtension ? (
                             <Badge variant="outline" className="border-transparent bg-background/50 text-[10px] uppercase">
@@ -301,7 +307,8 @@ export function FavoritesPage() {
                   ) : null}
                 </div>
               </div>
-            ))}
+              );
+            })}
           </CardContent>
         </Card>
       ) : null}
