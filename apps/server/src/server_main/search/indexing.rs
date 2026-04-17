@@ -1085,6 +1085,7 @@ mod tests {
                 vpn_provider_name: None,
                 meilisearch_url: None,
                 meilisearch_api_key: None,
+                sports_api_base_url: None,
                 admin_password: None,
             }),
             provider_http_client: reqwest::Client::new(),

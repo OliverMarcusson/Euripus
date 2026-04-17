@@ -19,6 +19,8 @@ pub(super) enum AppError {
         message: String,
         details: serde_json::Value,
     },
+    ServiceUnavailable(String),
+    BadGateway(String),
     Internal(anyhow::Error),
 }
 
@@ -60,6 +62,18 @@ impl IntoResponse for AppError {
                 "bad_request".to_string(),
                 message,
                 Some(details),
+            ),
+            AppError::ServiceUnavailable(message) => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "service_unavailable".to_string(),
+                message,
+                None,
+            ),
+            AppError::BadGateway(message) => (
+                StatusCode::BAD_GATEWAY,
+                "bad_gateway".to_string(),
+                message,
+                None,
             ),
             AppError::Internal(error) => {
                 error!("internal server error: {error:?}");

@@ -386,6 +386,7 @@ pub(super) fn shared_api_router() -> Router<AppState> {
         .merge(provider::shared_router())
         .merge(guide::shared_router())
         .merge(search::shared_router())
+        .merge(sports::shared_router())
         .merge(playback::shared_router())
         .merge(receiver::shared_router())
         .merge(sync::shared_router())

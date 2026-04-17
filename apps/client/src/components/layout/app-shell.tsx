@@ -9,6 +9,7 @@ import {
   MonitorUp,
   Search,
   Settings,
+  Trophy,
   Tv,
   TvMinimal,
 } from "lucide-react";
@@ -44,6 +45,7 @@ import { useRemoteControllerStore } from "@/store/remote-controller-store";
 
 const navigation = [
   { to: "/guide", label: "Guide", icon: TvMinimal },
+  { to: "/sports", label: "Sports", icon: Trophy },
   { to: "/search", label: "Search", icon: Search },
   { to: "/favorites", label: "Favorites", icon: Heart },
   { to: "/favorites/ppv", label: "PPV", icon: Clapperboard },
