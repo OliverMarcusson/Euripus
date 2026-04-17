@@ -11,6 +11,7 @@ import type {
   AuthSession,
   ChannelSearchResults,
   Channel,
+  FavoriteChannelEntry,
   FavoriteEntry,
   FavoriteOrderPayload,
   GuidePreferences,
@@ -21,6 +22,7 @@ import type {
   Program,
   ProgramSearchResults,
   PairReceiverPayload,
+  PpvFavoriteOrderPayload,
   ProviderProfile,
   RecentChannel,
   RegisterPayload,
@@ -473,6 +475,18 @@ export function removeFavorite(channelId: string) {
   return request<void>(`/favorites/${channelId}`, { method: "DELETE" });
 }
 
+export function getPpvFavorites() {
+  return request<FavoriteChannelEntry[]>("/favorites/ppv");
+}
+
+export function addPpvFavorite(channelId: string) {
+  return request<void>(`/favorites/ppv/${channelId}`, { method: "POST" });
+}
+
+export function removePpvFavorite(channelId: string) {
+  return request<void>(`/favorites/ppv/${channelId}`, { method: "DELETE" });
+}
+
 export function addCategoryFavorite(categoryId: string) {
   return request<void>(`/favorites/categories/${categoryId}`, { method: "POST" });
 }
@@ -483,6 +497,13 @@ export function removeCategoryFavorite(categoryId: string) {
 
 export function reorderFavorites(payload: FavoriteOrderPayload) {
   return request<void>("/favorites/order", {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function reorderPpvFavorites(payload: PpvFavoriteOrderPayload) {
+  return request<void>("/favorites/ppv/order", {
     method: "PUT",
     body: JSON.stringify(payload),
   });

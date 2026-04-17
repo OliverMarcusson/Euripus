@@ -4,6 +4,7 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
+  Clapperboard,
   Heart,
   Play,
   Search as SearchIcon,
@@ -64,12 +65,15 @@ type GuideCategorySectionProps = {
   open: boolean;
   favoritePending: boolean;
   activeFavoriteChannelId?: string;
+  ppvFavoritePending: boolean;
+  activePpvFavoriteChannelId?: string;
   categoryFavoritePending: boolean;
   activeFavoriteCategoryId?: string;
   showOnlyChannelsWithEpg: boolean;
   onToggle: (nextOpen: boolean) => void;
   onToggleCategoryFavorite: (category: GuideCategorySummary) => void;
   onFavorite: (channel: Channel) => void;
+  onTogglePpvFavorite: (channel: Channel) => void;
   onPlay: (channelId: string) => void;
 };
 
@@ -255,12 +259,15 @@ export function GuideCategorySection({
   open,
   favoritePending,
   activeFavoriteChannelId,
+  ppvFavoritePending,
+  activePpvFavoriteChannelId,
   categoryFavoritePending,
   activeFavoriteCategoryId,
   showOnlyChannelsWithEpg,
   onToggle,
   onToggleCategoryFavorite,
   onFavorite,
+  onTogglePpvFavorite,
   onPlay,
 }: GuideCategorySectionProps) {
   const categoryQuery = useInfiniteQuery({
@@ -385,6 +392,9 @@ export function GuideCategorySection({
                               <h3 className="min-w-0 break-words text-base font-semibold tracking-tight sm:text-lg">
                                 {displayChannelName}
                               </h3>
+                              {channel.isPpv ? (
+                                <Badge variant="accent">PPV</Badge>
+                              ) : null}
                               {channel.streamExtension ? (
                                 <Badge variant="outline" className="border-transparent bg-background/50 text-[10px] uppercase">
                                   {channel.streamExtension}
@@ -427,6 +437,21 @@ export function GuideCategorySection({
                             <Heart data-icon="inline-start" className={channel.isFavorite ? "fill-current opacity-70" : "opacity-70"} />
                             {channel.isFavorite ? "Unfavorite" : "Favorite"}
                           </Button>
+                          {channel.isPpv ? (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="text-muted-foreground hover:bg-secondary/60 hover:text-foreground"
+                              onClick={() => onTogglePpvFavorite(channel)}
+                              disabled={
+                                ppvFavoritePending
+                                && activePpvFavoriteChannelId === channel.id
+                              }
+                            >
+                              <Clapperboard data-icon="inline-start" className={channel.isPpvFavorite ? "fill-current opacity-70" : "opacity-70"} />
+                              {channel.isPpvFavorite ? "Remove PPV" : "Save PPV"}
+                            </Button>
+                          ) : null}
                           <Button
                             size="sm"
                             className="min-w-24 shadow-sm"
@@ -451,6 +476,20 @@ export function GuideCategorySection({
                           <Heart data-icon="inline-start" className={channel.isFavorite ? "fill-current opacity-70" : "opacity-70"} />
                           {channel.isFavorite ? "Unfavorite" : "Favorite"}
                         </Button>
+                        {channel.isPpv ? (
+                          <Button
+                            variant="secondary"
+                            className="flex-1 bg-secondary/50 shadow-sm"
+                            onClick={() => onTogglePpvFavorite(channel)}
+                            disabled={
+                              ppvFavoritePending
+                              && activePpvFavoriteChannelId === channel.id
+                            }
+                          >
+                            <Clapperboard data-icon="inline-start" className={channel.isPpvFavorite ? "fill-current opacity-70" : "opacity-70"} />
+                            {channel.isPpvFavorite ? "Remove PPV" : "Save PPV"}
+                          </Button>
+                        ) : null}
                         <Button
                           className="flex-1 shadow-sm"
                           onClick={() => onPlay(channel.id)}

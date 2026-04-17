@@ -5,6 +5,7 @@ import { AdminPage } from "@/features/admin/admin-page";
 import { AuthPage } from "@/features/auth/auth-page";
 import { FavoritesPage } from "@/features/channels/favorites-page";
 import { GuidePage } from "@/features/channels/guide-page";
+import { PpvFavoritesPage } from "@/features/channels/ppv-favorites-page";
 import { SearchPage } from "@/features/search/search-page";
 import { SettingsPage } from "@/features/auth/settings-page";
 import { ReceiverPage } from "@/features/receiver/receiver-page";
@@ -101,6 +102,12 @@ const favoritesRoute = createRoute({
   component: FavoritesPage,
 });
 
+const ppvFavoritesRoute = createRoute({
+  getParentRoute: () => authenticatedRoute,
+  path: "/favorites/ppv",
+  component: PpvFavoritesPage,
+});
+
 const settingsRoute = createRoute({
   getParentRoute: () => authenticatedRoute,
   path: "/settings",
@@ -118,7 +125,13 @@ const routeTree = rootRoute.addChildren([
   authRoute,
   adminRoute,
   receiverRoute,
-  authenticatedRoute.addChildren([guideRoute, searchRoute, favoritesRoute, settingsRoute]),
+  authenticatedRoute.addChildren([
+    guideRoute,
+    searchRoute,
+    favoritesRoute,
+    ppvFavoritesRoute,
+    settingsRoute,
+  ]),
 ]);
 
 export const router = createRouter({

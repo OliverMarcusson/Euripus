@@ -19,10 +19,12 @@ import { useGuidePageState } from "@/features/channels/use-guide-page-state";
 import { useCategoryFavoriteMutation } from "@/hooks/use-category-favorite";
 import { useChannelFavoriteMutation } from "@/hooks/use-channel-favorite";
 import { useChannelPlaybackMutation } from "@/hooks/use-playback-actions";
+import { usePpvFavoriteMutation } from "@/hooks/use-ppv-favorite";
 
 export function GuidePage() {
   const guideState = useGuidePageState();
   const favoriteMutation = useChannelFavoriteMutation();
+  const ppvFavoriteMutation = usePpvFavoriteMutation();
   const categoryFavoriteMutation = useCategoryFavoriteMutation();
   const playMutation = useChannelPlaybackMutation();
 
@@ -113,6 +115,8 @@ export function GuidePage() {
                     open={guideState.openCategories.includes(category.id)}
                     favoritePending={favoriteMutation.isPending}
                     activeFavoriteChannelId={favoriteMutation.variables?.id}
+                    ppvFavoritePending={ppvFavoriteMutation.isPending}
+                    activePpvFavoriteChannelId={ppvFavoriteMutation.variables?.id}
                     categoryFavoritePending={categoryFavoriteMutation.isPending}
                     activeFavoriteCategoryId={categoryFavoriteMutation.variables?.id}
                     showOnlyChannelsWithEpg={guideState.showOnlyChannelsWithEpg}
@@ -121,6 +125,7 @@ export function GuidePage() {
                     onToggleCategoryFavorite={(nextCategory) =>
                       categoryFavoriteMutation.mutate(nextCategory)}
                     onFavorite={(channel) => favoriteMutation.mutate(channel)}
+                    onTogglePpvFavorite={(channel) => ppvFavoriteMutation.mutate(channel)}
                     onPlay={(channelId) => playMutation.mutate(channelId)}
                   />
                 </div>

@@ -536,7 +536,12 @@ async fn load_channels_by_ids(
           EXISTS(
             SELECT 1 FROM favorites f
             WHERE f.user_id = c.user_id AND f.channel_id = c.id
-          ) AS is_favorite
+          ) AS is_favorite,
+          c.search_is_ppv AS is_ppv,
+          EXISTS(
+            SELECT 1 FROM favorite_ppv_channels fpc
+            WHERE fpc.user_id = c.user_id AND fpc.channel_id = c.id
+          ) AS is_ppv_favorite
         FROM channels c
         LEFT JOIN channel_categories cc ON cc.id = c.category_id
         WHERE c.user_id = $1
