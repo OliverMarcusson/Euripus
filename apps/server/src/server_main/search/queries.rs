@@ -51,95 +51,192 @@ pub(in crate::server_main) async fn search_channels_postgres(
     }
 
     let search_term = parsed.search.trim();
-    let rows = sqlx::query_as::<_, ChannelSearchRow>(
-        r#"
-        WITH matches AS (
-          SELECT
-            sd.entity_id,
-            COUNT(*) OVER () AS total_count,
-            ROW_NUMBER() OVER (
+    let rows = if search_term.is_empty() {
+        // Filter-only searches should stay on indexed channel/program metadata instead of
+        // scanning and ranking every search document for an empty text term.
+        sqlx::query_as::<_, ChannelSearchRow>(
+            r#"
+            WITH filtered AS (
+              SELECT
+                c.id,
+                c.profile_id,
+                c.name,
+                c.logo_url,
+                cc.name AS category_name,
+                c.remote_stream_id,
+                c.epg_channel_id,
+                EXISTS(
+                  SELECT 1
+                  FROM programs p
+                  WHERE p.user_id = c.user_id
+                    AND p.channel_id = c.id
+                    AND p.end_at > NOW() - ($10 * INTERVAL '1 hour')
+                    AND p.start_at < NOW() + ($11 * INTERVAL '1 day')
+                ) AS has_epg,
+                c.has_catchup,
+                c.archive_duration_hours,
+                c.stream_extension,
+                EXISTS(
+                  SELECT 1 FROM favorites f
+                  WHERE f.user_id = c.user_id AND f.channel_id = c.id
+                ) AS is_favorite
+              FROM channels c
+              LEFT JOIN channel_categories cc ON cc.id = c.category_id
+              WHERE c.user_id = $1
+                AND c.id = ANY($2)
+                AND ($5::text[] IS NULL OR lower(c.search_country_code) = ANY($5))
+                AND ($6::text[] IS NULL OR lower(c.search_provider_name) = ANY($6))
+                AND ($7::bool IS NULL OR c.search_is_ppv = $7)
+                AND ($8::bool IS NULL OR c.search_is_vip = $8)
+            ),
+            page AS (
+              SELECT
+                COUNT(*) OVER () AS total_count,
+                id,
+                profile_id,
+                name,
+                logo_url,
+                category_name,
+                remote_stream_id,
+                epg_channel_id,
+                has_epg,
+                has_catchup,
+                archive_duration_hours,
+                stream_extension,
+                is_favorite
+              FROM filtered
+              WHERE NOT $9 OR has_epg
               ORDER BY
-                CASE WHEN lower(sd.title) = lower($2) THEN 0 ELSE 1 END,
-                similarity(sd.search_text, $2) DESC,
-                sd.title ASC
-            ) AS ordinal
-          FROM search_documents sd
-          JOIN channels c ON c.id = sd.entity_id
-          WHERE sd.user_id = $1
-            AND sd.entity_type = 'channel'
-            AND c.id = ANY($5)
-            AND (
-              $2 = ''
-              OR sd.tsv @@ plainto_tsquery('simple', $2)
-              OR sd.search_text % $2
+                CASE WHEN has_epg THEN 0 ELSE 1 END,
+                name ASC,
+                id ASC
+              OFFSET $3
+              LIMIT $4
             )
-            AND ($6::text[] IS NULL OR lower(c.search_country_code) = ANY($6))
-            AND ($7::text[] IS NULL OR lower(c.search_provider_name) = ANY($7))
-            AND ($8::bool IS NULL OR c.search_is_ppv = $8)
-            AND ($9::bool IS NULL OR c.search_is_vip = $9)
-            AND (
-              NOT $10
-              OR EXISTS(
+            SELECT
+              total_count,
+              id,
+              profile_id,
+              name,
+              logo_url,
+              category_name,
+              remote_stream_id,
+              epg_channel_id,
+              has_epg,
+              has_catchup,
+              archive_duration_hours,
+              stream_extension,
+              is_favorite
+            FROM page
+            ORDER BY
+              CASE WHEN has_epg THEN 0 ELSE 1 END,
+              name ASC,
+              id ASC
+            "#,
+        )
+        .bind(user_id)
+        .bind(visible_channel_ids)
+        .bind(offset)
+        .bind(limit)
+        .bind((!parsed.countries.is_empty()).then_some(parsed.countries.clone()))
+        .bind((!parsed.providers.is_empty()).then_some(parsed.providers.clone()))
+        .bind(parsed.ppv)
+        .bind(parsed.vip)
+        .bind(parsed.require_epg)
+        .bind(EPG_RETENTION_PAST_HOURS)
+        .bind(EPG_RETENTION_FUTURE_DAYS)
+        .fetch_all(&state.pool)
+        .await?
+    } else {
+        sqlx::query_as::<_, ChannelSearchRow>(
+            r#"
+            WITH matches AS (
+              SELECT
+                sd.entity_id,
+                COUNT(*) OVER () AS total_count,
+                ROW_NUMBER() OVER (
+                  ORDER BY
+                    CASE WHEN lower(sd.title) = lower($2) THEN 0 ELSE 1 END,
+                    similarity(sd.search_text, $2) DESC,
+                    sd.title ASC
+                ) AS ordinal
+              FROM search_documents sd
+              JOIN channels c ON c.id = sd.entity_id
+              WHERE sd.user_id = $1
+                AND sd.entity_type = 'channel'
+                AND c.id = ANY($5)
+                AND (
+                  sd.tsv @@ plainto_tsquery('simple', $2)
+                  OR sd.search_text % $2
+                )
+                AND ($6::text[] IS NULL OR lower(c.search_country_code) = ANY($6))
+                AND ($7::text[] IS NULL OR lower(c.search_provider_name) = ANY($7))
+                AND ($8::bool IS NULL OR c.search_is_ppv = $8)
+                AND ($9::bool IS NULL OR c.search_is_vip = $9)
+                AND (
+                  NOT $10
+                  OR EXISTS(
+                    SELECT 1
+                    FROM programs p
+                    WHERE p.user_id = c.user_id
+                      AND p.channel_id = c.id
+                      AND p.end_at > NOW() - ($11 * INTERVAL '1 hour')
+                      AND p.start_at < NOW() + ($12 * INTERVAL '1 day')
+                  )
+                )
+            ),
+            page AS (
+              SELECT entity_id, total_count, ordinal
+              FROM matches
+              WHERE ordinal > $3
+              ORDER BY ordinal
+              LIMIT $4
+            )
+            SELECT
+              page.total_count,
+              c.id,
+              c.profile_id,
+              c.name,
+              c.logo_url,
+              cc.name AS category_name,
+              c.remote_stream_id,
+              c.epg_channel_id,
+              EXISTS(
                 SELECT 1
                 FROM programs p
                 WHERE p.user_id = c.user_id
                   AND p.channel_id = c.id
                   AND p.end_at > NOW() - ($11 * INTERVAL '1 hour')
                   AND p.start_at < NOW() + ($12 * INTERVAL '1 day')
-              )
-            )
-        ),
-        page AS (
-          SELECT entity_id, total_count, ordinal
-          FROM matches
-          WHERE ordinal > $3
-          ORDER BY ordinal
-          LIMIT $4
+              ) AS has_epg,
+              c.has_catchup,
+              c.archive_duration_hours,
+              c.stream_extension,
+              EXISTS(
+                SELECT 1 FROM favorites f
+                WHERE f.user_id = c.user_id AND f.channel_id = c.id
+              ) AS is_favorite
+            FROM page
+            JOIN channels c ON c.id = page.entity_id
+            LEFT JOIN channel_categories cc ON cc.id = c.category_id
+            ORDER BY page.ordinal
+            "#,
         )
-        SELECT
-          page.total_count,
-          c.id,
-          c.profile_id,
-          c.name,
-          c.logo_url,
-          cc.name AS category_name,
-          c.remote_stream_id,
-          c.epg_channel_id,
-          EXISTS(
-            SELECT 1
-            FROM programs p
-            WHERE p.user_id = c.user_id
-              AND p.channel_id = c.id
-              AND p.end_at > NOW() - ($11 * INTERVAL '1 hour')
-              AND p.start_at < NOW() + ($12 * INTERVAL '1 day')
-          ) AS has_epg,
-          c.has_catchup,
-          c.archive_duration_hours,
-          c.stream_extension,
-          EXISTS(
-            SELECT 1 FROM favorites f
-            WHERE f.user_id = c.user_id AND f.channel_id = c.id
-          ) AS is_favorite
-        FROM page
-        JOIN channels c ON c.id = page.entity_id
-        LEFT JOIN channel_categories cc ON cc.id = c.category_id
-        ORDER BY page.ordinal
-        "#,
-    )
-    .bind(user_id)
-    .bind(search_term)
-    .bind(offset)
-    .bind(limit)
-    .bind(visible_channel_ids)
-    .bind((!parsed.countries.is_empty()).then_some(parsed.countries.clone()))
-    .bind((!parsed.providers.is_empty()).then_some(parsed.providers.clone()))
-    .bind(parsed.ppv)
-    .bind(parsed.vip)
-    .bind(parsed.require_epg)
-    .bind(EPG_RETENTION_PAST_HOURS)
-    .bind(EPG_RETENTION_FUTURE_DAYS)
-    .fetch_all(&state.pool)
-    .await?;
+        .bind(user_id)
+        .bind(search_term)
+        .bind(offset)
+        .bind(limit)
+        .bind(visible_channel_ids)
+        .bind((!parsed.countries.is_empty()).then_some(parsed.countries.clone()))
+        .bind((!parsed.providers.is_empty()).then_some(parsed.providers.clone()))
+        .bind(parsed.ppv)
+        .bind(parsed.vip)
+        .bind(parsed.require_epg)
+        .bind(EPG_RETENTION_PAST_HOURS)
+        .bind(EPG_RETENTION_FUTURE_DAYS)
+        .fetch_all(&state.pool)
+        .await?
+    };
     let total_count = rows.first().map(|row| row.total_count).unwrap_or(0);
     let mut items = rows
         .into_iter()
@@ -179,85 +276,183 @@ pub(in crate::server_main) async fn search_programs_postgres(
     visible_channel_ids: &[Uuid],
 ) -> Result<ProgramSearchResponse, AppError> {
     let search_term = parsed.search.trim();
-    let rows = sqlx::query_as::<_, ProgramSearchRow>(
-        r#"
-        WITH matches AS (
-          SELECT
-            p.id,
-            COUNT(*) OVER () AS total_count,
-            ROW_NUMBER() OVER (
+    let rows = if search_term.is_empty() {
+        // Filter-only searches should stay on indexed channel/program metadata instead of
+        // scanning and ranking every search document for an empty text term.
+        sqlx::query_as::<_, ProgramSearchRow>(
+            r#"
+            WITH filtered AS (
+              SELECT
+                p.id,
+                p.channel_id,
+                p.channel_name,
+                p.title,
+                p.description,
+                p.start_at,
+                p.end_at,
+                p.can_catchup
+              FROM programs p
+              LEFT JOIN channels c ON c.id = p.channel_id
+              WHERE p.user_id = $1
+                AND (
+                  p.channel_id IS NULL
+                  OR p.channel_id = ANY($4)
+                )
+                AND (
+                  $5::text[] IS NULL
+                  OR lower(coalesce(p.search_country_code, c.search_country_code)) = ANY($5)
+                )
+                AND (
+                  $6::text[] IS NULL
+                  OR lower(coalesce(p.search_provider_name, c.search_provider_name)) = ANY($6)
+                )
+                AND ($7::bool IS NULL OR coalesce(p.search_is_ppv, c.search_is_ppv, false) = $7)
+                AND ($8::bool IS NULL OR coalesce(p.search_is_vip, c.search_is_vip, false) = $8)
+                AND (NOT $9 OR TRUE)
+            ),
+            page AS (
+              SELECT
+                COUNT(*) OVER () AS total_count,
+                id,
+                channel_id,
+                channel_name,
+                title,
+                description,
+                start_at,
+                end_at,
+                can_catchup
+              FROM filtered
               ORDER BY
                 CASE
-                  WHEN p.channel_id IS NOT NULL AND sd.starts_at <= NOW() AND sd.ends_at >= NOW() THEN 0
-                  WHEN p.channel_id IS NOT NULL AND sd.ends_at <= NOW() AND p.can_catchup THEN 1
-                  WHEN lower(sd.title) = lower($2) THEN 2
-                  WHEN lower(sd.title) LIKE lower($2 || '%') THEN 3
-                  WHEN sd.starts_at > NOW() THEN 4
-                  ELSE 5
+                  WHEN channel_id IS NOT NULL AND start_at <= NOW() AND end_at >= NOW() THEN 0
+                  WHEN channel_id IS NOT NULL AND end_at <= NOW() AND can_catchup THEN 1
+                  WHEN start_at > NOW() THEN 2
+                  ELSE 3
                 END,
-                similarity(sd.search_text, $2) DESC,
-                sd.starts_at ASC
-            ) AS ordinal
-          FROM search_documents sd
-          JOIN programs p ON p.id = sd.entity_id
-          LEFT JOIN channels c ON c.id = p.channel_id
-          WHERE sd.user_id = $1
-            AND sd.entity_type = 'program'
-            AND (
-              p.channel_id IS NULL
-              OR p.channel_id = ANY($5)
+                CASE WHEN start_at > NOW() THEN start_at END ASC NULLS LAST,
+                CASE WHEN start_at <= NOW() AND end_at >= NOW() THEN start_at END DESC NULLS LAST,
+                CASE WHEN end_at <= NOW() THEN end_at END DESC NULLS LAST,
+                title ASC,
+                id ASC
+              OFFSET $2
+              LIMIT $3
             )
-            AND (
-              $2 = ''
-              OR sd.tsv @@ plainto_tsquery('simple', $2)
-              OR sd.search_text % $2
-            )
-            AND (
-              $6::text[] IS NULL
-              OR lower(coalesce(p.search_country_code, c.search_country_code)) = ANY($6)
-            )
-            AND (
-              $7::text[] IS NULL
-              OR lower(coalesce(p.search_provider_name, c.search_provider_name)) = ANY($7)
-            )
-            AND ($8::bool IS NULL OR coalesce(p.search_is_ppv, c.search_is_ppv, false) = $8)
-            AND ($9::bool IS NULL OR coalesce(p.search_is_vip, c.search_is_vip, false) = $9)
-            AND (NOT $10 OR TRUE)
-        ),
-        page AS (
-          SELECT id, total_count, ordinal
-          FROM matches
-          WHERE ordinal > $3
-          ORDER BY ordinal
-          LIMIT $4
+            SELECT
+              total_count,
+              id,
+              channel_id,
+              channel_name,
+              title,
+              description,
+              start_at,
+              end_at,
+              can_catchup
+            FROM page
+            ORDER BY
+              CASE
+                WHEN channel_id IS NOT NULL AND start_at <= NOW() AND end_at >= NOW() THEN 0
+                WHEN channel_id IS NOT NULL AND end_at <= NOW() AND can_catchup THEN 1
+                WHEN start_at > NOW() THEN 2
+                ELSE 3
+              END,
+              CASE WHEN start_at > NOW() THEN start_at END ASC NULLS LAST,
+              CASE WHEN start_at <= NOW() AND end_at >= NOW() THEN start_at END DESC NULLS LAST,
+              CASE WHEN end_at <= NOW() THEN end_at END DESC NULLS LAST,
+              title ASC,
+              id ASC
+            "#,
         )
-        SELECT
-          page.total_count,
-          p.id,
-          p.channel_id,
-          p.channel_name,
-          p.title,
-          p.description,
-          p.start_at,
-          p.end_at,
-          p.can_catchup
-        FROM page
-        JOIN programs p ON p.id = page.id
-        ORDER BY page.ordinal
-        "#,
-    )
-    .bind(user_id)
-    .bind(search_term)
-    .bind(offset)
-    .bind(limit)
-    .bind(visible_channel_ids)
-    .bind((!parsed.countries.is_empty()).then_some(parsed.countries.clone()))
-    .bind((!parsed.providers.is_empty()).then_some(parsed.providers.clone()))
-    .bind(parsed.ppv)
-    .bind(parsed.vip)
-    .bind(parsed.require_epg)
-    .fetch_all(pool)
-    .await?;
+        .bind(user_id)
+        .bind(offset)
+        .bind(limit)
+        .bind(visible_channel_ids)
+        .bind((!parsed.countries.is_empty()).then_some(parsed.countries.clone()))
+        .bind((!parsed.providers.is_empty()).then_some(parsed.providers.clone()))
+        .bind(parsed.ppv)
+        .bind(parsed.vip)
+        .bind(parsed.require_epg)
+        .fetch_all(pool)
+        .await?
+    } else {
+        sqlx::query_as::<_, ProgramSearchRow>(
+            r#"
+            WITH matches AS (
+              SELECT
+                p.id,
+                COUNT(*) OVER () AS total_count,
+                ROW_NUMBER() OVER (
+                  ORDER BY
+                    CASE
+                      WHEN p.channel_id IS NOT NULL AND sd.starts_at <= NOW() AND sd.ends_at >= NOW() THEN 0
+                      WHEN p.channel_id IS NOT NULL AND sd.ends_at <= NOW() AND p.can_catchup THEN 1
+                      WHEN lower(sd.title) = lower($2) THEN 2
+                      WHEN lower(sd.title) LIKE lower($2 || '%') THEN 3
+                      WHEN sd.starts_at > NOW() THEN 4
+                      ELSE 5
+                    END,
+                    similarity(sd.search_text, $2) DESC,
+                    sd.starts_at ASC
+                ) AS ordinal
+              FROM search_documents sd
+              JOIN programs p ON p.id = sd.entity_id
+              LEFT JOIN channels c ON c.id = p.channel_id
+              WHERE sd.user_id = $1
+                AND sd.entity_type = 'program'
+                AND (
+                  p.channel_id IS NULL
+                  OR p.channel_id = ANY($5)
+                )
+                AND (
+                  sd.tsv @@ plainto_tsquery('simple', $2)
+                  OR sd.search_text % $2
+                )
+                AND (
+                  $6::text[] IS NULL
+                  OR lower(coalesce(p.search_country_code, c.search_country_code)) = ANY($6)
+                )
+                AND (
+                  $7::text[] IS NULL
+                  OR lower(coalesce(p.search_provider_name, c.search_provider_name)) = ANY($7)
+                )
+                AND ($8::bool IS NULL OR coalesce(p.search_is_ppv, c.search_is_ppv, false) = $8)
+                AND ($9::bool IS NULL OR coalesce(p.search_is_vip, c.search_is_vip, false) = $9)
+                AND (NOT $10 OR TRUE)
+            ),
+            page AS (
+              SELECT id, total_count, ordinal
+              FROM matches
+              WHERE ordinal > $3
+              ORDER BY ordinal
+              LIMIT $4
+            )
+            SELECT
+              page.total_count,
+              p.id,
+              p.channel_id,
+              p.channel_name,
+              p.title,
+              p.description,
+              p.start_at,
+              p.end_at,
+              p.can_catchup
+            FROM page
+            JOIN programs p ON p.id = page.id
+            ORDER BY page.ordinal
+            "#,
+        )
+        .bind(user_id)
+        .bind(search_term)
+        .bind(offset)
+        .bind(limit)
+        .bind(visible_channel_ids)
+        .bind((!parsed.countries.is_empty()).then_some(parsed.countries.clone()))
+        .bind((!parsed.providers.is_empty()).then_some(parsed.providers.clone()))
+        .bind(parsed.ppv)
+        .bind(parsed.vip)
+        .bind(parsed.require_epg)
+        .fetch_all(pool)
+        .await?
+    };
     let total_count = rows.first().map(|row| row.total_count).unwrap_or(0);
     let items = rows
         .into_iter()

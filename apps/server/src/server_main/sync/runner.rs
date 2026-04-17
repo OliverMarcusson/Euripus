@@ -254,10 +254,13 @@ async fn run_sync_job(
     .fetch_one(&state.pool)
     .await?;
 
+    let decrypted_password = decrypt_secret(&state.config.encryption_key, &profile.password_encrypted)
+        .map_err(|_| anyhow!("Stored provider password could not be decrypted. Re-enter your provider password and save the profile again."))?;
+
     let credentials = XtreamCredentials {
         base_url: profile.base_url.clone(),
         username: profile.username.clone(),
-        password: decrypt_secret(&state.config.encryption_key, &profile.password_encrypted)?,
+        password: decrypted_password,
         output_format: profile.output_format.clone(),
     };
 
@@ -502,6 +505,10 @@ fn spawn_search_refresh(
         let refresh_started_at = Instant::now();
         info!("sync job {job_id}: refreshing search indexes in background");
 
+        if state.meili.is_some() {
+            state.meili_bootstrapping_users.insert(user_id);
+        }
+
         if let Err(error) = search::indexing::refresh_search_metadata(&state, user_id).await {
             warn!("sync job {job_id}: failed to refresh PostgreSQL search metadata: {error:?}");
             return;
@@ -510,7 +517,6 @@ fn spawn_search_refresh(
         let mut rebuild_postgres_fallback = state.meili.is_none();
         if let Some(meili) = &state.meili {
             info!("sync job {job_id}: refreshing Meilisearch indexes in background");
-            state.meili_bootstrapping_users.insert(user_id);
             let meili_refresh = match &scope {
                 SearchRefreshScope::FullProfile { profile_id } => {
                     search::indexing::rebuild_meili_indexes(
