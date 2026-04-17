@@ -100,6 +100,7 @@ describe("PpvFavoritesPage", () => {
     expect(await screen.findByText("PPV")).toBeInTheDocument();
     expect(screen.getByText("Championship Fight")).toBeInTheDocument();
     expect(screen.getByText("Main card coverage")).toBeInTheDocument();
+    expect(screen.getAllByText("Live now").length).toBeGreaterThan(0);
     expect(
       screen.getByText(
         formatTimeRange(
@@ -108,5 +109,81 @@ describe("PpvFavoritesPage", () => {
         ),
       ),
     ).toBeInTheDocument();
+  });
+
+  it("pins title-derived live ppv favorites above non-live entries when epg is missing", async () => {
+    mockedGetPpvFavorites.mockResolvedValue([
+      {
+        kind: "channel",
+        order: 0,
+        channel: {
+          id: "ppv-channel-upcoming",
+          name: "US (ESPN+ 034) | RBC Heritage: Spieth Featured Group (Second Round) Apr 17 2:00PM ET",
+          logoUrl: null,
+          categoryName: "US| ESPN+ PPV",
+          remoteStreamId: 34,
+          epgChannelId: null,
+          hasEpg: false,
+          hasCatchup: false,
+          archiveDurationHours: null,
+          streamExtension: "m3u8",
+          isFavorite: false,
+          isPpv: true,
+          isPpvFavorite: true,
+        },
+        program: null,
+      },
+      {
+        kind: "channel",
+        order: 1,
+        channel: {
+          id: "ppv-channel-live",
+          name: "US (ESPN+ 002) | RBC Heritage: Main Feed (Second Round) Apr 17 7:00AM ET",
+          logoUrl: null,
+          categoryName: "US| ESPN+ PPV",
+          remoteStreamId: 2,
+          epgChannelId: null,
+          hasEpg: false,
+          hasCatchup: false,
+          archiveDurationHours: null,
+          streamExtension: "m3u8",
+          isFavorite: false,
+          isPpv: true,
+          isPpvFavorite: true,
+        },
+        program: null,
+      },
+      {
+        kind: "channel",
+        order: 2,
+        channel: {
+          id: "ppv-channel-later",
+          name: "US (ESPN+ 006) | RBC Heritage: Featured Groups (Second Round) Apr 17 9:30AM ET",
+          logoUrl: null,
+          categoryName: "US| ESPN+ PPV",
+          remoteStreamId: 6,
+          epgChannelId: null,
+          hasEpg: false,
+          hasCatchup: false,
+          archiveDurationHours: null,
+          streamExtension: "m3u8",
+          isFavorite: false,
+          isPpv: true,
+          isPpvFavorite: true,
+        },
+        program: null,
+      },
+    ]);
+
+    renderPpvFavoritesPage();
+
+    const headings = await screen.findAllByRole("heading", { level: 2 });
+    expect(headings.map((heading) => heading.textContent)).toEqual([
+      expect.stringContaining("Main Feed"),
+      expect.stringContaining("Spieth Featured Group"),
+      expect.stringContaining("Featured Groups"),
+    ]);
+    expect(screen.getByText("1 live now")).toBeInTheDocument();
+    expect(screen.getAllByText("Live now").length).toBeGreaterThan(0);
   });
 });

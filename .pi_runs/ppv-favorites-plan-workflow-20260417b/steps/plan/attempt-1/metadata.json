@@ -1,0 +1,50 @@
+{
+  "workflowId": "ppv-favorites-plan-workflow-20260417b",
+  "step": {
+    "id": "plan",
+    "role": "planner",
+    "objective": "Using the exploration report, produce a concrete implementation plan for adding a separate PPV favorites page so temporary PPV events do not need to be added to normal favorites. The plan should recommend a storage model, API changes, client routing/UI changes, query/cache changes, and tests, and call out why unstable program IDs matter.",
+    "dependsOn": [
+      "explore"
+    ],
+    "timeoutMs": 600000,
+    "maxTurns": 12,
+    "retryLimit": 1,
+    "allowedReadPaths": [
+      "apps/client/src",
+      "apps/server/src",
+      "apps/server/migrations",
+      "packages/shared/src"
+    ]
+  },
+  "rolePolicy": {
+    "role": "planner",
+    "model": {
+      "model": "gpt-5.4",
+      "reasoningEffort": "high"
+    },
+    "outputArtifactKind": "plan",
+    "outputFileName": "plan.md",
+    "allowRepoWrites": false,
+    "writableArtifactKinds": [
+      "plan"
+    ]
+  },
+  "status": "completed",
+  "runId": "ppv-favorites-plan-workflow-20260417b",
+  "attempt": 1,
+  "timeoutMs": 600000,
+  "retryLimit": 1,
+  "maxTurns": 12,
+  "upstreamArtifacts": [
+    {
+      "stepId": "explore",
+      "attempt": 1,
+      "kind": "report",
+      "path": "/home/oliver/src/Rust/Euripus/.pi_runs/ppv-favorites-plan-workflow-20260417b/steps/explore/attempt-1/output/report.md"
+    }
+  ],
+  "progress": [],
+  "artifactPath": "/home/oliver/src/Rust/Euripus/.pi_runs/ppv-favorites-plan-workflow-20260417b/steps/plan/attempt-1/output/plan.md",
+  "completedAt": "2026-04-17T11:53:25.147Z"
+}
