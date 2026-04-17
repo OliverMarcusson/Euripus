@@ -7,6 +7,7 @@ import { FavoritesPage } from "@/features/channels/favorites-page";
 import { GuidePage } from "@/features/channels/guide-page";
 import { PpvFavoritesPage } from "@/features/channels/ppv-favorites-page";
 import { SearchPage } from "@/features/search/search-page";
+import { SportsPage } from "@/features/sports/sports-page";
 import { SettingsPage } from "@/features/auth/settings-page";
 import { ReceiverPage } from "@/features/receiver/receiver-page";
 import { useAuthStore } from "@/store/auth-store";
@@ -96,6 +97,12 @@ const searchRoute = createRoute({
   component: SearchPage,
 });
 
+const sportsRoute = createRoute({
+  getParentRoute: () => authenticatedRoute,
+  path: "/sports",
+  component: SportsPage,
+});
+
 const favoritesRoute = createRoute({
   getParentRoute: () => authenticatedRoute,
   path: "/favorites",
@@ -127,6 +134,7 @@ const routeTree = rootRoute.addChildren([
   receiverRoute,
   authenticatedRoute.addChildren([
     guideRoute,
+    sportsRoute,
     searchRoute,
     favoritesRoute,
     ppvFavoritesRoute,

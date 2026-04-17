@@ -76,6 +76,7 @@ mod provider;
 mod receiver;
 mod relay;
 mod search;
+mod sports;
 mod state;
 mod sync;
 

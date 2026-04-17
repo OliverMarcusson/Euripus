@@ -28,6 +28,10 @@ import type {
   RegisterPayload,
   SaveProviderPayload,
   Session,
+  SportsCompetitionResponse,
+  SportsEvent,
+  SportsEventListResponse,
+  SportsProviderCatalogResponse,
   ReceiverDevice,
   ReceiverPairingCode,
   ReceiverPlaybackStatePayload,
@@ -443,6 +447,33 @@ export function getGuideCategory(
   return request<GuideCategoryResponse>(
     `/guide/category/${encodeURIComponent(categoryId)}?${params.toString()}`,
   );
+}
+
+export function getSportsLiveEvents() {
+  return request<SportsEventListResponse>("/sports/live");
+}
+
+export function getSportsTodayEvents() {
+  return request<SportsEventListResponse>("/sports/today");
+}
+
+export function getSportsUpcomingEvents(hours = 72) {
+  const params = new URLSearchParams({ hours: hours.toString() });
+  return request<SportsEventListResponse>(`/sports/upcoming?${params.toString()}`);
+}
+
+export function getSportsEvent(id: string) {
+  return request<SportsEvent>(`/sports/events/${encodeURIComponent(id)}`);
+}
+
+export function getSportsCompetition(slug: string) {
+  return request<SportsCompetitionResponse>(
+    `/sports/competitions/${encodeURIComponent(slug)}`,
+  );
+}
+
+export function getSportsProviders() {
+  return request<SportsProviderCatalogResponse>("/sports/providers");
 }
 
 export function searchChannels(query: string, offset = 0, limit = 30) {

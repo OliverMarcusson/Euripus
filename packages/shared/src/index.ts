@@ -245,6 +245,71 @@ export type GuideCategoryResponse = {
   nextOffset: number | null;
 };
 
+export type SportsParticipants = {
+  home: string | null;
+  away: string | null;
+};
+
+export type SportsAvailability = {
+  market: string | null;
+  providerFamily: string | null;
+  providerLabel: string;
+  channelName: string | null;
+  watchType: string | null;
+  confidence: number | null;
+  source: string | null;
+  searchHints: string[];
+};
+
+export type SportsWatch = {
+  recommendedMarket: string | null;
+  recommendedProvider: string | null;
+  availabilities: SportsAvailability[];
+};
+
+export type SportsSearchMetadata = {
+  queries: string[];
+  keywords: string[];
+};
+
+export type SportsEvent = {
+  id: string;
+  sport: string;
+  competition: string;
+  title: string;
+  startTime: string;
+  endTime: string | null;
+  status: string;
+  venue: string | null;
+  roundLabel: string | null;
+  participants: SportsParticipants | null;
+  source: string | null;
+  sourceUrl: string | null;
+  watch: SportsWatch;
+  searchMetadata: SportsSearchMetadata;
+};
+
+export type SportsEventListResponse = {
+  count: number;
+  events: SportsEvent[];
+};
+
+export type SportsCompetitionResponse = {
+  competition: string;
+  events: SportsEvent[];
+};
+
+export type SportsProvider = {
+  family: string;
+  market: string;
+  aliases: string[];
+};
+
+export type SportsProviderCatalogResponse = {
+  count: number;
+  providers: SportsProvider[];
+};
+
 export type SearchResultPage<T> = {
   query: string;
   backend: SearchBackend;

@@ -69,8 +69,16 @@ const HEAVY_ROW_STYLE = {
   containIntrinsicSize: "120px",
 } as const;
 
+function getInitialSearchQuery() {
+  if (typeof window === "undefined") {
+    return "";
+  }
+
+  return new URLSearchParams(window.location.search).get("q") ?? "";
+}
+
 export function SearchPage() {
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useState(() => getInitialSearchQuery());
   const [activeTab, setActiveTab] = useState<"channels" | "programs">(
     "channels",
   );
