@@ -8,6 +8,7 @@ use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
 };
+use tracing::debug;
 
 fn playback_diag_id(value: &str) -> String {
     let digest = Sha256::digest(value.as_bytes());
