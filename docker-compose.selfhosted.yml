@@ -24,6 +24,11 @@ services:
     image: ${EURIPUS_SERVER_IMAGE:-ghcr.io/olivermarcusson/euripus-server}:${EURIPUS_IMAGE_TAG:-selfhosted-latest}
     restart: unless-stopped
     init: true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     env_file:
       - apps/server/.env
     environment:

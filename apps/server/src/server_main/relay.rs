@@ -172,7 +172,7 @@ async fn relay_hls_playlist(
         );
         error
     })?;
-    info!(
+    debug!(
         component = "euripus-relay",
         asset = "hls-playlist",
         relay_token_id = %relay_token_id,
@@ -306,7 +306,7 @@ pub(super) async fn relay_stream_response(
             "IPTV provider returned a non-success stream response"
         );
     } else {
-        info!(
+        debug!(
             component = "euripus-relay",
             asset = asset,
             relay_token_id = %relay_token_id,
@@ -332,7 +332,7 @@ pub(super) async fn relay_stream_response(
 
         match result {
             Ok(chunk) => {
-                info!(
+                debug!(
                     component = "euripus-relay",
                     asset = %asset_for_stream,
                     relay_token_id = %relay_token_id_for_stream,
