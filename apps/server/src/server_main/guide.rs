@@ -1626,6 +1626,30 @@ mod tests {
         assert!(summary.is_favorite);
     }
 
+    #[tokio::test]
+    async fn expired_visibility_cache_entries_are_removed_without_retaining_guard() {
+        let state = sample_app_state();
+        let cache_key = (Uuid::from_u128(61), None);
+        state.channel_visibility_cache.insert(
+            cache_key,
+            CachedChannelVisibilityMap {
+                values: Arc::new(HashMap::from([(
+                    Uuid::from_u128(62),
+                    ChannelVisibility {
+                        is_hidden: false,
+                        is_placeholder: false,
+                    },
+                )])),
+                expires_at: Instant::now() - Duration::from_secs(1),
+            },
+        );
+
+        let cached = cached_channel_visibility_map(&state, cache_key, Instant::now());
+
+        assert!(cached.is_none());
+        assert!(!state.channel_visibility_cache.contains_key(&cache_key));
+    }
+
     fn sample_app_state() -> AppState {
         AppState {
             pool: PgPoolOptions::new()

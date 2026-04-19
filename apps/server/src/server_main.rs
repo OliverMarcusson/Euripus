@@ -814,11 +814,8 @@ async fn load_channel_visibility_map(
 ) -> Result<Arc<HashMap<Uuid, ChannelVisibility>>> {
     let cache_key = (user_id, profile_id);
     let now = Instant::now();
-    if let Some(cached) = state.channel_visibility_cache.get(&cache_key) {
-        if cached.expires_at > now {
-            return Ok(cached.values.clone());
-        }
-        state.channel_visibility_cache.remove(&cache_key);
+    if let Some(cached) = cached_channel_visibility_map(state, cache_key, now) {
+        return Ok(cached);
     }
 
     let rows = sqlx::query_as::<_, ChannelVisibilityRow>(
@@ -904,6 +901,26 @@ async fn load_channel_visibility_map(
     );
 
     Ok(visibility)
+}
+
+fn cached_channel_visibility_map(
+    state: &AppState,
+    cache_key: (Uuid, Option<Uuid>),
+    now: Instant,
+) -> Option<Arc<HashMap<Uuid, ChannelVisibility>>> {
+    let cached_values = state
+        .channel_visibility_cache
+        .get(&cache_key)
+        .map(|cached| (cached.expires_at, cached.values.clone()));
+
+    match cached_values {
+        Some((expires_at, values)) if expires_at > now => Some(values),
+        Some(_) => {
+            state.channel_visibility_cache.remove(&cache_key);
+            None
+        }
+        None => None,
+    }
 }
 
 fn invalidate_channel_visibility_cache(state: &AppState, user_id: Uuid, profile_id: Option<Uuid>) {
