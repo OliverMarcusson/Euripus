@@ -270,7 +270,7 @@ async fn search_channels_meili(
                     .unwrap_or(true)
             })
             .collect::<std::result::Result<Vec<_>, _>>()?;
-        let total_count = ids.len() as i64;
+        let total_count = meili_total_count(results.estimated_total_hits, ids.len());
         let mut items = load_channels_by_ids(&state.pool, &ids, user_id)
             .await
             .map_err(AppError::from)?;
@@ -364,7 +364,9 @@ async fn search_channels_meili(
         .into_iter()
         .filter(|id| visible_channel_ids.contains(id))
         .collect::<Vec<_>>();
-    let total_count = ordered_entity_ids.len() as i64;
+    let total_count =
+        meili_total_count(primary_results.estimated_total_hits, ordered_entity_ids.len())
+            .max(ordered_entity_ids.len() as i64);
     let page_ids = ordered_entity_ids
         .into_iter()
         .skip(offset as usize)
@@ -428,7 +430,7 @@ async fn search_programs_meili(
                 .unwrap_or(true)
         })
         .collect::<Vec<_>>();
-    let total_count = items.len() as i64;
+    let total_count = meili_total_count(results.estimated_total_hits, items.len());
 
     Ok(ProgramSearchResponse {
         query: query.to_string(),
@@ -442,6 +444,12 @@ async fn search_programs_meili(
 fn next_page_offset(offset: i64, limit: i64, total_count: i64) -> Option<i64> {
     let next_offset = offset + limit;
     (next_offset < total_count).then_some(next_offset)
+}
+
+fn meili_total_count(estimated_total_hits: Option<usize>, fallback_item_count: usize) -> i64 {
+    estimated_total_hits
+        .map(|total| total as i64)
+        .unwrap_or(fallback_item_count as i64)
 }
 
 fn build_search_filter_options(
@@ -626,6 +634,14 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn meili_estimated_total_drives_next_page_offset() {
+        let total_count = meili_total_count(Some(245), 30);
+
+        assert_eq!(total_count, 245);
+        assert_eq!(next_page_offset(0, 30, total_count), Some(30));
     }
 }
 
