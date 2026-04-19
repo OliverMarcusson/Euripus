@@ -1,5 +1,5 @@
 import type { ProviderProfile, SyncJob } from "@euripus/shared"
-import { CheckCircle2, ServerCog } from "lucide-react"
+import { CheckCircle2, ServerCog, Trash2 } from "lucide-react"
 import type { FormEventHandler } from "react"
 import { Controller, type UseFormReturn } from "react-hook-form"
 import { Badge } from "@/components/ui/badge"
@@ -27,29 +27,37 @@ import type { ProviderFormValues } from "@/features/provider/use-provider-settin
 type ProviderSettingsFormProps = {
   form: UseFormReturn<ProviderFormValues>
   provider: ProviderProfile | null | undefined
+  isCreatingProvider: boolean
   latestJob: SyncJob | null | undefined
   savePending: boolean
   validatePending: boolean
+  deletePending: boolean
   validationMessage?: string
   onSubmit: FormEventHandler<HTMLFormElement>
   onValidate: () => void
+  onDelete: () => void
 }
 
 export function ProviderSettingsForm({
   form,
   provider,
+  isCreatingProvider,
   latestJob,
   savePending,
   validatePending,
+  deletePending,
   validationMessage,
   onSubmit,
   onValidate,
+  onDelete,
 }: ProviderSettingsFormProps) {
+  const createMode = isCreatingProvider || !provider
+
   return (
     <Card className="self-start overflow-hidden rounded-none border-0 bg-transparent shadow-none sm:rounded-3xl sm:border sm:border-border/50 sm:bg-card/40 sm:backdrop-blur-xl sm:shadow-2xl">
       <CardHeader className="flex flex-row items-start justify-between gap-4 px-0 pt-0 pb-4 sm:p-6 sm:pb-0">
         <CardTitle className="text-xl font-medium tracking-tight">
-          Provider
+          {createMode ? "Add provider" : "Provider settings"}
         </CardTitle>
         <div className="flex flex-wrap items-center gap-2">
           <Badge
@@ -187,15 +195,30 @@ export function ProviderSettingsForm({
               type="button"
               variant="secondary"
               onClick={onValidate}
-              disabled={validatePending}
+              disabled={validatePending || deletePending}
             >
               <CheckCircle2 data-icon="inline-start" />
               {validatePending ? "Validating..." : "Validate"}
             </Button>
-            <Button type="submit" disabled={savePending}>
+            <Button type="submit" disabled={savePending || deletePending}>
               <ServerCog data-icon="inline-start" />
-              {savePending ? "Saving..." : "Save profile"}
+              {savePending
+                ? "Saving..."
+                : createMode
+                  ? "Add provider"
+                  : "Save provider"}
             </Button>
+            {!createMode ? (
+              <Button
+                type="button"
+                variant="destructive"
+                onClick={onDelete}
+                disabled={deletePending || savePending || validatePending}
+              >
+                <Trash2 data-icon="inline-start" />
+                {deletePending ? "Deleting..." : "Delete provider"}
+              </Button>
+            ) : null}
           </div>
 
           {validationMessage ? (

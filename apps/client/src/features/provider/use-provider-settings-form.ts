@@ -5,11 +5,12 @@ import type {
   SaveProviderPayload,
   SyncJob,
 } from "@euripus/shared"
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { useForm, useWatch } from "react-hook-form"
 import { z } from "zod"
 import {
-  getProvider,
+  deleteProvider,
+  getProviders,
   getSyncStatus,
   saveProvider,
   triggerProviderSync,
@@ -57,6 +58,15 @@ export function createProviderFormValues(
   }
 }
 
+function sortProviders(providers: ProviderProfile[]) {
+  return [...providers].sort((left, right) => {
+    if (left.updatedAt === right.updatedAt) {
+      return right.createdAt.localeCompare(left.createdAt)
+    }
+    return right.updatedAt.localeCompare(left.updatedAt)
+  })
+}
+
 export function reindexEpgSources(
   items: SaveProviderPayload["epgSources"],
 ): SaveProviderPayload["epgSources"] {
@@ -65,8 +75,10 @@ export function reindexEpgSources(
 
 export function toSaveProviderPayload(
   values: ProviderFormValues,
+  providerId?: string,
 ): SaveProviderPayload {
   return {
+    id: providerId,
     ...values,
     password: values.password.trim(),
     epgSources: reindexEpgSources(values.epgSources),
@@ -90,18 +102,33 @@ export function getSyncProgressValue(syncJob: SyncJob) {
 export function useProviderSettingsForm() {
   const queryClient = useQueryClient()
   const [feedbackMessage, setFeedbackMessage] = useState<string | null>(null)
-  const providerQuery = useQuery({
-    queryKey: ["provider"],
-    queryFn: getProvider,
+  const [selectedProviderId, setSelectedProviderId] = useState<string | null>(null)
+  const [isCreatingProvider, setIsCreatingProvider] = useState(false)
+  const lastResetKeyRef = useRef<string | null>(null)
+
+  const providersQuery = useQuery({
+    queryKey: ["providers"],
+    queryFn: getProviders,
     staleTime: STANDARD_QUERY_STALE_TIME_MS,
     refetchInterval: (query) => {
-      const provider = query.state.data
-      return provider?.status === "syncing" ? 1000 : false
+      const providers = query.state.data
+      return providers?.some((provider) => provider.status === "syncing")
+        ? 1000
+        : false
     },
   })
+
+  const providers = providersQuery.data ?? []
+  const selectedProvider = isCreatingProvider
+    ? null
+    : providers.find((provider) => provider.id === selectedProviderId) ??
+      providers[0] ??
+      null
+
   const syncQuery = useQuery({
-    queryKey: ["sync-status"],
-    queryFn: getSyncStatus,
+    queryKey: ["sync-status", selectedProvider?.id],
+    queryFn: () => getSyncStatus(selectedProvider!.id),
+    enabled: selectedProvider !== null,
     staleTime: SYNC_STATUS_STALE_TIME_MS,
     refetchInterval: (query) => {
       const latestJob = query.state.data
@@ -110,48 +137,142 @@ export function useProviderSettingsForm() {
         : false
     },
   })
+
   const form = useForm<ProviderFormValues>({
     resolver: zodResolver(providerSchema),
     defaultValues: createProviderFormValues(null),
   })
 
   useEffect(() => {
-    if (providerQuery.data === undefined || form.formState.isDirty) {
+    if (providersQuery.data === undefined) {
       return
     }
 
-    form.reset(createProviderFormValues(providerQuery.data))
-  }, [form, providerQuery.data])
+    if (providers.length === 0) {
+      const nextKey = "new"
+      setSelectedProviderId(null)
+      if (lastResetKeyRef.current !== nextKey) {
+        form.reset(createProviderFormValues(null))
+        lastResetKeyRef.current = nextKey
+      }
+      return
+    }
+
+    if (isCreatingProvider) {
+      const nextKey = "new"
+      if (lastResetKeyRef.current !== nextKey) {
+        form.reset(createProviderFormValues(null))
+        lastResetKeyRef.current = nextKey
+      }
+      return
+    }
+
+    const nextSelectedProvider =
+      providers.find((provider) => provider.id === selectedProviderId) ?? providers[0]
+
+    if (!nextSelectedProvider) {
+      return
+    }
+
+    if (nextSelectedProvider.id !== selectedProviderId) {
+      setSelectedProviderId(nextSelectedProvider.id)
+      return
+    }
+
+    if (lastResetKeyRef.current !== nextSelectedProvider.id) {
+      form.reset(createProviderFormValues(nextSelectedProvider))
+      lastResetKeyRef.current = nextSelectedProvider.id
+    }
+  }, [
+    form,
+    isCreatingProvider,
+    providers,
+    providersQuery.data,
+    selectedProviderId,
+  ])
 
   const validateMutation = useMutation({ mutationFn: validateProvider })
   const saveMutation = useMutation({
     mutationFn: saveProvider,
     onSuccess: async (provider) => {
       setFeedbackMessage(provider.browserPlaybackWarning ?? null)
-      queryClient.setQueryData(["provider"], provider)
+      setIsCreatingProvider(false)
+      setSelectedProviderId(provider.id)
+      lastResetKeyRef.current = provider.id
+      queryClient.setQueryData<ProviderProfile[]>(["providers"], (current) => {
+        const next = current ? [...current] : []
+        const existingIndex = next.findIndex((item) => item.id === provider.id)
+        if (existingIndex >= 0) {
+          next[existingIndex] = provider
+        } else {
+          next.push(provider)
+        }
+        return sortProviders(next)
+      })
       form.reset(createProviderFormValues(provider))
-      await queryClient.invalidateQueries({ queryKey: ["provider"] })
+      await queryClient.invalidateQueries({ queryKey: ["providers"] })
+      await queryClient.invalidateQueries({
+        queryKey: ["sync-status", provider.id],
+      })
+    },
+  })
+  const deleteMutation = useMutation({
+    mutationFn: deleteProvider,
+    onSuccess: async (_, deletedProviderId) => {
+      setFeedbackMessage(null)
+      validateMutation.reset()
+      saveMutation.reset()
+      syncMutation.reset()
+      queryClient.setQueryData<ProviderProfile[]>(["providers"], (current) => {
+        const next = (current ?? []).filter(
+          (provider) => provider.id !== deletedProviderId,
+        )
+        return sortProviders(next)
+      })
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["providers"] }),
+        queryClient.invalidateQueries({ queryKey: ["channels"] }),
+        queryClient.invalidateQueries({ queryKey: ["guide"] }),
+        queryClient.invalidateQueries({ queryKey: ["sync-status"] }),
+      ])
     },
   })
   const syncMutation = useMutation({
-    mutationFn: triggerProviderSync,
+    mutationFn: async () => {
+      if (!selectedProvider) {
+        throw new Error("Select a provider before triggering sync.")
+      }
+      return triggerProviderSync(selectedProvider.id)
+    },
     onSuccess: async () => {
+      if (!selectedProvider) {
+        return
+      }
+
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["provider"] }),
-        queryClient.invalidateQueries({ queryKey: ["sync-status"] }),
+        queryClient.invalidateQueries({ queryKey: ["providers"] }),
+        queryClient.invalidateQueries({
+          queryKey: ["sync-status", selectedProvider.id],
+        }),
         queryClient.invalidateQueries({ queryKey: ["channels"] }),
         queryClient.invalidateQueries({ queryKey: ["guide"] }),
       ])
     },
     onError: async () => {
+      if (!selectedProvider) {
+        return
+      }
+
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["provider"] }),
-        queryClient.invalidateQueries({ queryKey: ["sync-status"] }),
+        queryClient.invalidateQueries({ queryKey: ["providers"] }),
+        queryClient.invalidateQueries({
+          queryKey: ["sync-status", selectedProvider.id],
+        }),
       ])
     },
   })
 
-  const provider = providerQuery.data
+  const provider = selectedProvider
   const latestJob = syncQuery.data
   const watchedEpgSources = useWatch({
     control: form.control,
@@ -165,6 +286,26 @@ export function useProviderSettingsForm() {
   const displayedEpgSourceCount = form.formState.isDirty
     ? watchedEpgSources.length
     : provider?.epgSources.length ?? watchedEpgSources.length
+
+  function resetTransientState() {
+    setFeedbackMessage(null)
+    validateMutation.reset()
+    saveMutation.reset()
+    deleteMutation.reset()
+    syncMutation.reset()
+  }
+
+  function selectProvider(providerId: string) {
+    setIsCreatingProvider(false)
+    setSelectedProviderId(providerId)
+    resetTransientState()
+  }
+
+  function startCreatingProvider() {
+    setIsCreatingProvider(true)
+    setSelectedProviderId(null)
+    resetTransientState()
+  }
 
   function ensurePasswordForAction(values: ProviderFormValues) {
     if (provider || values.password.trim().length > 0) {
@@ -186,7 +327,7 @@ export function useProviderSettingsForm() {
 
     setFeedbackMessage(null)
     validateMutation.reset()
-    saveMutation.mutate(toSaveProviderPayload(values))
+    saveMutation.mutate(toSaveProviderPayload(values, provider?.id))
   })
 
   const submitValidate = form.handleSubmit((values) => {
@@ -196,8 +337,23 @@ export function useProviderSettingsForm() {
 
     setFeedbackMessage(null)
     validateMutation.reset()
-    validateMutation.mutate(toSaveProviderPayload(values))
+    validateMutation.mutate(toSaveProviderPayload(values, provider?.id))
   })
+
+  function submitDelete() {
+    if (!provider) {
+      return
+    }
+
+    if (
+      typeof window !== "undefined" &&
+      !window.confirm(`Delete provider ${provider.username}? This removes its synced channels, guide data, and sync history.`)
+    ) {
+      return
+    }
+
+    deleteMutation.mutate(provider.id)
+  }
 
   return {
     displayedEpgSourceCount,
@@ -207,10 +363,17 @@ export function useProviderSettingsForm() {
       provider?.browserPlaybackWarning ??
       null,
     form,
+    deleteMutation,
+    isCreatingProvider,
     latestJob,
     provider,
-    providerQuery,
+    providers,
+    providersQuery,
     saveMutation,
+    selectedProviderId: provider?.id ?? null,
+    selectProvider,
+    startCreatingProvider,
+    submitDelete,
     submitSave,
     submitValidate,
     syncBlockedByActiveJob,

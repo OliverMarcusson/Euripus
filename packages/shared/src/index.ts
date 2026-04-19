@@ -466,6 +466,7 @@ export type RegisterPayload = {
 export type LoginPayload = RegisterPayload;
 
 export type SaveProviderPayload = {
+  id?: string;
   baseUrl: string;
   username: string;
   password: string;

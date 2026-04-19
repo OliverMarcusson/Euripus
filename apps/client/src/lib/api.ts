@@ -376,30 +376,34 @@ export function revokeSession(id: string) {
   return request<void>(`/sessions/${id}`, { method: "DELETE" });
 }
 
-export function getProvider() {
-  return request<ProviderProfile | null>("/provider");
+export function getProviders() {
+  return request<ProviderProfile[]>("/providers");
 }
 
 export function validateProvider(payload: SaveProviderPayload) {
-  return request<ValidateProviderResponse>("/provider/validate", {
+  return request<ValidateProviderResponse>("/providers/validate", {
     method: "POST",
     body: JSON.stringify(payload),
   });
 }
 
 export function saveProvider(payload: SaveProviderPayload) {
-  return request<ProviderProfile>("/provider/xtreme", {
-    method: "PUT",
+  return request<ProviderProfile>("/providers/xtreme", {
+    method: "POST",
     body: JSON.stringify(payload),
   });
 }
 
-export function triggerProviderSync() {
-  return request<SyncJob>("/provider/sync", { method: "POST" });
+export function deleteProvider(providerId: string) {
+  return request<void>(`/providers/${providerId}`, { method: "DELETE" });
 }
 
-export function getSyncStatus() {
-  return request<SyncJob | null>("/provider/sync-status");
+export function triggerProviderSync(providerId: string) {
+  return request<SyncJob>(`/providers/${providerId}/sync`, { method: "POST" });
+}
+
+export function getSyncStatus(providerId: string) {
+  return request<SyncJob | null>(`/providers/${providerId}/sync-status`);
 }
 
 export function getChannels() {

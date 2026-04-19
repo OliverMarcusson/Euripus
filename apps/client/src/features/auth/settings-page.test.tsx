@@ -1,8 +1,10 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { ProviderProfile } from "@euripus/shared";
 import { SettingsPage } from "@/features/auth/settings-page";
 import {
-  getProvider,
+  deleteProvider,
+  getProviders,
   getRecents,
   getRemoteReceivers,
   getServerNetworkStatus,
@@ -18,7 +20,8 @@ import { useThemeStore } from "@/store/theme-store";
 
 vi.mock("@/lib/api", () => ({
   addFavorite: vi.fn(),
-  getProvider: vi.fn(),
+  deleteProvider: vi.fn(),
+  getProviders: vi.fn(),
   getRecents: vi.fn(),
   getRemoteReceivers: vi.fn(),
   getServerNetworkStatus: vi.fn(),
@@ -33,8 +36,9 @@ vi.mock("@/lib/api", () => ({
   validateProvider: vi.fn(),
 }));
 
+const mockedDeleteProvider = vi.mocked(deleteProvider);
 const mockedGetRecents = vi.mocked(getRecents);
-const mockedGetProvider = vi.mocked(getProvider);
+const mockedGetProviders = vi.mocked(getProviders);
 const mockedGetRemoteReceivers = vi.mocked(getRemoteReceivers);
 const mockedGetServerNetworkStatus = vi.mocked(getServerNetworkStatus);
 const mockedGetSyncStatus = vi.mocked(getSyncStatus);
@@ -48,8 +52,9 @@ const mockedUnpairReceiver = vi.mocked(unpairReceiver);
 describe("SettingsPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockedDeleteProvider.mockResolvedValue();
     mockedGetRecents.mockResolvedValue([]);
-    mockedGetProvider.mockResolvedValue(null);
+    mockedGetProviders.mockResolvedValue([]);
     mockedGetRemoteReceivers.mockResolvedValue([]);
     mockedPairReceiver.mockResolvedValue({
       id: "receiver-1",
@@ -185,35 +190,37 @@ describe("SettingsPage", () => {
         lastPlayedAt: "2026-04-04T12:00:00.000Z",
       },
     ]);
-    mockedGetProvider.mockResolvedValue({
-      id: "provider-1",
-      providerType: "xtreme",
-      baseUrl: "https://provider.example.com",
-      username: "demo",
-      outputFormat: "m3u8",
-      playbackMode: "direct",
-      status: "valid",
-      lastValidatedAt: "2026-04-04T12:00:00.000Z",
-      lastSyncAt: "2026-04-04T12:30:00.000Z",
-      lastSyncError: null,
-      createdAt: "2026-04-04T10:00:00.000Z",
-      updatedAt: "2026-04-04T12:30:00.000Z",
-      epgSources: [
-        {
-          id: "epg-source-1",
-          url: "https://open-epg.com/files/sweden4.xml.gz",
-          priority: 0,
-          enabled: true,
-          sourceKind: "external",
-          lastSyncAt: "2026-04-04T12:30:00.000Z",
-          lastSyncError: null,
-          lastProgramCount: 500,
-          lastMatchedCount: 291,
-          createdAt: "2026-04-04T10:00:00.000Z",
-          updatedAt: "2026-04-04T12:30:00.000Z",
-        },
-      ],
-    });
+    mockedGetProviders.mockResolvedValue([
+      {
+        id: "provider-1",
+        providerType: "xtreme",
+        baseUrl: "https://provider.example.com",
+        username: "demo",
+        outputFormat: "m3u8",
+        playbackMode: "direct",
+        status: "valid",
+        lastValidatedAt: "2026-04-04T12:00:00.000Z",
+        lastSyncAt: "2026-04-04T12:30:00.000Z",
+        lastSyncError: null,
+        createdAt: "2026-04-04T10:00:00.000Z",
+        updatedAt: "2026-04-04T12:30:00.000Z",
+        epgSources: [
+          {
+            id: "epg-source-1",
+            url: "https://open-epg.com/files/sweden4.xml.gz",
+            priority: 0,
+            enabled: true,
+            sourceKind: "external",
+            lastSyncAt: "2026-04-04T12:30:00.000Z",
+            lastSyncError: null,
+            lastProgramCount: 500,
+            lastMatchedCount: 291,
+            createdAt: "2026-04-04T10:00:00.000Z",
+            updatedAt: "2026-04-04T12:30:00.000Z",
+          },
+        ],
+      },
+    ]);
 
     render(
       <QueryClientProvider client={new QueryClient()}>
@@ -221,7 +228,7 @@ describe("SettingsPage", () => {
       </QueryClientProvider>,
     );
 
-    expect(await screen.findByText("Provider")).toBeInTheDocument();
+    expect(await screen.findByText("Providers")).toBeInTheDocument();
     expect(await screen.findByText("Arena 1")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^play$/i })).toBeInTheDocument();
     expect(
@@ -242,21 +249,23 @@ describe("SettingsPage", () => {
   });
 
   it("saves a newly added external epg source", async () => {
-    mockedGetProvider.mockResolvedValue({
-      id: "provider-1",
-      providerType: "xtreme",
-      baseUrl: "https://provider.example.com",
-      username: "demo",
-      outputFormat: "m3u8",
-      playbackMode: "direct",
-      status: "valid",
-      lastValidatedAt: "2026-04-04T12:00:00.000Z",
-      lastSyncAt: null,
-      lastSyncError: null,
-      createdAt: "2026-04-04T10:00:00.000Z",
-      updatedAt: "2026-04-04T12:00:00.000Z",
-      epgSources: [],
-    });
+    mockedGetProviders.mockResolvedValue([
+      {
+        id: "provider-1",
+        providerType: "xtreme",
+        baseUrl: "https://provider.example.com",
+        username: "demo",
+        outputFormat: "m3u8",
+        playbackMode: "direct",
+        status: "valid",
+        lastValidatedAt: "2026-04-04T12:00:00.000Z",
+        lastSyncAt: null,
+        lastSyncError: null,
+        createdAt: "2026-04-04T10:00:00.000Z",
+        updatedAt: "2026-04-04T12:00:00.000Z",
+        epgSources: [],
+      },
+    ]);
 
     render(
       <QueryClientProvider client={new QueryClient()}>
@@ -271,7 +280,7 @@ describe("SettingsPage", () => {
     fireEvent.change(screen.getByPlaceholderText(/guide\.xml\.gz/i), {
       target: { value: "https://www.open-epg.com/files/sweden4.xml.gz" },
     });
-    fireEvent.click(screen.getByRole("button", { name: /save profile/i }));
+    fireEvent.click(screen.getByRole("button", { name: /save provider/i }));
 
     await waitFor(() => expect(mockedSaveProvider).toHaveBeenCalled());
     expect(mockedSaveProvider.mock.calls[0]?.[0]).toEqual(
@@ -288,21 +297,23 @@ describe("SettingsPage", () => {
   });
 
   it("shows sync errors from failed manual sync attempts", async () => {
-    mockedGetProvider.mockResolvedValue({
-      id: "provider-1",
-      providerType: "xtreme",
-      baseUrl: "https://provider.example.com",
-      username: "demo",
-      outputFormat: "m3u8",
-      playbackMode: "direct",
-      status: "error",
-      lastValidatedAt: "2026-04-04T12:00:00.000Z",
-      lastSyncAt: null,
-      lastSyncError: "Previous sync failed.",
-      createdAt: "2026-04-04T10:00:00.000Z",
-      updatedAt: "2026-04-04T12:00:00.000Z",
-      epgSources: [],
-    });
+    mockedGetProviders.mockResolvedValue([
+      {
+        id: "provider-1",
+        providerType: "xtreme",
+        baseUrl: "https://provider.example.com",
+        username: "demo",
+        outputFormat: "m3u8",
+        playbackMode: "direct",
+        status: "error",
+        lastValidatedAt: "2026-04-04T12:00:00.000Z",
+        lastSyncAt: null,
+        lastSyncError: "Previous sync failed.",
+        createdAt: "2026-04-04T10:00:00.000Z",
+        updatedAt: "2026-04-04T12:00:00.000Z",
+        epgSources: [],
+      },
+    ]);
     mockedTriggerProviderSync.mockRejectedValue(
       new Error("A sync is already queued or running for this provider."),
     );
@@ -326,21 +337,23 @@ describe("SettingsPage", () => {
   });
 
   it("disables the sync trigger while a sync job is already active", async () => {
-    mockedGetProvider.mockResolvedValue({
-      id: "provider-1",
-      providerType: "xtreme",
-      baseUrl: "https://provider.example.com",
-      username: "demo",
-      outputFormat: "m3u8",
-      playbackMode: "direct",
-      status: "syncing",
-      lastValidatedAt: "2026-04-04T12:00:00.000Z",
-      lastSyncAt: null,
-      lastSyncError: null,
-      createdAt: "2026-04-04T10:00:00.000Z",
-      updatedAt: "2026-04-05T10:00:00.000Z",
-      epgSources: [],
-    });
+    mockedGetProviders.mockResolvedValue([
+      {
+        id: "provider-1",
+        providerType: "xtreme",
+        baseUrl: "https://provider.example.com",
+        username: "demo",
+        outputFormat: "m3u8",
+        playbackMode: "direct",
+        status: "syncing",
+        lastValidatedAt: "2026-04-04T12:00:00.000Z",
+        lastSyncAt: null,
+        lastSyncError: null,
+        createdAt: "2026-04-04T10:00:00.000Z",
+        updatedAt: "2026-04-05T10:00:00.000Z",
+        epgSources: [],
+      },
+    ]);
     mockedGetSyncStatus.mockResolvedValue({
       id: "sync-job-2",
       status: "running",
@@ -367,24 +380,39 @@ describe("SettingsPage", () => {
     ).toBeDisabled();
   });
 
-  it("shows browser playback warnings returned after saving a provider", async () => {
-    mockedSaveProvider.mockResolvedValue({
-      id: "provider-1",
-      providerType: "xtreme",
-      baseUrl: "https://provider.example.com",
-      username: "demo",
-      outputFormat: "ts",
-      playbackMode: "direct",
-      status: "valid",
-      lastValidatedAt: "2026-04-04T12:00:00.000Z",
-      lastSyncAt: null,
-      lastSyncError: null,
-      createdAt: "2026-04-04T10:00:00.000Z",
-      updatedAt: "2026-04-04T12:00:00.000Z",
-      browserPlaybackWarning:
-        "Provider credentials validated, but Euripus could not verify browser HLS playback.",
-      epgSources: [],
-    });
+  it("switches between multiple saved providers", async () => {
+    mockedGetProviders.mockResolvedValue([
+      {
+        id: "provider-1",
+        providerType: "xtreme",
+        baseUrl: "https://alpha.example.com",
+        username: "alpha",
+        outputFormat: "m3u8",
+        playbackMode: "direct",
+        status: "valid",
+        lastValidatedAt: "2026-04-04T12:00:00.000Z",
+        lastSyncAt: null,
+        lastSyncError: null,
+        createdAt: "2026-04-04T10:00:00.000Z",
+        updatedAt: "2026-04-04T12:00:00.000Z",
+        epgSources: [],
+      },
+      {
+        id: "provider-2",
+        providerType: "xtreme",
+        baseUrl: "https://beta.example.com",
+        username: "beta",
+        outputFormat: "ts",
+        playbackMode: "relay",
+        status: "valid",
+        lastValidatedAt: "2026-04-04T13:00:00.000Z",
+        lastSyncAt: null,
+        lastSyncError: null,
+        createdAt: "2026-04-04T11:00:00.000Z",
+        updatedAt: "2026-04-04T13:00:00.000Z",
+        epgSources: [],
+      },
+    ]);
 
     render(
       <QueryClientProvider client={new QueryClient()}>
@@ -392,16 +420,103 @@ describe("SettingsPage", () => {
       </QueryClientProvider>,
     );
 
-    fireEvent.change(await screen.findByLabelText(/base url/i), {
-      target: { value: "https://provider.example.com" },
-    });
-    fireEvent.change(screen.getByLabelText(/provider username/i), {
-      target: { value: "demo" },
-    });
-    fireEvent.change(screen.getByLabelText(/provider password/i), {
+    expect(await screen.findByDisplayValue("https://alpha.example.com")).toBeInTheDocument();
+
+    fireEvent.click(
+      (await screen.findByText("beta · beta.example.com")).closest("button")!,
+    );
+
+    expect(await screen.findByDisplayValue("https://beta.example.com")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("beta")).toBeInTheDocument();
+  });
+
+  it("deletes the selected provider and falls back to another saved provider", async () => {
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const alphaProvider: ProviderProfile = {
+      id: "provider-1",
+      providerType: "xtreme",
+      baseUrl: "https://alpha.example.com",
+      username: "alpha",
+      outputFormat: "m3u8",
+      playbackMode: "direct",
+      status: "valid",
+      lastValidatedAt: "2026-04-04T12:00:00.000Z",
+      lastSyncAt: null,
+      lastSyncError: null,
+      createdAt: "2026-04-04T10:00:00.000Z",
+      updatedAt: "2026-04-04T12:00:00.000Z",
+      epgSources: [],
+    };
+    const betaProvider: ProviderProfile = {
+      id: "provider-2",
+      providerType: "xtreme",
+      baseUrl: "https://beta.example.com",
+      username: "beta",
+      outputFormat: "ts",
+      playbackMode: "relay",
+      status: "valid",
+      lastValidatedAt: "2026-04-04T13:00:00.000Z",
+      lastSyncAt: null,
+      lastSyncError: null,
+      createdAt: "2026-04-04T11:00:00.000Z",
+      updatedAt: "2026-04-04T13:00:00.000Z",
+      epgSources: [],
+    };
+    mockedGetProviders
+      .mockResolvedValueOnce([alphaProvider, betaProvider])
+      .mockResolvedValue([betaProvider]);
+
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <SettingsPage />
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByDisplayValue("https://alpha.example.com")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /delete provider/i }));
+
+    await waitFor(() => expect(mockedDeleteProvider).toHaveBeenCalled());
+    expect(mockedDeleteProvider.mock.calls[0]?.[0]).toBe("provider-1");
+    expect(await screen.findByDisplayValue("https://beta.example.com")).toBeInTheDocument();
+
+    confirmSpy.mockRestore();
+  });
+
+  it("shows browser playback warnings returned after saving a provider", async () => {
+    const existingProvider = {
+      id: "provider-1",
+      providerType: "xtreme" as const,
+      baseUrl: "https://provider.example.com",
+      username: "demo",
+      outputFormat: "m3u8" as const,
+      playbackMode: "direct" as const,
+      status: "valid" as const,
+      lastValidatedAt: "2026-04-04T12:00:00.000Z",
+      lastSyncAt: null,
+      lastSyncError: null,
+      createdAt: "2026-04-04T10:00:00.000Z",
+      updatedAt: "2026-04-04T12:00:00.000Z",
+      epgSources: [],
+    };
+    const savedProvider = {
+      ...existingProvider,
+      outputFormat: "ts" as const,
+      browserPlaybackWarning:
+        "Provider credentials validated, but Euripus could not verify browser HLS playback.",
+    };
+    mockedGetProviders.mockResolvedValue([savedProvider]);
+    mockedSaveProvider.mockResolvedValue(savedProvider);
+
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <SettingsPage />
+      </QueryClientProvider>,
+    );
+
+    fireEvent.change(await screen.findByLabelText(/provider password/i), {
       target: { value: "secret" },
     });
-    fireEvent.click(screen.getByRole("button", { name: /save profile/i }));
+    fireEvent.click(screen.getByRole("button", { name: /save provider/i }));
 
     expect(
       await screen.findByText(/could not verify browser hls playback/i),
