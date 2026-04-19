@@ -2,11 +2,12 @@ use super::*;
 
 pub(super) fn shared_router() -> Router<AppState> {
     Router::new()
-        .route("/provider", get(get_provider))
-        .route("/provider/validate", post(validate_provider))
-        .route("/provider/xtreme", put(save_provider))
-        .route("/provider/sync", post(trigger_sync))
-        .route("/provider/sync-status", get(get_sync_status))
+        .route("/providers", get(list_providers))
+        .route("/providers/validate", post(validate_provider))
+        .route("/providers/xtreme", post(save_provider))
+        .route("/providers/{id}", delete(delete_provider))
+        .route("/providers/{id}/sync", post(trigger_sync))
+        .route("/providers/{id}/sync-status", get(get_sync_status))
 }
 
 #[derive(Debug, Serialize)]
@@ -47,6 +48,7 @@ struct EpgSourceResponse {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SaveProviderPayload {
+    id: Option<Uuid>,
     base_url: String,
     username: String,
     password: String,
@@ -103,28 +105,11 @@ async fn load_epg_sources(
     Ok(sources)
 }
 
-async fn load_provider_profile_response(
-    pool: &PgPool,
-    user_id: Uuid,
-) -> Result<Option<ProviderProfileResponse>, AppError> {
-    let provider = sqlx::query_as::<_, ProviderProfileRecord>(
-        r#"
-        SELECT
-          id, user_id, provider_type, base_url, username, password_encrypted, output_format, playback_mode,
-          status, last_validated_at, last_sync_at, last_sync_error, created_at, updated_at
-        FROM provider_profiles
-        WHERE user_id = $1
-        "#,
-    )
-    .bind(user_id)
-    .fetch_optional(pool)
-    .await?;
-
-    let Some(provider) = provider else {
-        return Ok(None);
-    };
-
-    Ok(Some(ProviderProfileResponse {
+fn provider_profile_response_from_record(
+    provider: ProviderProfileRecord,
+    epg_sources: Vec<EpgSourceResponse>,
+) -> ProviderProfileResponse {
+    ProviderProfileResponse {
         id: provider.id,
         provider_type: provider.provider_type,
         base_url: provider.base_url,
@@ -138,8 +123,73 @@ async fn load_provider_profile_response(
         created_at: provider.created_at,
         updated_at: provider.updated_at,
         browser_playback_warning: None,
-        epg_sources: load_epg_sources(pool, provider.id).await?,
-    }))
+        epg_sources,
+    }
+}
+
+async fn load_provider_profile_record(
+    pool: &PgPool,
+    user_id: Uuid,
+    profile_id: Uuid,
+) -> Result<Option<ProviderProfileRecord>, AppError> {
+    sqlx::query_as::<_, ProviderProfileRecord>(
+        r#"
+        SELECT
+          id, user_id, provider_type, base_url, username, password_encrypted, output_format, playback_mode,
+          status, last_validated_at, last_sync_at, last_sync_error, created_at, updated_at
+        FROM provider_profiles
+        WHERE user_id = $1 AND id = $2
+        "#,
+    )
+    .bind(user_id)
+    .bind(profile_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(Into::into)
+}
+
+async fn load_provider_profile_response(
+    pool: &PgPool,
+    user_id: Uuid,
+    profile_id: Uuid,
+) -> Result<Option<ProviderProfileResponse>, AppError> {
+    let provider = load_provider_profile_record(pool, user_id, profile_id).await?;
+    let Some(provider) = provider else {
+        return Ok(None);
+    };
+
+    let epg_sources = load_epg_sources(pool, provider.id).await?;
+    Ok(Some(provider_profile_response_from_record(
+        provider,
+        epg_sources,
+    )))
+}
+
+async fn load_provider_profile_responses(
+    pool: &PgPool,
+    user_id: Uuid,
+) -> Result<Vec<ProviderProfileResponse>, AppError> {
+    let providers = sqlx::query_as::<_, ProviderProfileRecord>(
+        r#"
+        SELECT
+          id, user_id, provider_type, base_url, username, password_encrypted, output_format, playback_mode,
+          status, last_validated_at, last_sync_at, last_sync_error, created_at, updated_at
+        FROM provider_profiles
+        WHERE user_id = $1
+        ORDER BY updated_at DESC, created_at DESC, id ASC
+        "#,
+    )
+    .bind(user_id)
+    .fetch_all(pool)
+    .await?;
+
+    let mut responses = Vec::with_capacity(providers.len());
+    for provider in providers {
+        let epg_sources = load_epg_sources(pool, provider.id).await?;
+        responses.push(provider_profile_response_from_record(provider, epg_sources));
+    }
+
+    Ok(responses)
 }
 
 fn combine_provider_validation_message(message: &str, warning: Option<&str>) -> String {
@@ -273,14 +323,24 @@ async fn store_epg_sources(
     Ok(())
 }
 
-async fn get_provider(
+async fn require_target_provider_profile(
+    pool: &PgPool,
+    user_id: Uuid,
+    profile_id: Uuid,
+) -> Result<ProviderProfileRecord, AppError> {
+    load_provider_profile_record(pool, user_id, profile_id)
+        .await?
+        .ok_or_else(|| AppError::NotFound("Provider profile not found.".to_string()))
+}
+
+async fn list_providers(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Response, AppError> {
     let auth = require_auth(&state, &headers).await?;
-    let provider = load_provider_profile_response(&state.pool, auth.user_id).await?;
+    let providers = load_provider_profile_responses(&state.pool, auth.user_id).await?;
 
-    json_response_with_revalidation(&headers, &provider)
+    json_response_with_revalidation(&headers, &providers)
 }
 
 async fn validate_provider(
@@ -290,18 +350,10 @@ async fn validate_provider(
 ) -> ApiResult<ValidateProviderResponse> {
     let auth = require_auth(&state, &headers).await?;
     let output_format = normalize_output_format(&payload.output_format)?;
-    let existing_profile = sqlx::query_as::<_, ProviderProfileRecord>(
-        r#"
-        SELECT
-          id, user_id, provider_type, base_url, username, password_encrypted, output_format, playback_mode,
-          status, last_validated_at, last_sync_at, last_sync_error, created_at, updated_at
-        FROM provider_profiles
-        WHERE user_id = $1
-        "#,
-    )
-    .bind(auth.user_id)
-    .fetch_optional(&state.pool)
-    .await?;
+    let existing_profile = match payload.id {
+        Some(profile_id) => Some(require_target_provider_profile(&state.pool, auth.user_id, profile_id).await?),
+        None => None,
+    };
     let effective_password = resolve_effective_password(
         &state.config.encryption_key,
         existing_profile.as_ref(),
@@ -335,19 +387,12 @@ async fn save_provider(
 ) -> ApiResult<ProviderProfileResponse> {
     let auth = require_auth(&state, &headers).await?;
     let output_format = normalize_output_format(&payload.output_format)?;
+    let playback_mode = normalize_playback_mode(&payload.playback_mode)?;
     let epg_sources = normalize_epg_source_payloads(payload.epg_sources)?;
-    let existing_profile = sqlx::query_as::<_, ProviderProfileRecord>(
-        r#"
-        SELECT
-          id, user_id, provider_type, base_url, username, password_encrypted, output_format, playback_mode,
-          status, last_validated_at, last_sync_at, last_sync_error, created_at, updated_at
-        FROM provider_profiles
-        WHERE user_id = $1
-        "#,
-    )
-    .bind(auth.user_id)
-    .fetch_optional(&state.pool)
-    .await?;
+    let existing_profile = match payload.id {
+        Some(profile_id) => Some(require_target_provider_profile(&state.pool, auth.user_id, profile_id).await?),
+        None => None,
+    };
     let effective_password = resolve_effective_password(
         &state.config.encryption_key,
         existing_profile.as_ref(),
@@ -368,75 +413,101 @@ async fn save_provider(
     let browser_playback_warning = browser_hls_warning_for_credentials(&state, &credentials).await;
 
     let encrypted_password = encrypt_secret(&state.config.encryption_key, &effective_password)?;
-    let profile_id = sqlx::query_scalar::<_, Uuid>(
-        r#"
-        INSERT INTO provider_profiles (
-          user_id, provider_type, base_url, username, password_encrypted, output_format, playback_mode, status, last_validated_at, last_sync_error
+    let profile_id = if let Some(existing_profile) = existing_profile.as_ref() {
+        sqlx::query(
+            r#"
+            UPDATE provider_profiles
+            SET
+              provider_type = 'xtreme',
+              base_url = $3,
+              username = $4,
+              password_encrypted = $5,
+              output_format = $6,
+              playback_mode = $7,
+              status = 'valid',
+              last_validated_at = NOW(),
+              last_sync_error = NULL,
+              updated_at = NOW()
+            WHERE user_id = $1 AND id = $2
+            "#,
         )
-        VALUES ($1, 'xtreme', $2, $3, $4, $5, $6, 'valid', NOW(), NULL)
-        ON CONFLICT (user_id)
-        DO UPDATE SET
-          provider_type = 'xtreme',
-          base_url = EXCLUDED.base_url,
-          username = EXCLUDED.username,
-          password_encrypted = EXCLUDED.password_encrypted,
-          output_format = EXCLUDED.output_format,
-          playback_mode = EXCLUDED.playback_mode,
-          status = 'valid',
-          last_validated_at = NOW(),
-          last_sync_error = NULL,
-          updated_at = NOW()
-        RETURNING
-          id
-        "#,
-    )
-    .bind(auth.user_id)
-    .bind(payload.base_url)
-    .bind(payload.username)
-    .bind(encrypted_password)
-    .bind(output_format_as_str(output_format))
-    .bind(playback_mode_as_str(normalize_playback_mode(&payload.playback_mode)?))
-    .fetch_one(&state.pool)
-    .await?;
+        .bind(auth.user_id)
+        .bind(existing_profile.id)
+        .bind(&payload.base_url)
+        .bind(&payload.username)
+        .bind(encrypted_password)
+        .bind(output_format_as_str(output_format))
+        .bind(playback_mode_as_str(playback_mode))
+        .execute(&state.pool)
+        .await?;
+        existing_profile.id
+    } else {
+        let profile_id = Uuid::new_v4();
+        sqlx::query(
+            r#"
+            INSERT INTO provider_profiles (
+              id, user_id, provider_type, base_url, username, password_encrypted, output_format, playback_mode, status, last_validated_at, last_sync_error
+            )
+            VALUES ($1, $2, 'xtreme', $3, $4, $5, $6, $7, 'valid', NOW(), NULL)
+            "#,
+        )
+        .bind(profile_id)
+        .bind(auth.user_id)
+        .bind(&payload.base_url)
+        .bind(&payload.username)
+        .bind(encrypted_password)
+        .bind(output_format_as_str(output_format))
+        .bind(playback_mode_as_str(playback_mode))
+        .execute(&state.pool)
+        .await?;
+        profile_id
+    };
 
     store_epg_sources(&state.pool, profile_id, &epg_sources).await?;
-    let provider = load_provider_profile_response(&state.pool, auth.user_id)
+    let provider = load_provider_profile_response(&state.pool, auth.user_id, profile_id)
         .await?
         .ok_or_else(|| {
             AppError::NotFound("Provider profile was not found after saving.".to_string())
         })?;
 
     Ok(Json(ProviderProfileResponse {
-        browser_playback_warning: browser_playback_warning,
+        browser_playback_warning,
         ..provider
     }))
+}
+
+async fn delete_provider(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+) -> Result<StatusCode, AppError> {
+    let auth = require_auth(&state, &headers).await?;
+    let profile = require_target_provider_profile(&state.pool, auth.user_id, id).await?;
+
+    sync::ensure_no_active_sync(&state.pool, profile.id).await?;
+
+    sqlx::query("DELETE FROM provider_profiles WHERE user_id = $1 AND id = $2")
+        .bind(auth.user_id)
+        .bind(profile.id)
+        .execute(&state.pool)
+        .await?;
+
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn trigger_sync(
     State(state): State<AppState>,
     headers: HeaderMap,
+    Path(id): Path<Uuid>,
 ) -> ApiResult<SyncJobResponse> {
     let auth = require_auth(&state, &headers).await?;
-    let profile = sqlx::query_as::<_, ProviderProfileRecord>(
-        r#"
-        SELECT
-          id, user_id, provider_type, base_url, username, password_encrypted, output_format, playback_mode,
-          status, last_validated_at, last_sync_at, last_sync_error, created_at, updated_at
-        FROM provider_profiles
-        WHERE user_id = $1
-        "#,
-    )
-    .bind(auth.user_id)
-    .fetch_optional(&state.pool)
-    .await?
-    .ok_or_else(|| AppError::BadRequest("Connect a provider before starting sync".to_string()))?;
+    let profile = require_target_provider_profile(&state.pool, auth.user_id, id).await?;
 
     decrypt_secret(&state.config.encryption_key, &profile.password_encrypted)
         .map_err(|_| AppError::BadRequest(stored_password_reentry_message()))?;
 
     sync::ensure_no_active_sync(&state.pool, profile.id).await?;
-    let job =
-        sync::insert_sync_job(&state.pool, auth.user_id, profile.id, "full", "manual").await?;
+    let job = sync::insert_sync_job(&state.pool, auth.user_id, profile.id, "full", "manual").await?;
 
     sync::spawn_sync_job(state.clone(), auth.user_id, profile.id, job.id);
     Ok(Json(job))
@@ -445,8 +516,11 @@ async fn trigger_sync(
 async fn get_sync_status(
     State(state): State<AppState>,
     headers: HeaderMap,
+    Path(id): Path<Uuid>,
 ) -> ApiResult<Option<SyncJobResponse>> {
     let auth = require_auth(&state, &headers).await?;
+    require_target_provider_profile(&state.pool, auth.user_id, id).await?;
+
     let job = sqlx::query_as::<_, SyncJobResponse>(
         r#"
         SELECT
@@ -463,12 +537,13 @@ async fn get_sync_status(
           phase_message,
           error_message
         FROM sync_jobs
-        WHERE user_id = $1
+        WHERE user_id = $1 AND profile_id = $2
         ORDER BY created_at DESC
         LIMIT 1
         "#,
     )
     .bind(auth.user_id)
+    .bind(id)
     .fetch_optional(&state.pool)
     .await?;
 

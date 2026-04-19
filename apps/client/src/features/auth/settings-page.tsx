@@ -22,7 +22,7 @@ import { useChannelFavoriteMutation } from "@/hooks/use-channel-favorite";
 import { useChannelPlaybackMutation } from "@/hooks/use-playback-actions";
 import { usePpvFavoriteMutation } from "@/hooks/use-ppv-favorite";
 import {
-  getProvider,
+  getProviders,
   getRecents,
   getRemoteReceivers,
   pairReceiver,
@@ -61,9 +61,9 @@ export function SettingsPage() {
     queryFn: getRecents,
     staleTime: STANDARD_QUERY_STALE_TIME_MS,
   });
-  const providerQuery = useQuery({
-    queryKey: ["provider"],
-    queryFn: getProvider,
+  const providersQuery = useQuery({
+    queryKey: ["providers"],
+    queryFn: getProviders,
     staleTime: STANDARD_QUERY_STALE_TIME_MS,
   });
   const remoteDevicesQuery = useQuery({
@@ -91,7 +91,7 @@ export function SettingsPage() {
   const resolvedTheme = useThemeStore((state) => state.resolvedTheme);
   const setPreference = useThemeStore((state) => state.setPreference);
   const recents = recentsQuery.data ?? [];
-  const provider = providerQuery.data;
+  const providers = providersQuery.data ?? [];
   const remoteDevices = remoteDevicesQuery.data ?? [];
   const playMutation = useChannelPlaybackMutation();
 
@@ -107,7 +107,7 @@ export function SettingsPage() {
             </Badge>
             <Badge variant="outline">{recents.length} recent channels</Badge>
             <Badge variant="outline">
-              {provider?.status ?? "provider missing"}
+              {providers.length} provider{providers.length === 1 ? "" : "s"}
             </Badge>
           </>
         }

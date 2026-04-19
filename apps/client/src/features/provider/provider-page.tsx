@@ -4,7 +4,7 @@ import { ProviderSettingsSection } from "@/features/provider/provider-settings-s
 export function ProviderPage() {
   return (
     <div className="flex flex-col gap-6">
-      <PageHeader title="Provider" />
+      <PageHeader title="Providers" />
       <ProviderSettingsSection />
     </div>
   );
