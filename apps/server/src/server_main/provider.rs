@@ -192,13 +192,6 @@ async fn load_provider_profile_responses(
     Ok(responses)
 }
 
-fn combine_provider_validation_message(message: &str, warning: Option<&str>) -> String {
-    match warning {
-        Some(warning) => format!("{message}\n\n{warning}"),
-        None => message.to_string(),
-    }
-}
-
 fn stored_password_reentry_message() -> String {
     "Stored provider password could not be decrypted. Re-enter your provider password and save the profile again.".to_string()
 }
@@ -219,19 +212,6 @@ fn resolve_effective_password(
 
     decrypt_secret(encryption_key, &profile.password_encrypted)
         .map_err(|_| AppError::BadRequest(stored_password_reentry_message()))
-}
-
-async fn browser_hls_warning_for_credentials(
-    state: &AppState,
-    credentials: &XtreamCredentials,
-) -> Option<String> {
-    match xtreme::probe_browser_hls_support(&state.provider_http_client, credentials).await {
-        Ok(probe) => probe.warning_message,
-        Err(error) => {
-            warn!(error = ?error, "browser HLS support probe failed");
-            Some(xtreme::browser_hls_warning_message().to_string())
-        }
-    }
 }
 
 fn normalize_epg_source_payloads(
@@ -351,7 +331,9 @@ async fn validate_provider(
     let auth = require_auth(&state, &headers).await?;
     let output_format = normalize_output_format(&payload.output_format)?;
     let existing_profile = match payload.id {
-        Some(profile_id) => Some(require_target_provider_profile(&state.pool, auth.user_id, profile_id).await?),
+        Some(profile_id) => {
+            Some(require_target_provider_profile(&state.pool, auth.user_id, profile_id).await?)
+        }
         None => None,
     };
     let effective_password = resolve_effective_password(
@@ -367,16 +349,11 @@ async fn validate_provider(
         output_format: output_format_as_str(output_format).to_string(),
     };
     let result = xtreme::validate_profile(&state.provider_http_client, &credentials).await?;
-    let browser_warning = if result.valid {
-        browser_hls_warning_for_credentials(&state, &credentials).await
-    } else {
-        None
-    };
 
     Ok(Json(ValidateProviderResponse {
         valid: result.valid,
         status: if result.valid { "valid" } else { "error" }.to_string(),
-        message: combine_provider_validation_message(&result.message, browser_warning.as_deref()),
+        message: result.message,
     }))
 }
 
@@ -390,7 +367,9 @@ async fn save_provider(
     let playback_mode = normalize_playback_mode(&payload.playback_mode)?;
     let epg_sources = normalize_epg_source_payloads(payload.epg_sources)?;
     let existing_profile = match payload.id {
-        Some(profile_id) => Some(require_target_provider_profile(&state.pool, auth.user_id, profile_id).await?),
+        Some(profile_id) => {
+            Some(require_target_provider_profile(&state.pool, auth.user_id, profile_id).await?)
+        }
         None => None,
     };
     let effective_password = resolve_effective_password(
@@ -410,8 +389,6 @@ async fn save_provider(
     if !validation.valid {
         return Err(AppError::BadRequest(validation.message));
     }
-    let browser_playback_warning = browser_hls_warning_for_credentials(&state, &credentials).await;
-
     let encrypted_password = encrypt_secret(&state.config.encryption_key, &effective_password)?;
     let profile_id = if let Some(existing_profile) = existing_profile.as_ref() {
         sqlx::query(
@@ -471,7 +448,7 @@ async fn save_provider(
         })?;
 
     Ok(Json(ProviderProfileResponse {
-        browser_playback_warning,
+        browser_playback_warning: None,
         ..provider
     }))
 }
@@ -506,8 +483,8 @@ async fn trigger_sync(
     decrypt_secret(&state.config.encryption_key, &profile.password_encrypted)
         .map_err(|_| AppError::BadRequest(stored_password_reentry_message()))?;
 
-    sync::ensure_no_active_sync(&state.pool, profile.id).await?;
-    let job = sync::insert_sync_job(&state.pool, auth.user_id, profile.id, "full", "manual").await?;
+    let job =
+        sync::insert_sync_job(&state.pool, auth.user_id, profile.id, "full", "manual").await?;
 
     sync::spawn_sync_job(state.clone(), auth.user_id, profile.id, job.id);
     Ok(Json(job))

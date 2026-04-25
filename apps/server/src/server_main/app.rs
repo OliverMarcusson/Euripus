@@ -10,8 +10,6 @@ pub async fn run() -> Result<()> {
     let config = Arc::new(Config::from_env()?);
     let pool = wait_for_postgres(&config.database_url).await?;
 
-    repair_sqlx_migration_checksums(&pool).await?;
-
     sqlx::migrate!("./migrations")
         .run(&pool)
         .await
@@ -250,87 +248,6 @@ pub(super) async fn shutdown_signal() {
     }
 
     info!("shutdown signal received, draining server and closing PostgreSQL pool");
-}
-
-pub(super) async fn repair_sqlx_migration_checksums(pool: &PgPool) -> Result<()> {
-    let migrations_table_exists =
-        sqlx::query_scalar::<_, bool>("SELECT to_regclass('_sqlx_migrations') IS NOT NULL")
-            .fetch_one(pool)
-            .await
-            .context("failed to check for sqlx migrations table")?;
-
-    if !migrations_table_exists {
-        return Ok(());
-    }
-
-    let migrations_dir = FsPath::new("./migrations");
-    if !migrations_dir.exists() {
-        warn!(
-            "sqlx migrations directory {} not found, skipping checksum repair",
-            migrations_dir.display()
-        );
-        return Ok(());
-    }
-
-    let mut repaired_versions = Vec::new();
-    for entry in fs::read_dir(migrations_dir).with_context(|| {
-        format!(
-            "failed to read migrations directory {}",
-            migrations_dir.display()
-        )
-    })? {
-        let path = entry?.path();
-        if path.extension().and_then(|ext| ext.to_str()) != Some("sql") {
-            continue;
-        }
-
-        let file_name = match path.file_name().and_then(|name| name.to_str()) {
-            Some(name) => name,
-            None => continue,
-        };
-
-        let version_str = match file_name.split('_').next() {
-            Some(segment) => segment,
-            None => continue,
-        };
-
-        let version = match version_str.parse::<i64>() {
-            Ok(value) => value,
-            Err(_) => continue,
-        };
-
-        let contents = fs::read(&path)
-            .with_context(|| format!("failed to read migration file {}", path.display()))?;
-        let checksum = Sha384::digest(&contents).to_vec();
-
-        let updated_rows = sqlx::query(
-            r#"
-            UPDATE _sqlx_migrations
-            SET checksum = $1
-            WHERE version = $2 AND success = true AND checksum <> $1
-            "#,
-        )
-        .bind(checksum)
-        .bind(version)
-        .execute(pool)
-        .await
-        .with_context(|| format!("failed to repair migration {version:04} checksum"))?
-        .rows_affected();
-
-        if updated_rows > 0 {
-            repaired_versions.push(version);
-        }
-    }
-
-    if !repaired_versions.is_empty() {
-        repaired_versions.sort_unstable();
-        warn!(
-            "repaired sqlx migration checksum(s) for version(s): {:?}",
-            repaired_versions
-        );
-    }
-
-    Ok(())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

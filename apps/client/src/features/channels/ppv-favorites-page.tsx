@@ -35,20 +35,20 @@ import {
   getProgramPlaybackState,
 } from "@/lib/utils";
 
-function isLiveFavorite(entry: FavoriteChannelEntry) {
+function isLiveFavorite(entry: FavoriteChannelEntry, now: Date) {
   if (entry.program) {
-    return getProgramPlaybackState(entry.program) === "live";
+    return getProgramPlaybackState(entry.program, now.getTime()) === "live";
   }
 
-  return getEventChannelPlaybackState(entry.channel.name) === "live";
+  return getEventChannelPlaybackState(entry.channel.name, { now }) === "live";
 }
 
-function splitPpvFavorites(entries: FavoriteChannelEntry[]) {
+function splitPpvFavorites(entries: FavoriteChannelEntry[], now: Date) {
   const liveFavorites: FavoriteChannelEntry[] = [];
   const otherFavorites: FavoriteChannelEntry[] = [];
 
   for (const entry of entries) {
-    if (isLiveFavorite(entry)) {
+    if (isLiveFavorite(entry, now)) {
       liveFavorites.push(entry);
       continue;
     }
@@ -102,10 +102,11 @@ export function PpvFavoritesPage() {
   });
 
   const fetchedFavorites = favoritesQuery.data ?? [];
+  const favoriteReferenceNow = new Date(Date.now());
   const {
     liveFavorites,
     displayedFavorites: favorites,
-  } = splitPpvFavorites(fetchedFavorites);
+  } = splitPpvFavorites(fetchedFavorites, favoriteReferenceNow);
 
   function persistFavoriteOrder(nextFavorites: FavoriteChannelEntry[]) {
     reorderMutation.mutate({
@@ -117,7 +118,12 @@ export function PpvFavoritesPage() {
     const currentEntry = favorites[index];
     const nextEntry = favorites[index + direction];
 
-    if (!currentEntry || !nextEntry || isLiveFavorite(currentEntry) !== isLiveFavorite(nextEntry)) {
+    if (
+      !currentEntry
+      || !nextEntry
+      || isLiveFavorite(currentEntry, favoriteReferenceNow)
+        !== isLiveFavorite(nextEntry, favoriteReferenceNow)
+    ) {
       return;
     }
 
@@ -197,13 +203,15 @@ export function PpvFavoritesPage() {
               const displayChannelName = formatEventChannelTitle(channel.name, {
                 referenceStartAt: program?.startAt,
               });
-              const liveNow = isLiveFavorite(entry);
-              const previousLiveState = index > 0 ? isLiveFavorite(favorites[index - 1]) : null;
+              const liveNow = isLiveFavorite(entry, favoriteReferenceNow);
+              const previousLiveState = index > 0
+                ? isLiveFavorite(favorites[index - 1], favoriteReferenceNow)
+                : null;
               const startsLiveSection = liveNow && index === 0;
               const startsSavedSection = !liveNow && liveFavorites.length > 0 && previousLiveState === true;
               const canMoveUp = index > 0 && liveNow === previousLiveState;
               const canMoveDown = index < favorites.length - 1
-                && liveNow === isLiveFavorite(favorites[index + 1]);
+                && liveNow === isLiveFavorite(favorites[index + 1], favoriteReferenceNow);
 
               return (
                 <div key={channel.id} className="group">

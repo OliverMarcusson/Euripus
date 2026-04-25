@@ -1,8 +1,6 @@
 use std::{
     collections::{HashMap, HashSet, VecDeque},
-    fs,
     net::{IpAddr, SocketAddr},
-    path::Path as FsPath,
     str::FromStr,
     sync::Arc,
     time::{Duration, Instant},
@@ -51,7 +49,7 @@ use meilisearch_sdk::{
 };
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256, Sha384};
+use sha2::{Digest, Sha256};
 use sqlx::{FromRow, PgPool, Postgres, QueryBuilder, Transaction, postgres::PgPoolOptions};
 use tokio::signal;
 use tokio::sync::{RwLock, broadcast};

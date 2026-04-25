@@ -1,6 +1,7 @@
 package se.olivermarcusson.euripus.receiver.data.events
 
 import java.io.IOException
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
@@ -24,6 +25,11 @@ class ReceiverEventStream(
         explicitNulls = false
     },
 ) {
+    private val sseClient = apiService.client.newBuilder()
+        // SSE is intentionally long-lived and mostly quiet between commands.
+        .readTimeout(0, TimeUnit.MILLISECONDS)
+        .build()
+
     fun open(
         config: ReceiverEndpointConfig,
         sessionToken: String,
@@ -33,7 +39,7 @@ class ReceiverEventStream(
             .get()
             .build()
 
-        val eventSource = EventSources.createFactory(apiService.client).newEventSource(
+        val eventSource = EventSources.createFactory(sseClient).newEventSource(
             request,
             object : EventSourceListener() {
                 override fun onEvent(

@@ -112,6 +112,9 @@ describe("PpvFavoritesPage", () => {
   });
 
   it("pins title-derived live ppv favorites above non-live entries when epg is missing", async () => {
+    vi.mocked(Date.now).mockReturnValue(
+      new Date("2026-04-17T17:00:00.000Z").getTime(),
+    );
     mockedGetPpvFavorites.mockResolvedValue([
       {
         kind: "channel",
@@ -180,10 +183,10 @@ describe("PpvFavoritesPage", () => {
     const headings = await screen.findAllByRole("heading", { level: 2 });
     expect(headings.map((heading) => heading.textContent)).toEqual([
       expect.stringContaining("Main Feed"),
-      expect.stringContaining("Spieth Featured Group"),
       expect.stringContaining("Featured Groups"),
+      expect.stringContaining("Spieth Featured Group"),
     ]);
-    expect(screen.getByText("1 live now")).toBeInTheDocument();
+    expect(screen.getByText("2 live now")).toBeInTheDocument();
     expect(screen.getAllByText("Live now").length).toBeGreaterThan(0);
   });
 });
