@@ -88,7 +88,7 @@ pub(super) async fn insert_sync_job(
     profile_id: Uuid,
     job_type: &str,
     trigger: &str,
-) -> Result<SyncJobResponse> {
+) -> std::result::Result<SyncJobResponse, AppError> {
     persistence::insert_sync_job(pool, user_id, profile_id, job_type, trigger).await
 }
 

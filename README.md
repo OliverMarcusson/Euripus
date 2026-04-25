@@ -52,6 +52,8 @@ Published tags:
 
 Both helper scripts read `GHCR_USERNAME` and `GHCR_TOKEN` from `.env.selfhosted-images` by default. Use a token with package write access on the publishing machine and a read-only package token on the production host. The deploy script uses `docker` when available and falls back to `podman` automatically.
 
+Applied SQL migrations are immutable. Do not edit a migration after it has been deployed; add a new migration for every schema change so startup checksum validation can detect drift.
+
 To route Euripus server-side traffic through NordVPN, add the override file:
 
 ```bash

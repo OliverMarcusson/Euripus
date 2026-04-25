@@ -501,7 +501,17 @@ async fn stream_receiver_events(
             Ok(payload) => Some(receiver_event_to_sse(payload)),
             Err(_) => None,
         });
-    let stream = futures_util::stream::iter(initial_events).chain(live_events);
+    let cleanup_guard = ReceiverChannelCleanupGuard {
+        channels: state.receiver_channels.clone(),
+        device_id: receiver.receiver_device_id,
+        sender: sender.clone(),
+    };
+    let stream = futures_util::stream::iter(initial_events)
+        .chain(live_events)
+        .map(move |event| {
+            let _cleanup_guard = &cleanup_guard;
+            event
+        });
     Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
 }
 
@@ -736,6 +746,9 @@ async fn unpair_receiver(
         .bind(id)
         .execute(&state.pool)
         .await?;
+    if let Some((_, sender)) = state.receiver_channels.remove(&id) {
+        let _ = sender.send(receiver_terminal_event(id));
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -945,6 +958,47 @@ fn receiver_sender(state: &AppState, device_id: Uuid) -> broadcast::Sender<Recei
         .entry(device_id)
         .or_insert_with(|| broadcast::channel(32).0)
         .clone()
+}
+
+struct ReceiverChannelCleanupGuard {
+    channels: Arc<DashMap<Uuid, broadcast::Sender<ReceiverEventPayload>>>,
+    device_id: Uuid,
+    sender: broadcast::Sender<ReceiverEventPayload>,
+}
+
+impl Drop for ReceiverChannelCleanupGuard {
+    fn drop(&mut self) {
+        // Depending on stream drop order, this subscriber may still be counted here.
+        let should_remove = self
+            .channels
+            .get(&self.device_id)
+            .map(|entry| entry.same_channel(&self.sender) && entry.receiver_count() <= 1)
+            .unwrap_or(false);
+
+        if should_remove {
+            self.channels.remove_if(&self.device_id, |_, sender| {
+                sender.same_channel(&self.sender) && sender.receiver_count() <= 1
+            });
+        }
+    }
+}
+
+fn receiver_terminal_event(device_id: Uuid) -> ReceiverEventPayload {
+    ReceiverEventPayload {
+        event_type: "receiver_revoked".to_string(),
+        command: RemotePlaybackCommandResponse {
+            id: Uuid::new_v4(),
+            target_device_id: device_id,
+            target_device_name: "Receiver".to_string(),
+            command_type: "receiver_revoked".to_string(),
+            status: "delivered".to_string(),
+            source_title: "Receiver unpaired".to_string(),
+            created_at: Utc::now(),
+        },
+        source: None,
+        position_seconds: None,
+        receiver_credential: None,
+    }
 }
 
 fn receiver_event_to_sse(payload: ReceiverEventPayload) -> Result<Event, std::convert::Infallible> {

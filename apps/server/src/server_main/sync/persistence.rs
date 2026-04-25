@@ -23,7 +23,7 @@ pub(super) async fn insert_sync_job(
     profile_id: Uuid,
     job_type: &str,
     trigger: &str,
-) -> Result<SyncJobResponse> {
+) -> std::result::Result<SyncJobResponse, AppError> {
     let total_phases = total_phases_for_job(job_type);
 
     let job = sqlx::query_as::<_, SyncJobResponse>(
@@ -61,9 +61,21 @@ pub(super) async fn insert_sync_job(
     .bind(trigger)
     .bind(total_phases)
     .fetch_one(pool)
-    .await?;
+    .await
+    .map_err(map_sync_job_insert_error)?;
 
     Ok(job)
+}
+
+fn map_sync_job_insert_error(error: sqlx::Error) -> AppError {
+    match error {
+        sqlx::Error::Database(database_error) if database_error.is_unique_violation() => {
+            AppError::BadRequest(
+                "A sync is already queued or running for this provider.".to_string(),
+            )
+        }
+        other => AppError::Internal(anyhow!(other)),
+    }
 }
 
 pub(super) fn total_phases_for_job(job_type: &str) -> i32 {

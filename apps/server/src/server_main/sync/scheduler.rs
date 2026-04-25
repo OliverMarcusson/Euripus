@@ -30,20 +30,19 @@ async fn queue_scheduled_channel_syncs(state: AppState) -> Result<()> {
             continue;
         }
 
-        match ensure_no_active_sync(&state.pool, profile.id).await {
-            Ok(()) => {}
-            Err(AppError::BadRequest(_)) => continue,
-            Err(other) => return Err(anyhow!("failed to inspect active syncs: {other:?}")),
-        }
-
-        let job = insert_sync_job(
+        let job = match insert_sync_job(
             &state.pool,
             profile.user_id,
             profile.id,
             "channels",
             "scheduled",
         )
-        .await?;
+        .await
+        {
+            Ok(job) => job,
+            Err(AppError::BadRequest(_)) => continue,
+            Err(other) => return Err(anyhow!("failed to queue scheduled sync: {other:?}")),
+        };
 
         sync::spawn_sync_job(state.clone(), profile.user_id, profile.id, job.id);
     }
