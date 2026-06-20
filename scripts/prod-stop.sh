@@ -18,14 +18,14 @@ if [[ -f "$env_file" ]]; then
   source "$env_file"
 fi
 
-: "${EURIPUS_ENABLE_NORDVPN:=false}"
+: "${EURIPUS_ENABLE_MULLVAD:=false}"
 
 compose_files=(
   "-f" "docker-compose.selfhosted.yml"
 )
 
-if [[ "$EURIPUS_ENABLE_NORDVPN" == "true" ]]; then
-  compose_files+=("-f" "docker-compose.selfhosted.nordvpn.yml")
+if [[ "$EURIPUS_ENABLE_MULLVAD" == "true" ]]; then
+  compose_files+=("-f" "docker-compose.selfhosted.mullvad.yml")
 fi
 
 cd "$repo_root"

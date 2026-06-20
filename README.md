@@ -54,11 +54,11 @@ Both helper scripts read `GHCR_USERNAME` and `GHCR_TOKEN` from `.env.selfhosted-
 
 Applied SQL migrations are immutable. Do not edit a migration after it has been deployed; add a new migration for every schema change so startup checksum validation can detect drift.
 
-To route Euripus server-side traffic through NordVPN, add the override file:
+To route Euripus server-side traffic through Mullvad, add the override file:
 
 ```bash
-cp apps/server/.env.nordvpn.example apps/server/.env.nordvpn
-EURIPUS_ENABLE_NORDVPN=true bun run prod:start
+cp apps/server/.env.mullvad.example apps/server/.env.mullvad
+EURIPUS_ENABLE_MULLVAD=true bun run prod:start
 ```
 
 That only affects server-originated traffic such as provider validation, sync jobs, and EPG fetches. Browser playback still goes directly from the client device to the IPTV provider.

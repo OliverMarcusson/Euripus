@@ -23,7 +23,7 @@ describe("AuthPage", () => {
     vi.mocked(getServerNetworkStatus).mockResolvedValue({
       serverStatus: "online",
       vpnActive: true,
-      vpnProvider: "NordVPN",
+      vpnProvider: "Mullvad",
       publicIp: "198.51.100.24",
       publicIpCheckedAt: "2026-04-05T10:00:00.000Z",
       publicIpError: null,

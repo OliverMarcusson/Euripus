@@ -72,25 +72,22 @@ By default, the deploy script pulls and starts:
 
 By default, the `web` service is published on host port `8088`. Override it with `EURIPUS_WEB_PORT` if needed.
 
-## Optional NordVPN Routing
+## Optional Mullvad Routing
 
-If you want Euripus server-side traffic to leave through NordVPN, enable it in `.env.selfhosted-images`:
+If you want Euripus server-side traffic to leave through Mullvad, enable it in `.env.selfhosted-images`:
 
 ```bash
-EURIPUS_ENABLE_NORDVPN=true bun run prod:start
+EURIPUS_ENABLE_MULLVAD=true bun run prod:start
 ```
 
-This override adds a `gluetun` container configured for NordVPN and places the Rust server inside Gluetun's network namespace.
+This override adds a `gluetun` container configured for Mullvad and places the Rust server inside Gluetun's network namespace.
 
-Copy `apps/server/.env.nordvpn.example` to `apps/server/.env.nordvpn`, then set the NordVPN values there:
+Copy `apps/server/.env.mullvad.example` to `apps/server/.env.mullvad`, then set the Mullvad values there:
 
-- `VPN_TYPE=openvpn` with `OPENVPN_USER` and `OPENVPN_PASSWORD`
-- Or `VPN_TYPE=wireguard` with `WIREGUARD_PRIVATE_KEY`
+- `VPN_TYPE=wireguard` with a Mullvad `WIREGUARD_PRIVATE_KEY`
 - Optional server selectors such as `SERVER_COUNTRIES`, `SERVER_REGIONS`, `SERVER_CITIES`, `SERVER_HOSTNAMES`, and `SERVER_CATEGORIES`
 
-Use NordVPN service credentials for OpenVPN, not your regular Nord Account email and password.
-
-If you run `Euripus-Sports` as a separate Podman container on the same host, point the NordVPN server override at the container hostname instead of a host loopback port:
+If you run `Euripus-Sports` as a separate Podman container on the same host, point the Mullvad server override at the container hostname instead of a host loopback port:
 
 ```bash
 APP_SPORTS_API_BASE_URL=http://sports-api:3000
@@ -101,9 +98,9 @@ Those scripts also wait for `GET /health` on the Sports API before reporting Eur
 
 Important limitation:
 
-- This only routes server-originated traffic through NordVPN.
+- This only routes server-originated traffic through Mullvad.
 - Browser playback still connects directly to the IPTV provider.
-- If you need stream playback itself to use NordVPN, the client device must also be on VPN.
+- If you need stream playback itself to use Mullvad, the client device must also be on VPN.
 
 ## Reverse Proxy Expectations
 
@@ -118,7 +115,7 @@ Route your dedicated Euripus host to the single upstream `http://YOUR-HOST:8088`
 - Browser auth uses an HTTP-only refresh cookie plus a readable CSRF cookie.
 - The SPA uses `/api/*` for all browser traffic.
 - `/health` is exposed by the public `web` service and proxied through to the Rust backend.
-- With the NordVPN override enabled, the `web` service proxies `/api` and `/health` to the `gluetun` container, which exposes the Rust server on port `8080` inside the VPN network namespace.
+- With the Mullvad override enabled, the `web` service proxies `/api` and `/health` to the `gluetun` container, which exposes the Rust server on port `8080` inside the VPN network namespace.
 
 ## Validation Checklist
 

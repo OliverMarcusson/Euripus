@@ -11,9 +11,9 @@ services:
     devices:
       - /dev/net/tun:/dev/net/tun
     env_file:
-      - apps/server/.env.nordvpn
+      - apps/server/.env.mullvad
     environment:
-      VPN_SERVICE_PROVIDER: nordvpn
+      VPN_SERVICE_PROVIDER: mullvad
       FIREWALL_INPUT_PORTS: 8080
       FIREWALL_OUTBOUND_SUBNETS: 10.89.0.1/32
 
@@ -21,10 +21,10 @@ services:
     network_mode: "service:gluetun"
     env_file:
       - apps/server/.env
-      - apps/server/.env.nordvpn.server
+      - apps/server/.env.mullvad.server
     environment:
       APP_VPN_ENABLED: "true"
-      APP_VPN_PROVIDER_NAME: "NordVPN"
+      APP_VPN_PROVIDER_NAME: "Mullvad"
     depends_on:
       postgres:
         condition: service_healthy
