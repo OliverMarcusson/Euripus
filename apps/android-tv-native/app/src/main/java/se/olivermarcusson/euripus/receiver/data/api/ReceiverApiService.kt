@@ -82,6 +82,33 @@ class ReceiverApiService(
         ReceiverPairingCodeDto.serializer(),
     )
 
+    suspend fun listFavoriteChannels(
+        config: ReceiverEndpointConfig,
+        sessionToken: String,
+    ): List<ReceiverFavoriteChannelEntryDto> = execute(
+        Request.Builder()
+            .url("${config.apiBaseUrl}/receiver/channels/favorites".toHttpUrl())
+            .header("Authorization", "Bearer $sessionToken")
+            .get()
+            .build(),
+        kotlinx.serialization.builtins.ListSerializer(
+            ReceiverFavoriteChannelEntryDto.serializer(),
+        ),
+    )
+
+    suspend fun playChannelFromReceiver(
+        config: ReceiverEndpointConfig,
+        sessionToken: String,
+        channelId: String,
+    ): PlaybackSourceDto = execute(
+        Request.Builder()
+            .url("${config.apiBaseUrl}/receiver/play/channel/$channelId".toHttpUrl())
+            .header("Authorization", "Bearer $sessionToken")
+            .post("{}".toRequestBody(mediaType))
+            .build(),
+        PlaybackSourceDto.serializer(),
+    )
+
     suspend fun heartbeat(
         config: ReceiverEndpointConfig,
         sessionToken: String,

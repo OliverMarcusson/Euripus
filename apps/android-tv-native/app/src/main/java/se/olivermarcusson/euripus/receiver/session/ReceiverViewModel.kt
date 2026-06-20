@@ -77,6 +77,7 @@ class ReceiverViewModel(application: Application) : AndroidViewModel(application
     private var heartbeatJob: Job? = null
     private var eventJob: Job? = null
     private var playbackSyncJob: Job? = null
+    private var favoriteChannelsJob: Job? = null
     private var pendingCommand: PendingCommand? = null
 
     init {
@@ -219,7 +220,43 @@ class ReceiverViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    fun handleHardwareKey(keyCode: Int): Boolean = when (keyCode) {
+    fun handleHardwareKey(keyCode: Int): Boolean {
+        if (uiState.value.channelViewerOpen) {
+            return when (keyCode) {
+                KeyEvent.KEYCODE_BACK,
+                KeyEvent.KEYCODE_ESCAPE -> {
+                    closeChannelViewer()
+                    true
+                }
+
+                KeyEvent.KEYCODE_DPAD_UP,
+                KeyEvent.KEYCODE_CHANNEL_UP -> {
+                    moveChannelSelection(-1)
+                    true
+                }
+
+                KeyEvent.KEYCODE_DPAD_DOWN,
+                KeyEvent.KEYCODE_CHANNEL_DOWN -> {
+                    moveChannelSelection(1)
+                    true
+                }
+
+                KeyEvent.KEYCODE_DPAD_CENTER,
+                KeyEvent.KEYCODE_ENTER,
+                KeyEvent.KEYCODE_NUMPAD_ENTER,
+                KeyEvent.KEYCODE_SPACE,
+                KeyEvent.KEYCODE_BUTTON_A,
+                KeyEvent.KEYCODE_BUTTON_SELECT,
+                KeyEvent.KEYCODE_HEADSETHOOK -> {
+                    tuneSelectedChannel()
+                    true
+                }
+
+                else -> false
+            }
+        }
+
+        return when (keyCode) {
         KeyEvent.KEYCODE_MEDIA_PLAY -> {
             playerController.playFromTvRemote()
             true
@@ -233,8 +270,12 @@ class ReceiverViewModel(application: Application) : AndroidViewModel(application
         KeyEvent.KEYCODE_BUTTON_A,
         KeyEvent.KEYCODE_BUTTON_SELECT,
         KeyEvent.KEYCODE_HEADSETHOOK -> {
-            playerController.togglePlayPauseFromTvRemote()
-            true
+            if (playerController.currentSource.value != null) {
+                openChannelViewer()
+                true
+            } else {
+                false
+            }
         }
 
         KeyEvent.KEYCODE_MEDIA_PAUSE -> {
@@ -258,6 +299,131 @@ class ReceiverViewModel(application: Application) : AndroidViewModel(application
         }
 
         else -> false
+    }
+    }
+
+    fun openChannelViewer() {
+        if (playerController.currentSource.value == null) {
+            return
+        }
+        mutableUiState.update { state ->
+            state.copy(
+                channelViewerOpen = true,
+                channelViewerError = null,
+                selectedChannelIndex = selectedChannelIndexForSource(state),
+            )
+        }
+        if (uiState.value.favoriteChannels.isEmpty()) {
+            refreshFavoriteChannels()
+        }
+    }
+
+    fun closeChannelViewer() {
+        mutableUiState.update { it.copy(channelViewerOpen = false) }
+    }
+
+    private fun refreshFavoriteChannels() {
+        val config = endpointConfig ?: return
+        val token = sessionToken ?: return
+        favoriteChannelsJob?.cancel()
+        favoriteChannelsJob = viewModelScope.launch {
+            mutableUiState.update {
+                it.copy(channelViewerLoading = true, channelViewerError = null)
+            }
+            runCatching { apiService.listFavoriteChannels(config, token) }
+                .onSuccess { channels ->
+                    mutableUiState.update { state ->
+                        val selectedIndex = state.selectedChannelIndex
+                            .coerceIn(0, (channels.size - 1).coerceAtLeast(0))
+                        state.copy(
+                            favoriteChannels = channels,
+                            selectedChannelIndex = selectedIndex,
+                            channelViewerLoading = false,
+                            channelViewerError = null,
+                        )
+                    }
+                }
+                .onFailure { error ->
+                    if (error is CancellationException) {
+                        throw error
+                    }
+                    mutableUiState.update {
+                        it.copy(
+                            channelViewerLoading = false,
+                            channelViewerError = error.message ?: "Could not load favorite channels.",
+                        )
+                    }
+                }
+        }
+    }
+
+    private fun moveChannelSelection(direction: Int) {
+        mutableUiState.update { state ->
+            if (state.favoriteChannels.isEmpty()) {
+                state
+            } else {
+                val nextIndex = (state.selectedChannelIndex + direction)
+                    .floorMod(state.favoriteChannels.size)
+                state.copy(selectedChannelIndex = nextIndex)
+            }
+        }
+    }
+
+    private fun tuneSelectedChannel() {
+        val state = uiState.value
+        val selected = state.favoriteChannels.getOrNull(state.selectedChannelIndex) ?: return
+        val config = endpointConfig ?: return
+        val token = sessionToken ?: return
+        viewModelScope.launch {
+            mutableUiState.update {
+                it.copy(tuningChannelId = selected.channel.id, channelViewerError = null)
+            }
+            runCatching {
+                apiService.playChannelFromReceiver(config, token, selected.channel.id)
+            }.onSuccess { source ->
+                setPlaybackSource(source)
+                mutableUiState.update {
+                    it.copy(
+                        channelViewerOpen = false,
+                        tuningChannelId = null,
+                        channelViewerError = null,
+                    )
+                }
+            }.onFailure { error ->
+                if (error is CancellationException) {
+                    throw error
+                }
+                mutableUiState.update {
+                    it.copy(
+                        tuningChannelId = null,
+                        channelViewerError = error.message ?: "Could not tune this channel.",
+                    )
+                }
+            }
+        }
+    }
+
+    private fun selectedChannelIndexForSource(state: ReceiverUiState): Int {
+        val sourceTitle = playerController.currentSource.value?.title ?: return state.selectedChannelIndex
+        val sourceIndex = state.favoriteChannels.indexOfFirst { entry ->
+            entry.channel.name == sourceTitle
+        }
+        return if (sourceIndex >= 0) {
+            sourceIndex
+        } else {
+            state.selectedChannelIndex.coerceIn(
+                0,
+                (state.favoriteChannels.size - 1).coerceAtLeast(0),
+            )
+        }
+    }
+
+    private fun Int.floorMod(modulus: Int): Int {
+        if (modulus <= 0) {
+            return 0
+        }
+        val remainder = this % modulus
+        return if (remainder < 0) remainder + modulus else remainder
     }
 
     private suspend fun bootstrapReceiver(force: Boolean) {
@@ -666,6 +832,12 @@ class ReceiverViewModel(application: Application) : AndroidViewModel(application
             it.copy(
                 source = null,
                 pairingCode = null,
+                channelViewerOpen = false,
+                channelViewerLoading = false,
+                channelViewerError = null,
+                favoriteChannels = emptyList(),
+                selectedChannelIndex = 0,
+                tuningChannelId = null,
                 status = ReceiverStatus.STARTING_SESSION,
                 errorMessage = null,
                 detailMessage = "Receiver authorization expired. Starting a new pairing session.",
@@ -713,10 +885,12 @@ class ReceiverViewModel(application: Application) : AndroidViewModel(application
         heartbeatJob?.cancel()
         eventJob?.cancel()
         playbackSyncJob?.cancel()
+        favoriteChannelsJob?.cancel()
         pendingCommand = null
         heartbeatJob = null
         eventJob = null
         playbackSyncJob = null
+        favoriteChannelsJob = null
     }
 
     override fun onCleared() {

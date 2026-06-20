@@ -8,6 +8,14 @@ pub(super) fn browser_router() -> Router<AppState> {
     Router::new()
         .route("/receiver/session", post(create_receiver_session))
         .route("/receiver/pairing-code", post(issue_receiver_pairing_code))
+        .route(
+            "/receiver/channels/favorites",
+            get(list_receiver_favorite_channels),
+        )
+        .route(
+            "/receiver/play/channel/{id}",
+            post(play_channel_from_receiver),
+        )
         .route("/receiver/events", get(stream_receiver_events))
         .route("/receiver/heartbeat", post(heartbeat_receiver))
         .route(
@@ -179,6 +187,15 @@ pub(super) struct ReceiverEventsQuery {
     pub(super) session_token: Option<String>,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct ReceiverFavoriteChannelEntryResponse {
+    pub(super) channel: ChannelResponse,
+    pub(super) program: Option<ProgramResponse>,
+    pub(super) upcoming_programs: Vec<ProgramResponse>,
+    pub(super) order: i32,
+}
+
 #[derive(Debug, FromRow, Clone)]
 pub(super) struct ReceiverDeviceRecord {
     pub(super) id: Uuid,
@@ -216,6 +233,31 @@ pub(super) struct ReceiverPairingCodeRecord {
     pub(super) receiver_device_id: Uuid,
     pub(super) code: String,
     pub(super) expires_at: DateTime<Utc>,
+}
+
+#[derive(Debug, FromRow)]
+struct ReceiverFavoriteChannelRow {
+    channel_id: Uuid,
+    profile_id: Uuid,
+    channel_name: String,
+    logo_url: Option<String>,
+    category_name: Option<String>,
+    remote_stream_id: i32,
+    epg_channel_id: Option<String>,
+    has_catchup: bool,
+    archive_duration_hours: Option<i32>,
+    stream_extension: Option<String>,
+    is_ppv: bool,
+    is_ppv_favorite: bool,
+    program_id: Option<Uuid>,
+    program_channel_id: Option<Uuid>,
+    program_channel_name: Option<String>,
+    program_title: Option<String>,
+    program_description: Option<String>,
+    program_start_at: Option<DateTime<Utc>>,
+    program_end_at: Option<DateTime<Utc>>,
+    program_can_catchup: Option<bool>,
+    sort_order: i32,
 }
 
 #[derive(Debug, FromRow, Clone)]
@@ -437,6 +479,125 @@ async fn issue_receiver_pairing_code(
         expires_at: pairing.expires_at,
         device: receiver_device_response(&state, &record, None),
     }))
+}
+
+async fn list_receiver_favorite_channels(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> ApiResult<Vec<ReceiverFavoriteChannelEntryResponse>> {
+    let device = require_paired_receiver_device(&state, &headers).await?;
+    let user_id = device
+        .owner_user_id
+        .ok_or_else(|| AppError::Unauthorized)?;
+    let request_base_url = request_base_url(&state.config, &headers)?;
+    let rows = sqlx::query_as::<_, ReceiverFavoriteChannelRow>(
+        r#"
+        SELECT
+          c.id AS channel_id,
+          c.profile_id,
+          c.name AS channel_name,
+          c.logo_url,
+          cc.name AS category_name,
+          c.remote_stream_id,
+          c.epg_channel_id,
+          c.has_catchup,
+          c.archive_duration_hours,
+          c.stream_extension,
+          c.search_is_ppv AS is_ppv,
+          EXISTS(
+            SELECT 1 FROM favorite_ppv_channels fpc
+            WHERE fpc.user_id = c.user_id AND fpc.channel_id = c.id
+          ) AS is_ppv_favorite,
+          p.id AS program_id,
+          p.channel_id AS program_channel_id,
+          p.channel_name AS program_channel_name,
+          p.title AS program_title,
+          p.description AS program_description,
+          p.start_at AS program_start_at,
+          p.end_at AS program_end_at,
+          p.can_catchup AS program_can_catchup,
+          f.sort_order
+        FROM favorites f
+        JOIN channels c ON c.id = f.channel_id
+        LEFT JOIN channel_categories cc ON cc.id = c.category_id
+        LEFT JOIN LATERAL (
+          SELECT
+            p.id,
+            p.channel_id,
+            p.channel_name,
+            p.title,
+            p.description,
+            p.start_at,
+            p.end_at,
+            p.can_catchup
+          FROM programs p
+          WHERE p.user_id = c.user_id
+            AND p.channel_id = c.id
+            AND p.end_at > NOW() - ($2 * INTERVAL '1 hour')
+            AND p.start_at < NOW() + ($3 * INTERVAL '1 day')
+          ORDER BY
+            CASE
+              WHEN p.start_at <= NOW() AND p.end_at > NOW() THEN 0
+              WHEN p.start_at > NOW() THEN 1
+              ELSE 2
+            END ASC,
+            CASE WHEN p.start_at > NOW() THEN p.start_at END ASC NULLS LAST,
+            CASE WHEN p.start_at <= NOW() AND p.end_at > NOW() THEN p.start_at END DESC NULLS LAST,
+            CASE WHEN p.end_at <= NOW() THEN p.end_at END DESC NULLS LAST,
+            p.title ASC
+          LIMIT 1
+        ) p ON TRUE
+        WHERE f.user_id = $1
+        ORDER BY f.sort_order ASC, c.name ASC
+        "#,
+    )
+    .bind(user_id)
+    .bind(EPG_RETENTION_PAST_HOURS)
+    .bind(EPG_RETENTION_FUTURE_DAYS)
+    .fetch_all(&state.pool)
+    .await?;
+
+    let channel_ids = rows.iter().map(|row| row.channel_id).collect::<Vec<_>>();
+    let upcoming_programs =
+        fetch_receiver_upcoming_programs(&state.pool, user_id, &channel_ids).await?;
+
+    let entries = rows
+        .into_iter()
+        .map(|row| {
+            let entry = map_receiver_favorite_channel_entry(
+                &state,
+                &request_base_url,
+                user_id,
+                row,
+                &upcoming_programs,
+            )?;
+            Ok(entry)
+        })
+        .collect::<Result<Vec<_>, AppError>>()?;
+
+    Ok(Json(entries))
+}
+
+async fn play_channel_from_receiver(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+) -> ApiResult<PlaybackSourceResponse> {
+    let device = require_paired_receiver_device(&state, &headers).await?;
+    let user_id = device
+        .owner_user_id
+        .ok_or_else(|| AppError::Unauthorized)?;
+    let source = resolve_channel_playback_source_for_receiver(
+        &state,
+        &headers,
+        user_id,
+        id,
+        &device.app_kind,
+        device.last_public_origin.as_deref(),
+    )
+    .await?;
+
+    Ok(Json(source))
 }
 
 async fn heartbeat_receiver(
@@ -934,6 +1095,118 @@ async fn stop_remote_playback(
     Ok(Json(
         deliver_receiver_transport_command(&state, &auth, &target, "stop", None).await?,
     ))
+}
+
+async fn require_paired_receiver_device(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<ReceiverDeviceRecord, AppError> {
+    let receiver = require_receiver_auth(state, headers).await?;
+    let device = load_receiver_device(&state.pool, receiver.receiver_device_id)
+        .await?
+        .ok_or(AppError::Unauthorized)?;
+    if device.owner_user_id.is_none() || device.revoked_at.is_some() {
+        return Err(AppError::Unauthorized);
+    }
+    Ok(device)
+}
+
+async fn fetch_receiver_upcoming_programs(
+    pool: &PgPool,
+    user_id: Uuid,
+    channel_ids: &[Uuid],
+) -> Result<HashMap<Uuid, Vec<ProgramResponse>>, AppError> {
+    if channel_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let programs = sqlx::query_as::<_, ProgramResponse>(
+        r#"
+        SELECT id, channel_id, channel_name, title, description, start_at, end_at, can_catchup
+        FROM (
+          SELECT
+            p.id,
+            p.channel_id,
+            p.channel_name,
+            p.title,
+            p.description,
+            p.start_at,
+            p.end_at,
+            p.can_catchup,
+            ROW_NUMBER() OVER (PARTITION BY p.channel_id ORDER BY p.start_at ASC, p.title ASC) AS row_number
+          FROM programs p
+          WHERE p.user_id = $1
+            AND p.channel_id = ANY($2)
+            AND p.start_at > NOW()
+            AND p.start_at < NOW() + ($3 * INTERVAL '1 day')
+        ) ranked
+        WHERE row_number <= 6
+        ORDER BY channel_id, start_at ASC, title ASC
+        "#,
+    )
+    .bind(user_id)
+    .bind(channel_ids)
+    .bind(EPG_RETENTION_FUTURE_DAYS)
+    .fetch_all(pool)
+    .await?;
+
+    let mut by_channel: HashMap<Uuid, Vec<ProgramResponse>> = HashMap::new();
+    for program in programs {
+        if let Some(channel_id) = program.channel_id {
+            by_channel.entry(channel_id).or_default().push(program);
+        }
+    }
+
+    Ok(by_channel)
+}
+
+fn map_receiver_favorite_channel_entry(
+    state: &AppState,
+    request_base_url: &Url,
+    user_id: Uuid,
+    row: ReceiverFavoriteChannelRow,
+    upcoming_programs: &HashMap<Uuid, Vec<ProgramResponse>>,
+) -> Result<ReceiverFavoriteChannelEntryResponse, AppError> {
+    let order = row.sort_order;
+    let channel_id = row.channel_id;
+    let entry = guide::map_guide_category_entry(
+        state,
+        request_base_url,
+        user_id,
+        guide::GuideCategoryEntryRow {
+            channel_id: row.channel_id,
+            profile_id: row.profile_id,
+            channel_name: row.channel_name,
+            logo_url: row.logo_url,
+            category_name: row.category_name,
+            remote_stream_id: row.remote_stream_id,
+            epg_channel_id: row.epg_channel_id,
+            has_catchup: row.has_catchup,
+            archive_duration_hours: row.archive_duration_hours,
+            stream_extension: row.stream_extension,
+            is_favorite: true,
+            is_ppv: row.is_ppv,
+            is_ppv_favorite: row.is_ppv_favorite,
+            program_id: row.program_id,
+            program_channel_id: row.program_channel_id,
+            program_channel_name: row.program_channel_name,
+            program_title: row.program_title,
+            program_description: row.program_description,
+            program_start_at: row.program_start_at,
+            program_end_at: row.program_end_at,
+            program_can_catchup: row.program_can_catchup,
+        },
+    )?;
+
+    Ok(ReceiverFavoriteChannelEntryResponse {
+        channel: entry.channel,
+        program: entry.program,
+        upcoming_programs: upcoming_programs
+            .get(&channel_id)
+            .cloned()
+            .unwrap_or_default(),
+        order,
+    })
 }
 
 fn is_receiver_online(state: &AppState, device: &ReceiverDeviceRecord) -> bool {

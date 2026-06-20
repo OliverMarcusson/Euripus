@@ -138,6 +138,7 @@ class ReceiverPlayerController(
             else -> ProgressiveMediaSource.Factory(createDataSourceFactory(source)).createMediaSource(mediaItem)
         }
 
+        clearPlayerOnly()
         player.setMediaSource(mediaSource)
         player.prepare()
         if (source.live) {

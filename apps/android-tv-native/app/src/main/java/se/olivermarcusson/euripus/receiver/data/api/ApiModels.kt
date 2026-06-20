@@ -22,6 +22,43 @@ data class PlaybackSourceDto(
 )
 
 @Serializable
+data class ChannelDto(
+    val id: String,
+    val name: String,
+    val logoUrl: String? = null,
+    val categoryName: String? = null,
+    val remoteStreamId: Int,
+    val epgChannelId: String? = null,
+    val hasEpg: Boolean,
+    val hasCatchup: Boolean,
+    val archiveDurationHours: Int? = null,
+    val streamExtension: String? = null,
+    val isFavorite: Boolean,
+    val isPpv: Boolean = false,
+    val isPpvFavorite: Boolean = false,
+)
+
+@Serializable
+data class ProgramDto(
+    val id: String,
+    val channelId: String? = null,
+    val channelName: String? = null,
+    val title: String,
+    val description: String? = null,
+    val startAt: String,
+    val endAt: String,
+    val canCatchup: Boolean,
+)
+
+@Serializable
+data class ReceiverFavoriteChannelEntryDto(
+    val channel: ChannelDto,
+    val program: ProgramDto? = null,
+    val upcomingPrograms: List<ProgramDto> = emptyList(),
+    val order: Int,
+)
+
+@Serializable
 data class ReceiverPlaybackStateDto(
     val title: String,
     val sourceKind: String,
