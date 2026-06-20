@@ -24,7 +24,7 @@ default_compose_project_name() {
 }
 
 should_connect_external_sports_api() {
-  [[ "${EURIPUS_ENABLE_NORDVPN:-false}" == "true" ]] || return 1
+  [[ "${EURIPUS_ENABLE_MULLVAD:-false}" == "true" ]] || return 1
   local sports_api_base_url="${APP_SPORTS_API_BASE_URL:-}"
   [[ "$sports_api_base_url" == http://sports-api* || "$sports_api_base_url" == https://sports-api* ]]
 }
@@ -320,23 +320,23 @@ fi
 : "${EURIPUS_SERVER_IMAGE:=ghcr.io/olivermarcusson/euripus-server}"
 : "${EURIPUS_WEB_IMAGE:=ghcr.io/olivermarcusson/euripus-web}"
 : "${EURIPUS_IMAGE_TAG:=selfhosted-latest}"
-: "${EURIPUS_ENABLE_NORDVPN:=false}"
+: "${EURIPUS_ENABLE_MULLVAD:=false}"
 : "${GHCR_USERNAME:?Set GHCR_USERNAME in the environment or $env_file before deploying.}"
 : "${GHCR_TOKEN:?Set GHCR_TOKEN in the environment or $env_file before deploying.}"
 
-if [[ "$EURIPUS_ENABLE_NORDVPN" == "true" && -f "$repo_root/apps/server/.env.nordvpn.server" ]]; then
+if [[ "$EURIPUS_ENABLE_MULLVAD" == "true" && -f "$repo_root/apps/server/.env.mullvad.server" ]]; then
   # shellcheck disable=SC1090
-  source "$repo_root/apps/server/.env.nordvpn.server"
+  source "$repo_root/apps/server/.env.mullvad.server"
 fi
 
-export EURIPUS_SERVER_IMAGE EURIPUS_WEB_IMAGE EURIPUS_IMAGE_TAG EURIPUS_ENABLE_NORDVPN
+export EURIPUS_SERVER_IMAGE EURIPUS_WEB_IMAGE EURIPUS_IMAGE_TAG EURIPUS_ENABLE_MULLVAD
 
 compose_files=(
   "-f" "docker-compose.selfhosted.yml"
 )
 
-if [[ "$EURIPUS_ENABLE_NORDVPN" == "true" ]]; then
-  compose_files+=("-f" "docker-compose.selfhosted.nordvpn.yml")
+if [[ "$EURIPUS_ENABLE_MULLVAD" == "true" ]]; then
+  compose_files+=("-f" "docker-compose.selfhosted.mullvad.yml")
 fi
 
 cd "$repo_root"
@@ -375,6 +375,6 @@ echo "Euripus deploy complete."
 echo "Container CLI: ${container_cli}"
 echo "Server image: ${server_image_ref}"
 echo "Web image: ${EURIPUS_WEB_IMAGE}:${EURIPUS_IMAGE_TAG}"
-if [[ "$EURIPUS_ENABLE_NORDVPN" == "true" ]]; then
-  echo "NordVPN override: enabled"
+if [[ "$EURIPUS_ENABLE_MULLVAD" == "true" ]]; then
+  echo "Mullvad override: enabled"
 fi

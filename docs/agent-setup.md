@@ -19,9 +19,9 @@ Bring up the Euripus server and PostgreSQL using Docker Compose so the desktop a
 
 - Local/dev Compose file: `docker-compose.yml`
 - Self-hosted Compose file: `docker-compose.selfhosted.yml`
-- NordVPN self-hosted override: `docker-compose.selfhosted.nordvpn.yml`
+- Mullvad self-hosted override: `docker-compose.selfhosted.mullvad.yml`
 - Server env template: `apps/server/.env.example`
-- NordVPN env template: `apps/server/.env.nordvpn.example`
+- Mullvad env template: `apps/server/.env.mullvad.example`
 - Self-hosted image env template: `.env.selfhosted-images.example`
 - Publish script: `scripts/publish-images.ps1`
 - Deploy script: `scripts/deploy.sh`
@@ -50,15 +50,11 @@ Create `apps/server/.env` from `apps/server/.env.example` and replace the placeh
 - `APP_BROWSER_COOKIE_SECURE`
   Keep `true` for HTTPS deployments behind a reverse proxy.
 - `VPN_TYPE`
-  Optional. Set to `openvpn` or `wireguard` in `apps/server/.env.nordvpn` when using the NordVPN Compose override.
-- `OPENVPN_USER`
-  Optional. NordVPN OpenVPN service credential username.
-- `OPENVPN_PASSWORD`
-  Optional. NordVPN OpenVPN service credential password.
+  Optional. Set to `wireguard` in `apps/server/.env.mullvad` when using the Mullvad Compose override.
 - `WIREGUARD_PRIVATE_KEY`
-  Optional. NordVPN WireGuard private key.
+  Optional. Mullvad WireGuard private key.
 - `SERVER_COUNTRIES`
-  Optional. Comma-separated preferred NordVPN countries.
+  Optional. Comma-separated preferred Mullvad countries.
 - `RUST_LOG`
   Default `info`.
 
@@ -99,13 +95,13 @@ If exposing Euripus as a browser service, put a reverse proxy in front of the `w
 - Keep request body size moderate because auth and provider endpoints are small.
 - Consider IP allow-lists or VPN access for private self-hosting.
 
-## Optional NordVPN Container Routing
+## Optional Mullvad Container Routing
 
-If you want the Euripus server to perform provider validation, sync jobs, and EPG fetches through NordVPN, use:
+If you want the Euripus server to perform provider validation, sync jobs, and EPG fetches through Mullvad, use:
 
-`EURIPUS_ENABLE_NORDVPN=true bun run prod:start`
+`EURIPUS_ENABLE_MULLVAD=true bun run prod:start`
 
-That override runs a Gluetun container with NordVPN settings from `apps/server/.env.nordvpn` and shares its network namespace with the Rust server. The browser-facing `web` service then proxies `/api` traffic to the Gluetun container.
+That override runs a Gluetun container with Mullvad settings from `apps/server/.env.mullvad` and shares its network namespace with the Rust server. The browser-facing `web` service then proxies `/api` traffic to the Gluetun container.
 
 ## GHCR Self-Hosted Workflow
 
@@ -126,7 +122,7 @@ Default image names:
 - `ghcr.io/olivermarcusson/euripus-server`
 - `ghcr.io/olivermarcusson/euripus-web`
 
-This does not proxy the actual IPTV playback stream through NordVPN. Playback remains client-to-provider in v1.
+This does not proxy the actual IPTV playback stream through Mullvad. Playback remains client-to-provider in v1.
 
 ## Operational Notes
 
