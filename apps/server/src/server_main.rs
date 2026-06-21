@@ -251,6 +251,7 @@ struct AccessClaims {
 struct AuthContext {
     user_id: Uuid,
     session_id: Uuid,
+    provider_locked: bool,
 }
 
 #[derive(Clone)]
@@ -1118,9 +1119,16 @@ async fn auth_context_from_access_token(
     let cached_expiry = state.session_cache.get(&cache_key).map(|expiry| *expiry);
     if let Some(expiry) = cached_expiry {
         if expiry > now {
+            let provider_locked =
+                sqlx::query_scalar::<_, bool>("SELECT provider_locked FROM users WHERE id = $1")
+                    .bind(user_id)
+                    .fetch_optional(&state.pool)
+                    .await?
+                    .ok_or(AppError::Unauthorized)?;
             return Ok(AuthContext {
                 user_id,
                 session_id,
+                provider_locked,
             });
         }
         state.session_cache.remove(&cache_key);
@@ -1140,6 +1148,12 @@ async fn auth_context_from_access_token(
     if valid_session == 0 {
         return Err(AppError::Unauthorized);
     }
+    let provider_locked =
+        sqlx::query_scalar::<_, bool>("SELECT provider_locked FROM users WHERE id = $1")
+            .bind(user_id)
+            .fetch_optional(&state.pool)
+            .await?
+            .ok_or(AppError::Unauthorized)?;
 
     state
         .session_cache
@@ -1148,6 +1162,7 @@ async fn auth_context_from_access_token(
     Ok(AuthContext {
         user_id,
         session_id,
+        provider_locked,
     })
 }
 

@@ -1,5 +1,7 @@
 import type {
   AdminPatternGroup,
+  AdminRestrictedAccountInput,
+  AdminRestrictedAccountSummary,
   AdminPatternGroupInput,
   AdminPatternGroupImportError,
   AdminPatternGroupImportRequest,
@@ -270,6 +272,28 @@ export function adminLogout() {
     },
     { includeCsrf: true },
   );
+}
+
+export function getAdminRestrictedAccounts() {
+  return adminRequest<AdminRestrictedAccountSummary[]>("/admin/restricted-accounts");
+}
+
+export function createAdminRestrictedAccount(payload: AdminRestrictedAccountInput) {
+  return adminRequest<AdminRestrictedAccountSummary>("/admin/restricted-accounts", {
+    method: "POST", body: JSON.stringify(payload),
+  }, { includeCsrf: true });
+}
+
+export function updateAdminRestrictedAccount(id: string, payload: AdminRestrictedAccountInput) {
+  return adminRequest<AdminRestrictedAccountSummary>(`/admin/restricted-accounts/${id}`, {
+    method: "PUT", body: JSON.stringify(payload),
+  }, { includeCsrf: true });
+}
+
+export function deleteAdminRestrictedAccount(id: string) {
+  return adminRequest<void>(`/admin/restricted-accounts/${id}`, {
+    method: "DELETE",
+  }, { includeCsrf: true });
 }
 
 export function createAdminPatternGroup(payload: AdminPatternGroupInput) {

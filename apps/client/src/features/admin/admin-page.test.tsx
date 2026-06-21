@@ -5,30 +5,39 @@ import {
   adminLogin,
   adminLogout,
   createAdminPatternGroup,
+  createAdminRestrictedAccount,
+  deleteAdminRestrictedAccount,
   deleteAllAdminPatternGroups,
   deleteAdminPatternGroup,
   getAdminPatternGroups,
+  getAdminRestrictedAccounts,
   importAdminPatternGroups,
   testAdminSearchPatterns,
   testAdminSearchQuery,
   updateAdminPatternGroup,
+  updateAdminRestrictedAccount,
 } from "@/lib/api";
 
 vi.mock("@/lib/api", () => ({
   adminLogin: vi.fn(),
   adminLogout: vi.fn(),
   createAdminPatternGroup: vi.fn(),
+  createAdminRestrictedAccount: vi.fn(),
+  deleteAdminRestrictedAccount: vi.fn(),
   deleteAllAdminPatternGroups: vi.fn(),
   deleteAdminPatternGroup: vi.fn(),
   getAdminPatternGroups: vi.fn(),
+  getAdminRestrictedAccounts: vi.fn(),
   importAdminPatternGroups: vi.fn(),
   testAdminSearchPatterns: vi.fn(),
   testAdminSearchQuery: vi.fn(),
   updateAdminPatternGroup: vi.fn(),
+  updateAdminRestrictedAccount: vi.fn(),
   getAdminImportErrors: vi.fn(() => []),
 }));
 
 const mockedGetAdminPatternGroups = vi.mocked(getAdminPatternGroups);
+const mockedGetAdminRestrictedAccounts = vi.mocked(getAdminRestrictedAccounts);
 const mockedImportAdminPatternGroups = vi.mocked(importAdminPatternGroups);
 const mockedAdminLogin = vi.mocked(adminLogin);
 const mockedAdminLogout = vi.mocked(adminLogout);
@@ -43,6 +52,7 @@ describe("AdminPage JSON import", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockedGetAdminPatternGroups.mockResolvedValue([]);
+    mockedGetAdminRestrictedAccounts.mockResolvedValue([]);
     mockedImportAdminPatternGroups.mockResolvedValue([]);
     mockedAdminLogin.mockResolvedValue();
     mockedAdminLogout.mockResolvedValue();
@@ -170,10 +180,10 @@ describe("AdminPage JSON import", () => {
   it("shows and submits related countries for provider rules", async () => {
     renderAdminPage();
 
-    fireEvent.change((await screen.findAllByRole("combobox"))[0], {
+    fireEvent.change((await screen.findAllByRole("combobox"))[2], {
       target: { value: "provider" },
     });
-    const [valueInput, patternsInput, countryCodesInput] = screen.getAllByRole("textbox");
+    const [valueInput, patternsInput, countryCodesInput] = screen.getAllByRole("textbox").slice(4);
     fireEvent.change(valueInput, {
       target: { value: "viaplay" },
     });

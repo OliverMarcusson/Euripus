@@ -18,6 +18,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { ProviderSettingsSection } from "@/features/provider/provider-settings-section";
+import { RestrictedProviderSyncSection } from "@/features/provider/restricted-provider-sync-section";
 import { useChannelFavoriteMutation } from "@/hooks/use-channel-favorite";
 import { useChannelPlaybackMutation } from "@/hooks/use-playback-actions";
 import { usePpvFavoriteMutation } from "@/hooks/use-ppv-favorite";
@@ -40,6 +41,7 @@ import {
 } from "@/lib/utils";
 import type { ThemePreference } from "@/store/theme-store";
 import { useThemeStore } from "@/store/theme-store";
+import { useAuthStore } from "@/store/auth-store";
 
 const themeOptions: Array<{
   value: ThemePreference;
@@ -52,6 +54,7 @@ const themeOptions: Array<{
 ] as const;
 
 export function SettingsPage() {
+  const user = useAuthStore((state) => state.user);
   const queryClient = useQueryClient();
   const [pairCode, setPairCode] = useState("");
   const [rememberDevice, setRememberDevice] = useState(true);
@@ -346,7 +349,7 @@ export function SettingsPage() {
 
       <Separator className="sm:hidden" />
 
-      <ProviderSettingsSection />
+      {user?.providerLocked ? <RestrictedProviderSyncSection /> : <ProviderSettingsSection />}
 
       {remoteDevices.length ? (
         <Card className="rounded-none border-0 bg-transparent shadow-none sm:rounded-3xl sm:border sm:border-border/50 sm:bg-card/40 sm:backdrop-blur-xl sm:shadow-2xl">

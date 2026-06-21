@@ -1,4 +1,5 @@
 import type {
+  AdminRestrictedAccountInput,
   AdminPatternGroup,
   AdminPatternGroupInput,
   AdminPatternKind,
@@ -16,15 +17,19 @@ import { Label } from "@/components/ui/label";
 import {
   adminLogin,
   adminLogout,
+  createAdminRestrictedAccount,
+  deleteAdminRestrictedAccount,
   createAdminPatternGroup,
   deleteAllAdminPatternGroups,
   deleteAdminPatternGroup,
   getAdminPatternGroups,
+  getAdminRestrictedAccounts,
   getAdminImportErrors,
   importAdminPatternGroups,
   testAdminSearchQuery,
   testAdminSearchPatterns,
   updateAdminPatternGroup,
+  updateAdminRestrictedAccount,
 } from "@/lib/api";
 
 type EditableGroup = AdminPatternGroupInput & {
@@ -54,6 +59,19 @@ const DEFAULT_JSON_IMPORT = `[
   }
 ]`;
 
+const DEFAULT_MANAGED_ACCOUNT: AdminRestrictedAccountInput = {
+  username: "",
+  password: "",
+  provider: {
+    baseUrl: "",
+    username: "",
+    password: "",
+    outputFormat: "m3u8",
+    playbackMode: "direct",
+    epgSources: [],
+  },
+};
+
 export function AdminPage() {
   const queryClient = useQueryClient();
   const [password, setPassword] = useState("");
@@ -70,10 +88,17 @@ export function AdminPage() {
   const [searchQueryInput, setSearchQueryInput] = useState(
     "country:se provider:viaplay !ppv epg",
   );
+  const [managedAccount, setManagedAccount] = useState<AdminRestrictedAccountInput>(DEFAULT_MANAGED_ACCOUNT);
+  const [editingManagedAccountId, setEditingManagedAccountId] = useState<string | null>(null);
 
   const groupsQuery = useQuery({
     queryKey: ["admin", "pattern-groups"],
     queryFn: getAdminPatternGroups,
+    retry: false,
+  });
+  const managedAccountsQuery = useQuery({
+    queryKey: ["admin", "restricted-accounts"],
+    queryFn: getAdminRestrictedAccounts,
     retry: false,
   });
 
@@ -93,6 +118,27 @@ export function AdminPage() {
     mutationFn: adminLogout,
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["admin"] });
+    },
+  });
+  const createManagedAccountMutation = useMutation({
+    mutationFn: createAdminRestrictedAccount,
+    onSuccess: async () => {
+      setManagedAccount(DEFAULT_MANAGED_ACCOUNT);
+      await queryClient.invalidateQueries({ queryKey: ["admin", "restricted-accounts"] });
+    },
+  });
+  const deleteManagedAccountMutation = useMutation({
+    mutationFn: deleteAdminRestrictedAccount,
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["admin", "restricted-accounts"] });
+    },
+  });
+  const updateManagedAccountMutation = useMutation({
+    mutationFn: ({ id, payload }: { id: string; payload: AdminRestrictedAccountInput }) => updateAdminRestrictedAccount(id, payload),
+    onSuccess: async () => {
+      setManagedAccount(DEFAULT_MANAGED_ACCOUNT);
+      setEditingManagedAccountId(null);
+      await queryClient.invalidateQueries({ queryKey: ["admin", "restricted-accounts"] });
     },
   });
 
@@ -223,6 +269,38 @@ export function AdminPage() {
           </>
         }
       />
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Managed restricted accounts</CardTitle>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-4">
+          <p className="text-sm text-muted-foreground">These users can sync their assigned provider but cannot change its settings.</p>
+          <div className="grid gap-3 md:grid-cols-2">
+            <Input aria-label="Managed account username" placeholder="Account username" value={managedAccount.username} onChange={(event) => setManagedAccount((value) => ({ ...value, username: event.target.value }))} />
+            <Input aria-label="Managed account password" type="password" placeholder="Login password" value={managedAccount.password ?? ""} onChange={(event) => setManagedAccount((value) => ({ ...value, password: event.target.value }))} />
+            <Input aria-label="Managed provider URL" placeholder="Provider URL" value={managedAccount.provider.baseUrl} onChange={(event) => setManagedAccount((value) => ({ ...value, provider: { ...value.provider, baseUrl: event.target.value } }))} />
+            <Input aria-label="Managed provider username" placeholder="Provider username" value={managedAccount.provider.username} onChange={(event) => setManagedAccount((value) => ({ ...value, provider: { ...value.provider, username: event.target.value } }))} />
+            <Input aria-label="Managed provider password" type="password" placeholder="Provider password" value={managedAccount.provider.password} onChange={(event) => setManagedAccount((value) => ({ ...value, provider: { ...value.provider, password: event.target.value } }))} />
+            <Input aria-label="Managed EPG URLs" placeholder="EPG URLs (space-separated)" value={managedAccount.provider.epgSources.map((source) => source.url).join(" ")} onChange={(event) => setManagedAccount((value) => ({ ...value, provider: { ...value.provider, epgSources: event.target.value.split(/\s+/).filter(Boolean).map((url, priority) => ({ url, priority, enabled: true })) } }))} />
+            <select aria-label="Managed output format" className="h-9 rounded-md border bg-background px-3" value={managedAccount.provider.outputFormat} onChange={(event) => setManagedAccount((value) => ({ ...value, provider: { ...value.provider, outputFormat: event.target.value as "m3u8" | "ts" } }))}><option value="m3u8">M3U8</option><option value="ts">TS</option></select>
+            <select aria-label="Managed playback mode" className="h-9 rounded-md border bg-background px-3" value={managedAccount.provider.playbackMode} onChange={(event) => setManagedAccount((value) => ({ ...value, provider: { ...value.provider, playbackMode: event.target.value as "direct" | "relay" } }))}><option value="direct">Direct</option><option value="relay">Relay</option></select>
+          </div>
+          {createManagedAccountMutation.error instanceof Error ? <p className="text-sm text-destructive">{createManagedAccountMutation.error.message}</p> : null}
+          <Button onClick={() => editingManagedAccountId ? updateManagedAccountMutation.mutate({ id: editingManagedAccountId, payload: managedAccount }) : createManagedAccountMutation.mutate(managedAccount)} disabled={createManagedAccountMutation.isPending || updateManagedAccountMutation.isPending}>
+            {createManagedAccountMutation.isPending || updateManagedAccountMutation.isPending ? "Saving..." : editingManagedAccountId ? "Save managed account" : "Create managed account"}
+          </Button>
+          <div className="flex flex-col gap-2">
+            {(managedAccountsQuery.data ?? []).map((account) => (
+              <div key={account.id} className="flex items-center justify-between gap-3 rounded-lg border p-3">
+                <div className="min-w-0"><p className="font-medium">{account.username}</p><p className="text-xs text-muted-foreground">{account.providerStatus ?? "No provider"}{account.providerLastSyncAt ? ` · synced ${new Date(account.providerLastSyncAt).toLocaleString()}` : ""}</p></div>
+                <div className="flex gap-2"><Button variant="outline" size="sm" onClick={() => { setEditingManagedAccountId(account.id); setManagedAccount({ username: account.username, password: "", provider: { baseUrl: account.providerBaseUrl ?? "", username: account.providerUsername ?? "", password: "", outputFormat: account.providerOutputFormat ?? "m3u8", playbackMode: account.providerPlaybackMode ?? "direct", epgSources: account.providerEpgUrls.map((url, priority) => ({ url, priority, enabled: true })) } }); }}>Edit</Button><Button variant="destructive" size="sm" onClick={() => deleteManagedAccountMutation.mutate(account.id)} disabled={deleteManagedAccountMutation.isPending}>Delete</Button></div>
+              </div>
+            ))}
+            {managedAccountsQuery.isError ? <p className="text-sm text-destructive">Unable to load managed accounts.</p> : null}
+          </div>
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader>

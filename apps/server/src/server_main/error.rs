@@ -13,6 +13,7 @@ pub(super) struct ErrorPayload {
 #[derive(Debug)]
 pub(super) enum AppError {
     Unauthorized,
+    Forbidden(String),
     NotFound(String),
     BadRequest(String),
     BadRequestDetailed {
@@ -43,6 +44,12 @@ impl IntoResponse for AppError {
                 StatusCode::UNAUTHORIZED,
                 "unauthorized".to_string(),
                 "Authentication is required".to_string(),
+                None,
+            ),
+            AppError::Forbidden(message) => (
+                StatusCode::FORBIDDEN,
+                "forbidden".to_string(),
+                message,
                 None,
             ),
             AppError::NotFound(message) => (
