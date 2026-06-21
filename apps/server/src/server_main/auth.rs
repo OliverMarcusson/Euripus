@@ -20,6 +20,7 @@ pub(super) fn shared_router() -> Router<AppState> {
 struct UserResponse {
     id: Uuid,
     username: String,
+    provider_locked: bool,
     created_at: DateTime<Utc>,
 }
 
@@ -61,6 +62,7 @@ struct UserRecord {
     username: String,
     password_hash: String,
     created_at: DateTime<Utc>,
+    provider_locked: bool,
 }
 
 #[derive(Debug, FromRow)]
@@ -89,7 +91,7 @@ async fn register(
         r#"
         INSERT INTO users (username, password_hash)
         VALUES ($1, $2)
-        RETURNING id, username, password_hash, created_at
+        RETURNING id, username, password_hash, created_at, provider_locked
         "#,
     )
     .bind(&username)
@@ -115,7 +117,7 @@ async fn login(
 ) -> Result<(CookieJar, Json<AuthSessionResponse>), AppError> {
     let username = payload.username.trim().to_lowercase();
     let user = sqlx::query_as::<_, UserRecord>(
-        r#"SELECT id, username, password_hash, created_at FROM users WHERE username = $1"#,
+        r#"SELECT id, username, password_hash, created_at, provider_locked FROM users WHERE username = $1"#,
     )
     .bind(&username)
     .fetch_optional(&state.pool)
@@ -157,7 +159,7 @@ async fn logout(
 async fn me(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<UserResponse> {
     let auth = require_auth(&state, &headers).await?;
     let user = sqlx::query_as::<_, UserResponse>(
-        r#"SELECT id, username, created_at FROM users WHERE id = $1"#,
+        r#"SELECT id, username, provider_locked, created_at FROM users WHERE id = $1"#,
     )
     .bind(auth.user_id)
     .fetch_one(&state.pool)
@@ -244,7 +246,7 @@ async fn refresh_session_from_token(
 ) -> Result<IssuedSession, AppError> {
     let session = get_valid_session_by_refresh_token(state, refresh_token).await?;
     let user = sqlx::query_as::<_, UserRecord>(
-        r#"SELECT id, username, password_hash, created_at FROM users WHERE id = $1"#,
+        r#"SELECT id, username, password_hash, created_at, provider_locked FROM users WHERE id = $1"#,
     )
     .bind(session.user_id)
     .fetch_one(&state.pool)
@@ -320,6 +322,7 @@ fn issue_session(
             user: UserResponse {
                 id: user.id,
                 username: user.username.clone(),
+                provider_locked: user.provider_locked,
                 created_at: user.created_at,
             },
             access_token,

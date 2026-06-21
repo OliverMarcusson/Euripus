@@ -9,6 +9,14 @@ pub(super) fn browser_router() -> Router<AppState> {
         .route("/admin/auth/login", post(login))
         .route("/admin/auth/logout", post(logout))
         .route(
+            "/admin/restricted-accounts",
+            get(list_restricted_accounts).post(create_restricted_account),
+        )
+        .route(
+            "/admin/restricted-accounts/{id}",
+            put(update_restricted_account).delete(delete_restricted_account),
+        )
+        .route(
             "/admin/search/pattern-groups",
             get(list_pattern_groups)
                 .post(create_pattern_group)
@@ -54,6 +62,51 @@ struct AdminPatternGroupResponse {
 #[serde(rename_all = "camelCase")]
 struct AdminLoginPayload {
     password: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ManagedEpgSourcePayload {
+    url: String,
+    enabled: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ManagedProviderPayload {
+    base_url: String,
+    username: String,
+    password: String,
+    output_format: String,
+    playback_mode: String,
+    #[serde(default)]
+    epg_sources: Vec<ManagedEpgSourcePayload>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ManagedAccountPayload {
+    username: String,
+    #[serde(default)]
+    password: String,
+    provider: ManagedProviderPayload,
+}
+
+#[derive(Debug, Serialize, FromRow)]
+#[serde(rename_all = "camelCase")]
+struct ManagedAccountResponse {
+    id: Uuid,
+    username: String,
+    created_at: DateTime<Utc>,
+    provider_id: Option<Uuid>,
+    provider_status: Option<String>,
+    provider_last_sync_at: Option<DateTime<Utc>>,
+    provider_last_sync_error: Option<String>,
+    provider_base_url: Option<String>,
+    provider_username: Option<String>,
+    provider_output_format: Option<String>,
+    provider_playback_mode: Option<String>,
+    provider_epg_urls: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -194,6 +247,217 @@ async fn logout(
         clear_admin_auth_cookies(&state, jar),
         StatusCode::NO_CONTENT,
     ))
+}
+
+async fn list_restricted_accounts(
+    State(state): State<AppState>,
+    jar: CookieJar,
+) -> ApiResult<Vec<ManagedAccountResponse>> {
+    require_admin(&state, &jar)?;
+    let accounts = sqlx::query_as::<_, ManagedAccountResponse>(
+        r#"
+        SELECT u.id, u.username, u.created_at,
+          p.id AS provider_id, p.status AS provider_status,
+          p.last_sync_at AS provider_last_sync_at, p.last_sync_error AS provider_last_sync_error,
+          p.base_url AS provider_base_url, p.username AS provider_username,
+          p.output_format AS provider_output_format, p.playback_mode AS provider_playback_mode,
+          COALESCE((SELECT array_agg(e.url ORDER BY e.priority, e.created_at) FROM epg_sources e WHERE e.profile_id = p.id), ARRAY[]::TEXT[]) AS provider_epg_urls
+        FROM users u
+        LEFT JOIN LATERAL (
+          SELECT id, status, last_sync_at, last_sync_error, base_url, username, output_format, playback_mode FROM provider_profiles
+          WHERE user_id = u.id ORDER BY created_at ASC LIMIT 1
+        ) p ON TRUE
+        WHERE u.provider_locked = TRUE
+        ORDER BY u.created_at DESC
+        "#,
+    ).fetch_all(&state.pool).await?;
+    Ok(Json(accounts))
+}
+
+async fn create_restricted_account(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    headers: HeaderMap,
+    Json(payload): Json<ManagedAccountPayload>,
+) -> ApiResult<ManagedAccountResponse> {
+    require_admin(&state, &jar)?;
+    validate_admin_csrf(&jar, &headers)?;
+    let username = normalize_managed_username(&payload.username)?;
+    if payload.password.is_empty() {
+        return Err(AppError::BadRequest(
+            "A login password is required.".to_string(),
+        ));
+    }
+    let password_hash = hash_password(&payload.password)?;
+    let user_id = sqlx::query_scalar::<_, Uuid>(
+        "INSERT INTO users (username, password_hash, provider_locked) VALUES ($1, $2, TRUE) RETURNING id",
+    ).bind(&username).bind(password_hash).fetch_one(&state.pool).await.map_err(map_managed_user_error)?;
+    if let Err(error) = save_managed_provider(&state, user_id, None, payload.provider).await {
+        sqlx::query("DELETE FROM users WHERE id = $1")
+            .bind(user_id)
+            .execute(&state.pool)
+            .await?;
+        return Err(error);
+    }
+    load_managed_account(&state.pool, user_id).await
+}
+
+async fn update_restricted_account(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+    Json(payload): Json<ManagedAccountPayload>,
+) -> ApiResult<ManagedAccountResponse> {
+    require_admin(&state, &jar)?;
+    validate_admin_csrf(&jar, &headers)?;
+    let username = normalize_managed_username(&payload.username)?;
+    let exists = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(SELECT 1 FROM users WHERE id = $1 AND provider_locked = TRUE)",
+    )
+    .bind(id)
+    .fetch_one(&state.pool)
+    .await?;
+    if !exists {
+        return Err(AppError::NotFound(
+            "Restricted account not found.".to_string(),
+        ));
+    }
+    if payload.password.trim().is_empty() {
+        sqlx::query("UPDATE users SET username = $1 WHERE id = $2")
+            .bind(&username)
+            .bind(id)
+            .execute(&state.pool)
+            .await
+            .map_err(map_managed_user_error)?;
+    } else {
+        sqlx::query("UPDATE users SET username = $1, password_hash = $2 WHERE id = $3")
+            .bind(&username)
+            .bind(hash_password(&payload.password)?)
+            .bind(id)
+            .execute(&state.pool)
+            .await
+            .map_err(map_managed_user_error)?;
+    }
+    let profile_id = sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM provider_profiles WHERE user_id = $1 ORDER BY created_at ASC LIMIT 1",
+    )
+    .bind(id)
+    .fetch_optional(&state.pool)
+    .await?;
+    save_managed_provider(&state, id, profile_id, payload.provider).await?;
+    load_managed_account(&state.pool, id).await
+}
+
+async fn delete_restricted_account(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+) -> Result<StatusCode, AppError> {
+    require_admin(&state, &jar)?;
+    validate_admin_csrf(&jar, &headers)?;
+    let deleted = sqlx::query("DELETE FROM users WHERE id = $1 AND provider_locked = TRUE")
+        .bind(id)
+        .execute(&state.pool)
+        .await?;
+    if deleted.rows_affected() == 0 {
+        return Err(AppError::NotFound(
+            "Restricted account not found.".to_string(),
+        ));
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
+fn normalize_managed_username(value: &str) -> Result<String, AppError> {
+    let username = value.trim().to_ascii_lowercase();
+    if username.len() < 3 {
+        return Err(AppError::BadRequest(
+            "Username must be at least 3 characters.".to_string(),
+        ));
+    }
+    Ok(username)
+}
+
+fn map_managed_user_error(error: sqlx::Error) -> AppError {
+    match error {
+        sqlx::Error::Database(database_error) if database_error.is_unique_violation() => {
+            AppError::BadRequest("That username is already taken.".to_string())
+        }
+        other => AppError::Internal(anyhow!(other)),
+    }
+}
+
+async fn save_managed_provider(
+    state: &AppState,
+    user_id: Uuid,
+    profile_id: Option<Uuid>,
+    payload: ManagedProviderPayload,
+) -> Result<(), AppError> {
+    let output_format = normalize_output_format(&payload.output_format)?;
+    let playback_mode = normalize_playback_mode(&payload.playback_mode)?;
+    let password = if payload.password.trim().is_empty() {
+        let id = profile_id
+            .ok_or_else(|| AppError::BadRequest("A provider password is required.".to_string()))?;
+        let encrypted = sqlx::query_scalar::<_, String>(
+            "SELECT password_encrypted FROM provider_profiles WHERE id = $1 AND user_id = $2",
+        )
+        .bind(id)
+        .bind(user_id)
+        .fetch_one(&state.pool)
+        .await?;
+        decrypt_secret(&state.config.encryption_key, &encrypted).map_err(|_| {
+            AppError::BadRequest(
+                "Stored provider password could not be decrypted. Enter it again.".to_string(),
+            )
+        })?
+    } else {
+        payload.password
+    };
+    let credentials = XtreamCredentials {
+        base_url: payload.base_url.clone(),
+        username: payload.username.clone(),
+        password: password.clone(),
+        output_format: output_format_as_str(output_format).to_string(),
+    };
+    let validation = xtreme::validate_profile(&state.provider_http_client, &credentials).await?;
+    if !validation.valid {
+        return Err(AppError::BadRequest(validation.message));
+    }
+    let id = profile_id.unwrap_or_else(Uuid::new_v4);
+    if profile_id.is_some() {
+        sqlx::query("UPDATE provider_profiles SET base_url = $2, username = $3, password_encrypted = $4, output_format = $5, playback_mode = $6, status = 'valid', last_validated_at = NOW(), last_sync_error = NULL, updated_at = NOW() WHERE id = $1 AND user_id = $7")
+            .bind(id).bind(&payload.base_url).bind(&payload.username).bind(encrypt_secret(&state.config.encryption_key, &password)?).bind(output_format_as_str(output_format)).bind(playback_mode_as_str(playback_mode)).bind(user_id).execute(&state.pool).await?;
+    } else {
+        sqlx::query("INSERT INTO provider_profiles (id, user_id, provider_type, base_url, username, password_encrypted, output_format, playback_mode, status, last_validated_at) VALUES ($1, $2, 'xtreme', $3, $4, $5, $6, $7, 'valid', NOW())")
+            .bind(id).bind(user_id).bind(&payload.base_url).bind(&payload.username).bind(encrypt_secret(&state.config.encryption_key, &password)?).bind(output_format_as_str(output_format)).bind(playback_mode_as_str(playback_mode)).execute(&state.pool).await?;
+    }
+    sqlx::query("DELETE FROM epg_sources WHERE profile_id = $1")
+        .bind(id)
+        .execute(&state.pool)
+        .await?;
+    for (index, source) in payload.epg_sources.into_iter().enumerate() {
+        let url = Url::parse(source.url.trim()).map_err(|_| {
+            AppError::BadRequest("EPG source URLs must be valid absolute URLs.".to_string())
+        })?;
+        sqlx::query(
+            "INSERT INTO epg_sources (profile_id, url, priority, enabled) VALUES ($1, $2, $3, $4)",
+        )
+        .bind(id)
+        .bind(url.to_string())
+        .bind(index as i32)
+        .bind(source.enabled)
+        .execute(&state.pool)
+        .await?;
+    }
+    let job = sync::insert_sync_job(&state.pool, user_id, id, "full", "manual").await?;
+    sync::spawn_sync_job(state.clone(), user_id, id, job.id);
+    Ok(())
+}
+
+async fn load_managed_account(pool: &PgPool, id: Uuid) -> ApiResult<ManagedAccountResponse> {
+    let account = sqlx::query_as::<_, ManagedAccountResponse>(r#"SELECT u.id, u.username, u.created_at, p.id AS provider_id, p.status AS provider_status, p.last_sync_at AS provider_last_sync_at, p.last_sync_error AS provider_last_sync_error, p.base_url AS provider_base_url, p.username AS provider_username, p.output_format AS provider_output_format, p.playback_mode AS provider_playback_mode, COALESCE((SELECT array_agg(e.url ORDER BY e.priority, e.created_at) FROM epg_sources e WHERE e.profile_id = p.id), ARRAY[]::TEXT[]) AS provider_epg_urls FROM users u LEFT JOIN LATERAL (SELECT id, status, last_sync_at, last_sync_error, base_url, username, output_format, playback_mode FROM provider_profiles WHERE user_id = u.id ORDER BY created_at ASC LIMIT 1) p ON TRUE WHERE u.id = $1 AND u.provider_locked = TRUE"#).bind(id).fetch_optional(pool).await?.ok_or_else(|| AppError::NotFound("Restricted account not found.".to_string()))?;
+    Ok(Json(account))
 }
 
 async fn list_pattern_groups(

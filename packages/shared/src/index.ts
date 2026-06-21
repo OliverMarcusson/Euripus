@@ -7,6 +7,7 @@ export type ApiError = {
 export type User = {
   id: string;
   username: string;
+  providerLocked: boolean;
   createdAt: string;
 };
 
@@ -479,6 +480,34 @@ export type ValidateProviderResponse = {
   valid: boolean;
   status: ProviderStatus;
   message: string;
+};
+
+export type AdminRestrictedAccount = {
+  id: string;
+  username: string;
+  createdAt: string;
+  provider: ProviderProfile | null;
+};
+
+export type AdminRestrictedAccountInput = {
+  username: string;
+  password?: string;
+  provider: Omit<SaveProviderPayload, "id">;
+};
+
+export type AdminRestrictedAccountSummary = {
+  id: string;
+  username: string;
+  createdAt: string;
+  providerId: string | null;
+  providerStatus: ProviderStatus | null;
+  providerLastSyncAt: string | null;
+  providerLastSyncError: string | null;
+  providerBaseUrl: string | null;
+  providerUsername: string | null;
+  providerOutputFormat: "m3u8" | "ts" | null;
+  providerPlaybackMode: "direct" | "relay" | null;
+  providerEpgUrls: string[];
 };
 
 export type ServerNetworkStatus = {

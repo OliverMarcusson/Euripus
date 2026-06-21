@@ -40,6 +40,7 @@ describe("router session redirects", () => {
       user: {
         id: "user-1",
         username: "oliver",
+        providerLocked: false,
         createdAt: new Date().toISOString(),
       },
     });

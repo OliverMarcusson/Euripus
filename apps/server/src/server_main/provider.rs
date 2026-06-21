@@ -329,6 +329,7 @@ async fn validate_provider(
     Json(payload): Json<SaveProviderPayload>,
 ) -> ApiResult<ValidateProviderResponse> {
     let auth = require_auth(&state, &headers).await?;
+    ensure_provider_mutable(&auth)?;
     let output_format = normalize_output_format(&payload.output_format)?;
     let existing_profile = match payload.id {
         Some(profile_id) => {
@@ -363,6 +364,7 @@ async fn save_provider(
     Json(payload): Json<SaveProviderPayload>,
 ) -> ApiResult<ProviderProfileResponse> {
     let auth = require_auth(&state, &headers).await?;
+    ensure_provider_mutable(&auth)?;
     let output_format = normalize_output_format(&payload.output_format)?;
     let playback_mode = normalize_playback_mode(&payload.playback_mode)?;
     let epg_sources = normalize_epg_source_payloads(payload.epg_sources)?;
@@ -459,6 +461,7 @@ async fn delete_provider(
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, AppError> {
     let auth = require_auth(&state, &headers).await?;
+    ensure_provider_mutable(&auth)?;
     let profile = require_target_provider_profile(&state.pool, auth.user_id, id).await?;
 
     sync::ensure_no_active_sync(&state.pool, profile.id).await?;
@@ -525,4 +528,13 @@ async fn get_sync_status(
     .await?;
 
     Ok(Json(job))
+}
+
+fn ensure_provider_mutable(auth: &AuthContext) -> Result<(), AppError> {
+    if auth.provider_locked {
+        return Err(AppError::Forbidden(
+            "This managed account cannot change provider settings.".to_string(),
+        ));
+    }
+    Ok(())
 }
