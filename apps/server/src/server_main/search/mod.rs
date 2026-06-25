@@ -7,6 +7,8 @@ pub(super) mod lexicon;
 pub(super) mod queries;
 pub(super) mod rules;
 
+const MEILI_VISIBILITY_SCAN_BATCH: usize = 250;
+
 pub(super) fn shared_router() -> Router<AppState> {
     Router::new()
         .route("/search/status", get(get_search_backend_status))
@@ -209,6 +211,14 @@ fn parse_search_pagination(
     Ok((term, offset, limit.min(SEARCH_MAX_LIMIT), parsed))
 }
 
+fn visible_scan_limit(offset: i64, limit: i64) -> usize {
+    (offset + limit)
+        .max(limit)
+        .saturating_add(MEILI_VISIBILITY_SCAN_BATCH as i64)
+        .min(MEILI_MAX_TOTAL_HITS as i64)
+        .max(0) as usize
+}
+
 async fn execute_meili_channel_search(
     meili: &MeilisearchClient,
     user_id: Uuid,
@@ -248,32 +258,63 @@ async fn search_channels_meili(
     visible_channel_ids: &HashSet<Uuid>,
 ) -> std::result::Result<ChannelSearchResponse, AppError> {
     if parsed.search.is_empty() {
-        let results = execute_meili_channel_search(
-            meili,
-            user_id,
-            &parsed,
-            "",
-            limit as usize,
-            offset as usize,
-            true,
-        )
-        .await?;
-        let ids = results
-            .hits
+        let mut visible_ids = Vec::new();
+        let mut scan_offset = 0usize;
+        let target_visible = (offset + limit).max(limit).max(0) as usize;
+        let mut estimated_total_hits = None;
+        let mut scanned_hits = 0usize;
+        let mut exhausted = false;
+
+        while visible_ids.len() < target_visible && scan_offset < MEILI_MAX_TOTAL_HITS {
+            let results = execute_meili_channel_search(
+                meili,
+                user_id,
+                &parsed,
+                "",
+                MEILI_VISIBILITY_SCAN_BATCH,
+                scan_offset,
+                true,
+            )
+            .await?;
+
+            estimated_total_hits = results.estimated_total_hits;
+            if results.hits.is_empty() {
+                exhausted = true;
+                break;
+            }
+
+            scanned_hits += results.hits.len();
+            for hit in &results.hits {
+                let id = Uuid::parse_str(&hit.result.entity_id)
+                    .map_err(|error| AppError::Internal(anyhow!(error)))?;
+                if visible_channel_ids.contains(&id) {
+                    visible_ids.push(id);
+                }
+            }
+
+            scan_offset += results.hits.len();
+            if results.hits.len() < MEILI_VISIBILITY_SCAN_BATCH
+                || estimated_total_hits
+                    .map(|total| scan_offset >= total)
+                    .unwrap_or(false)
+            {
+                exhausted = true;
+                break;
+            }
+        }
+
+        let page_ids = visible_ids
             .iter()
-            .map(|hit| {
-                Uuid::parse_str(&hit.result.entity_id)
-                    .map_err(|error| AppError::Internal(anyhow!(error)))
-            })
-            .filter(|result| {
-                result
-                    .as_ref()
-                    .map(|id| visible_channel_ids.contains(id))
-                    .unwrap_or(true)
-            })
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        let total_count = meili_total_count(results.estimated_total_hits, ids.len());
-        let mut items = load_channels_by_ids(&state.pool, &ids, user_id)
+            .copied()
+            .skip(offset as usize)
+            .take(limit as usize)
+            .collect::<Vec<_>>();
+        let total_count = if exhausted {
+            visible_ids.len() as i64
+        } else {
+            meili_total_count(estimated_total_hits, scanned_hits).max(visible_ids.len() as i64)
+        };
+        let mut items = load_channels_by_ids(&state.pool, &page_ids, user_id)
             .await
             .map_err(AppError::from)?;
         rewrite_channel_logo_urls(state, headers, user_id, &mut items)?;
@@ -287,7 +328,8 @@ async fn search_channels_meili(
         });
     }
 
-    let primary_limit = lexicon::meili_channel_primary_limit(offset, limit);
+    let primary_limit =
+        lexicon::meili_channel_primary_limit(offset, limit).max(visible_scan_limit(offset, limit));
     let primary_results = execute_meili_channel_search(
         meili,
         user_id,
@@ -402,39 +444,74 @@ async fn search_programs_meili(
     visible_channel_ids: &HashSet<Uuid>,
 ) -> std::result::Result<ProgramSearchResponse, AppError> {
     let filter = lexicon::build_meili_search_filter(user_id, parsed, false);
-    let results = meili
-        .index("programs")
-        .search()
-        .with_query(&parsed.search)
-        .with_matching_strategy(MatchingStrategies::FREQUENCY)
-        .with_filter(&filter)
-        .with_sort(&["sort_priority:asc", "starts_at:asc", "ends_at:asc"])
-        .with_offset(offset as usize)
-        .with_limit(limit as usize)
-        .execute::<MeiliProgramDoc>()
-        .await
-        .map_err(|error| AppError::Internal(anyhow!(error)))?;
+    let mut visible_ids = Vec::new();
+    let mut scan_offset = 0usize;
+    let target_visible = (offset + limit).max(limit).max(0) as usize;
+    let mut estimated_total_hits = None;
+    let mut scanned_hits = 0usize;
+    let mut exhausted = false;
 
-    let ids = results
-        .hits
+    while visible_ids.len() < target_visible && scan_offset < MEILI_MAX_TOTAL_HITS {
+        let results = meili
+            .index("programs")
+            .search()
+            .with_query(&parsed.search)
+            .with_matching_strategy(MatchingStrategies::FREQUENCY)
+            .with_filter(&filter)
+            .with_sort(&["sort_priority:asc", "starts_at:asc", "ends_at:asc"])
+            .with_offset(scan_offset)
+            .with_limit(MEILI_VISIBILITY_SCAN_BATCH)
+            .execute::<MeiliProgramDoc>()
+            .await
+            .map_err(|error| AppError::Internal(anyhow!(error)))?;
+
+        estimated_total_hits = results.estimated_total_hits;
+        if results.hits.is_empty() {
+            exhausted = true;
+            break;
+        }
+
+        scanned_hits += results.hits.len();
+        for hit in &results.hits {
+            let channel_is_visible = match hit.result.channel_id.as_deref() {
+                Some(channel_id) => Uuid::parse_str(channel_id)
+                    .map(|channel_id| visible_channel_ids.contains(&channel_id))
+                    .map_err(|error| AppError::Internal(anyhow!(error)))?,
+                None => true,
+            };
+            if channel_is_visible {
+                visible_ids.push(
+                    Uuid::parse_str(&hit.result.entity_id)
+                        .map_err(|error| AppError::Internal(anyhow!(error)))?,
+                );
+            }
+        }
+
+        scan_offset += results.hits.len();
+        if results.hits.len() < MEILI_VISIBILITY_SCAN_BATCH
+            || estimated_total_hits
+                .map(|total| scan_offset >= total)
+                .unwrap_or(false)
+        {
+            exhausted = true;
+            break;
+        }
+    }
+
+    let page_ids = visible_ids
         .iter()
-        .map(|hit| {
-            Uuid::parse_str(&hit.result.entity_id)
-                .map_err(|error| AppError::Internal(anyhow!(error)))
-        })
-        .collect::<std::result::Result<Vec<_>, _>>()?;
-    let items = load_programs_by_ids(pool, user_id, &ids)
-        .await
-        .map_err(AppError::from)?
-        .into_iter()
-        .filter(|program| {
-            program
-                .channel_id
-                .map(|channel_id| visible_channel_ids.contains(&channel_id))
-                .unwrap_or(true)
-        })
+        .copied()
+        .skip(offset as usize)
+        .take(limit as usize)
         .collect::<Vec<_>>();
-    let total_count = meili_total_count(results.estimated_total_hits, items.len());
+    let items = load_programs_by_ids(pool, user_id, &page_ids)
+        .await
+        .map_err(AppError::from)?;
+    let total_count = if exhausted {
+        visible_ids.len() as i64
+    } else {
+        meili_total_count(estimated_total_hits, scanned_hits).max(visible_ids.len() as i64)
+    };
 
     Ok(ProgramSearchResponse {
         query: query.to_string(),
