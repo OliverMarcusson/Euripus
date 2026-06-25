@@ -1,6 +1,7 @@
 use self::queries::{search_channels_postgres, search_programs_postgres};
 use super::*;
 
+pub(super) mod ai_ppv;
 pub(super) mod indexing;
 pub(super) mod lexicon;
 pub(super) mod queries;
@@ -12,6 +13,7 @@ pub(super) fn shared_router() -> Router<AppState> {
         .route("/search/filter-options", get(get_search_filter_options))
         .route("/search/channels", get(search_channels))
         .route("/search/programs", get(search_programs))
+        .merge(ai_ppv::router())
 }
 
 async fn get_search_backend_status(
@@ -364,9 +366,11 @@ async fn search_channels_meili(
         .into_iter()
         .filter(|id| visible_channel_ids.contains(id))
         .collect::<Vec<_>>();
-    let total_count =
-        meili_total_count(primary_results.estimated_total_hits, ordered_entity_ids.len())
-            .max(ordered_entity_ids.len() as i64);
+    let total_count = meili_total_count(
+        primary_results.estimated_total_hits,
+        ordered_entity_ids.len(),
+    )
+    .max(ordered_entity_ids.len() as i64);
     let page_ids = ordered_entity_ids
         .into_iter()
         .skip(offset as usize)

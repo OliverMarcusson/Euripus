@@ -731,13 +731,26 @@ async fn add_ppv_favorite(
         FROM channels c
         WHERE c.user_id = $1
           AND c.id = $2
-          AND c.search_is_ppv = TRUE
+          AND (
+            c.search_is_ppv = TRUE
+            OR EXISTS(
+              SELECT 1
+              FROM programs p
+              WHERE p.user_id = c.user_id
+                AND p.channel_id = c.id
+                AND p.search_is_ppv = TRUE
+                AND p.end_at > NOW() - ($4 * INTERVAL '1 hour')
+                AND p.start_at < NOW() + ($5 * INTERVAL '1 day')
+            )
+          )
         ON CONFLICT (user_id, channel_id) DO NOTHING
         "#,
     )
     .bind(auth.user_id)
     .bind(channel_id)
     .bind(sort_order)
+    .bind(EPG_RETENTION_PAST_HOURS)
+    .bind(EPG_RETENTION_FUTURE_DAYS)
     .execute(&state.pool)
     .await?;
     Ok(StatusCode::NO_CONTENT)
@@ -1672,6 +1685,8 @@ mod tests {
                 vpn_provider_name: None,
                 meilisearch_url: None,
                 meilisearch_api_key: None,
+                openrouter_api_key: None,
+                openrouter_model: "openai/gpt-4.1-mini".to_string(),
                 sports_api_base_url: None,
                 admin_password: None,
             }),

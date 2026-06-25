@@ -190,6 +190,8 @@ mod tests {
                 vpn_provider_name: None,
                 meilisearch_url: None,
                 meilisearch_api_key: None,
+                openrouter_api_key: None,
+                openrouter_model: "openai/gpt-4.1-mini".to_string(),
                 sports_api_base_url: None,
                 admin_password: None,
             }),

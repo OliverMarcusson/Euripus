@@ -1,7 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { Heart, Play, Tv } from "lucide-react";
-import type { FavoriteChannelEntry } from "@euripus/shared";
+import { Heart, Play, Search, Sparkles, Tv } from "lucide-react";
+import type { FormEvent } from "react";
+import { useState } from "react";
+import type { AiPpvSearchResult, FavoriteChannelEntry } from "@euripus/shared";
 import { PageHeader } from "@/components/layout/page-header";
 import { ChannelAvatar } from "@/components/ui/channel-avatar";
 import { Badge } from "@/components/ui/badge";
@@ -25,6 +27,7 @@ import { usePpvFavoriteMutation } from "@/hooks/use-ppv-favorite";
 import {
   getPpvFavorites,
   reorderPpvFavorites,
+  searchAiPpv,
 } from "@/lib/api";
 import { STANDARD_QUERY_STALE_TIME_MS } from "@/lib/query-cache";
 import {
@@ -71,6 +74,11 @@ const ppvGradientButtonClassName =
 export function PpvFavoritesPage() {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
+  const [aiQuery, setAiQuery] = useState("");
+  const [aiSubmittedQuery, setAiSubmittedQuery] = useState("");
+  const [aiFavoriteOverrides, setAiFavoriteOverrides] = useState<Record<string, boolean>>(
+    {},
+  );
   const favoritesQuery = useQuery({
     queryKey: ["favorites", "ppv"],
     queryFn: getPpvFavorites,
@@ -98,6 +106,12 @@ export function PpvFavoritesPage() {
     },
     onSettled: async () => {
       await queryClient.invalidateQueries({ queryKey: ["favorites", "ppv"] });
+    },
+  });
+  const aiSearchMutation = useMutation({
+    mutationFn: searchAiPpv,
+    onSuccess: () => {
+      setAiFavoriteOverrides({});
     },
   });
 
@@ -134,6 +148,48 @@ export function PpvFavoritesPage() {
     persistFavoriteOrder(nextChannels);
   }
 
+  function submitAiSearch(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const query = aiQuery.trim();
+    if (query.length < 3) {
+      return;
+    }
+    setAiSubmittedQuery(query);
+    aiSearchMutation.mutate({ query, limit: 12 });
+  }
+
+  function toggleAiPpvFavorite(result: AiPpvSearchResult) {
+    const channelId = result.channel.id;
+    const previousIsPpvFavorite = Boolean(result.channel.isPpvFavorite);
+    setAiFavoriteOverrides((current) => ({
+      ...current,
+      [channelId]: !previousIsPpvFavorite,
+    }));
+    favoriteMutation.mutate(result.channel, {
+      onError: () => {
+        setAiFavoriteOverrides((current) => ({
+          ...current,
+          [channelId]: previousIsPpvFavorite,
+        }));
+      },
+    });
+  }
+
+  const aiResults = (aiSearchMutation.data?.items ?? []).map((result) => {
+    const override = aiFavoriteOverrides[result.channel.id];
+    if (override === undefined) {
+      return result;
+    }
+
+    return {
+      ...result,
+      channel: {
+        ...result.channel,
+        isPpvFavorite: override,
+      },
+    };
+  });
+
   return (
     <div className="flex flex-col gap-5 sm:gap-6">
       <PageHeader
@@ -144,6 +200,24 @@ export function PpvFavoritesPage() {
           </Button>
         )}
         meta={<Badge variant="accent">{favorites.length} saved</Badge>}
+      />
+
+      <AiPpvSearchPanel
+        query={aiQuery}
+        submittedQuery={aiSubmittedQuery}
+        results={aiResults}
+        backend={aiSearchMutation.data?.backend}
+        message={aiSearchMutation.data?.message}
+        isPending={aiSearchMutation.isPending}
+        isError={aiSearchMutation.isError}
+        error={aiSearchMutation.error}
+        playPending={playMutation.isPending}
+        favoritePending={favoriteMutation.isPending}
+        favoritePendingChannelId={favoriteMutation.variables?.id}
+        onQueryChange={setAiQuery}
+        onSubmit={submitAiSearch}
+        onPlay={(channelId) => playMutation.mutate(channelId)}
+        onTogglePpvFavorite={toggleAiPpvFavorite}
       />
 
       {favoritesQuery.isPending ? (
@@ -368,6 +442,220 @@ export function PpvFavoritesPage() {
           </CardContent>
         </Card>
       ) : null}
+    </div>
+  );
+}
+
+function AiPpvSearchPanel({
+  query,
+  submittedQuery,
+  results,
+  backend,
+  message,
+  isPending,
+  isError,
+  error,
+  playPending,
+  favoritePending,
+  favoritePendingChannelId,
+  onQueryChange,
+  onSubmit,
+  onPlay,
+  onTogglePpvFavorite,
+}: {
+  query: string;
+  submittedQuery: string;
+  results: AiPpvSearchResult[];
+  backend?: "openrouter" | "local_fallback";
+  message?: string | null;
+  isPending: boolean;
+  isError: boolean;
+  error: Error | null;
+  playPending: boolean;
+  favoritePending: boolean;
+  favoritePendingChannelId?: string;
+  onQueryChange: (query: string) => void;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+  onPlay: (channelId: string) => void;
+  onTogglePpvFavorite: (result: AiPpvSearchResult) => void;
+}) {
+  const canSearch = query.trim().length >= 3 && !isPending;
+  const hasSearched = Boolean(submittedQuery);
+
+  return (
+    <Card className="overflow-hidden rounded-none border-0 bg-transparent shadow-none sm:rounded-xl sm:border sm:border-primary/20 sm:bg-gradient-to-br sm:from-card sm:via-card sm:to-primary/10 sm:shadow-sm">
+      <CardHeader className="px-0 pb-3 pt-0 sm:p-5 sm:pb-0">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <div className="flex size-9 items-center justify-center rounded-xl bg-primary/10 text-primary">
+              <Sparkles className="size-4" aria-hidden="true" />
+            </div>
+            <CardTitle>AI PPV search</CardTitle>
+          </div>
+          {backend ? (
+            <Badge variant={backend === "openrouter" ? "accent" : "outline"}>
+              {backend === "openrouter" ? "OpenRouter" : "Local fallback"}
+            </Badge>
+          ) : null}
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-4 px-0 pb-0 pt-0 sm:p-5 sm:pt-4">
+        <form className="grid gap-3" onSubmit={onSubmit}>
+          <label className="sr-only" htmlFor="ai-ppv-search">
+            Describe a PPV event
+          </label>
+          <textarea
+            id="ai-ppv-search"
+            value={query}
+            onChange={(event) => onQueryChange(event.target.value)}
+            placeholder="Describe an event, team matchup, tournament, or provider clue"
+            className="min-h-24 w-full resize-y rounded-xl border border-input bg-background px-3 py-3 text-sm shadow-sm outline-none transition-colors placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+          />
+          <div className="flex flex-wrap items-center gap-2">
+            <Button type="submit" disabled={!canSearch}>
+              <Search data-icon="inline-start" />
+              {isPending ? "Searching..." : "Find PPV matches"}
+            </Button>
+            {message ? (
+              <span className="text-sm text-muted-foreground">{message}</span>
+            ) : null}
+            {isError ? (
+              <span className="text-sm text-destructive">
+                {error?.message || "AI PPV search failed"}
+              </span>
+            ) : null}
+          </div>
+        </form>
+
+        {isPending ? (
+          <div className="grid gap-3">
+            {Array.from({ length: 3 }).map((_, index) => (
+              <div
+                key={index}
+                className="flex items-center gap-4 rounded-xl border border-border/70 p-4"
+              >
+                <Skeleton className="size-11 rounded-2xl" />
+                <div className="flex flex-1 flex-col gap-2">
+                  <Skeleton className="h-4 w-48" />
+                  <Skeleton className="h-4 w-72 max-w-full" />
+                </div>
+                <Skeleton className="h-9 w-24 rounded-lg" />
+              </div>
+            ))}
+          </div>
+        ) : null}
+
+        {!isPending && hasSearched && !results.length && !isError ? (
+          <Empty className="rounded-xl border border-border/60 bg-background/45">
+            <EmptyHeader>
+              <EmptyMedia variant="icon">
+                <Search aria-hidden="true" />
+              </EmptyMedia>
+              <EmptyTitle>No AI PPV matches</EmptyTitle>
+            </EmptyHeader>
+          </Empty>
+        ) : null}
+
+        {!isPending && results.length ? (
+          <div className="overflow-hidden rounded-xl border border-border/70 bg-background/45">
+            {results.map((result, index) => (
+              <div key={result.channel.id}>
+                {index > 0 ? <Separator /> : null}
+                <AiPpvSearchResultRow
+                  result={result}
+                  playPending={playPending}
+                  favoritePending={
+                    favoritePending && favoritePendingChannelId === result.channel.id
+                  }
+                  onPlay={onPlay}
+                  onTogglePpvFavorite={onTogglePpvFavorite}
+                />
+              </div>
+            ))}
+          </div>
+        ) : null}
+      </CardContent>
+    </Card>
+  );
+}
+
+function AiPpvSearchResultRow({
+  result,
+  playPending,
+  favoritePending,
+  onPlay,
+  onTogglePpvFavorite,
+}: {
+  result: AiPpvSearchResult;
+  playPending: boolean;
+  favoritePending: boolean;
+  onPlay: (channelId: string) => void;
+  onTogglePpvFavorite: (result: AiPpvSearchResult) => void;
+}) {
+  const { channel, program } = result;
+  const displayChannelName = formatEventChannelTitle(channel.name, {
+    referenceStartAt: program?.startAt,
+  });
+  const confidence = Math.round(result.confidence * 100);
+
+  return (
+    <div className="flex flex-col gap-4 p-4 sm:p-5 lg:flex-row lg:items-start lg:justify-between">
+      <div className="flex min-w-0 flex-1 items-start gap-3 sm:gap-4">
+        <ChannelAvatar
+          name={displayChannelName}
+          logoUrl={channel.logoUrl}
+          className="size-12 shrink-0 rounded-xl sm:size-14 sm:rounded-2xl"
+          fallbackClassName="rounded-xl sm:rounded-2xl"
+        />
+        <div className="min-w-0 flex-1 space-y-2">
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
+            <h2 className="min-w-0 break-words text-base font-semibold tracking-tight">
+              {displayChannelName}
+            </h2>
+            <Badge variant="accent">PPV</Badge>
+            <Badge variant="outline">{confidence}% match</Badge>
+            {channel.categoryName ? (
+              <Badge variant="outline">{channel.categoryName}</Badge>
+            ) : null}
+            {channel.isPpvFavorite ? <Badge variant="outline">PPV saved</Badge> : null}
+          </div>
+          <p className="text-sm text-muted-foreground">{result.reason}</p>
+          {result.matchedTerms.length ? (
+            <div className="flex flex-wrap gap-1.5">
+              {result.matchedTerms.map((term) => (
+                <Badge key={term} variant="outline" className="h-5 px-1.5 py-0 text-[11px]">
+                  {term}
+                </Badge>
+              ))}
+            </div>
+          ) : null}
+          {program ? (
+            <div className="rounded-xl border border-border/50 bg-card/60 p-3">
+              <FavoriteProgramDetails program={program} />
+            </div>
+          ) : null}
+        </div>
+      </div>
+      <div className="flex shrink-0 flex-wrap items-center gap-2 lg:pt-1">
+        <Button
+          variant="secondary"
+          size="sm"
+          onClick={() => onTogglePpvFavorite(result)}
+          disabled={favoritePending}
+        >
+          <Heart data-icon="inline-start" />
+          {channel.isPpvFavorite ? "Remove PPV" : "Save PPV"}
+        </Button>
+        <Button
+          size="sm"
+          className={ppvGradientButtonClassName}
+          onClick={() => onPlay(channel.id)}
+          disabled={playPending}
+        >
+          <Play data-icon="inline-start" />
+          Play
+        </Button>
+      </div>
     </div>
   );
 }

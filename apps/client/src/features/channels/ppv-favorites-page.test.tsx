@@ -1,7 +1,12 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { PpvFavoritesPage } from "@/features/channels/ppv-favorites-page";
-import { getPpvFavorites } from "@/lib/api";
+import {
+  addPpvFavorite,
+  getPpvFavorites,
+  searchAiPpv,
+  startChannelPlayback,
+} from "@/lib/api";
 import { formatTimeRange } from "@/lib/utils";
 
 vi.mock("@tanstack/react-router", async () => {
@@ -17,11 +22,15 @@ vi.mock("@/lib/api", () => ({
   addPpvFavorite: vi.fn(),
   removePpvFavorite: vi.fn(),
   reorderPpvFavorites: vi.fn(),
+  searchAiPpv: vi.fn(),
   startChannelPlayback: vi.fn(),
   startRemoteChannelPlayback: vi.fn(),
 }));
 
 const mockedGetPpvFavorites = vi.mocked(getPpvFavorites);
+const mockedSearchAiPpv = vi.mocked(searchAiPpv);
+const mockedStartChannelPlayback = vi.mocked(startChannelPlayback);
+const mockedAddPpvFavorite = vi.mocked(addPpvFavorite);
 
 describe("PpvFavoritesPage", () => {
   beforeEach(() => {
@@ -29,6 +38,12 @@ describe("PpvFavoritesPage", () => {
     vi.spyOn(Date, "now").mockReturnValue(
       new Date("2026-04-04T12:00:00.000Z").getTime(),
     );
+    mockedSearchAiPpv.mockResolvedValue({
+      query: "sweden japan",
+      backend: "local_fallback",
+      items: [],
+      message: null,
+    });
   });
 
   afterEach(() => {
@@ -109,6 +124,75 @@ describe("PpvFavoritesPage", () => {
         ),
       ),
     ).toBeInTheDocument();
+  });
+
+  it("searches AI PPV matches and renders confidence metadata", async () => {
+    mockedGetPpvFavorites.mockResolvedValue([]);
+    mockedSearchAiPpv.mockResolvedValue({
+      query: "sweden japan world cup",
+      backend: "openrouter",
+      message: null,
+      items: [
+        {
+          confidence: 0.91,
+          reason: "Teams and competition match the event title.",
+          matchedTerms: ["sweden", "japan"],
+          channel: {
+            id: "ppv-channel-ai",
+            name: "LIVE | FIFA WWC Sweden v Japan | SE: VIAPLAY PPV 3",
+            logoUrl: null,
+            categoryName: "SE| VIAPLAY PPV",
+            remoteStreamId: 3,
+            epgChannelId: "ai-3",
+            hasEpg: true,
+            hasCatchup: false,
+            archiveDurationHours: null,
+            streamExtension: "m3u8",
+            isFavorite: false,
+            isPpv: true,
+            isPpvFavorite: false,
+          },
+          program: {
+            id: "program-ai",
+            channelId: "ppv-channel-ai",
+            channelName: "LIVE | FIFA WWC Sweden v Japan | SE: VIAPLAY PPV 3",
+            title: "Sweden v Japan",
+            description: "World Cup quarter-final",
+            startAt: "2026-04-04T11:30:00.000Z",
+            endAt: "2026-04-04T13:30:00.000Z",
+            canCatchup: false,
+          },
+        },
+      ],
+    });
+
+    renderPpvFavoritesPage();
+    fireEvent.change(screen.getByLabelText(/describe a ppv event/i), {
+      target: { value: "sweden japan world cup" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /find ppv matches/i }));
+
+    await waitFor(() => expect(mockedSearchAiPpv).toHaveBeenCalled());
+    expect(mockedSearchAiPpv.mock.calls[0]?.[0]).toEqual({
+      query: "sweden japan world cup",
+      limit: 12,
+    });
+    expect(await screen.findByText("OpenRouter")).toBeInTheDocument();
+    expect(screen.getByText("91% match")).toBeInTheDocument();
+    expect(screen.getByText("Teams and competition match the event title.")).toBeInTheDocument();
+    expect(screen.getByText("Sweden v Japan")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /save ppv/i }));
+    await waitFor(() =>
+      expect(mockedAddPpvFavorite).toHaveBeenCalledWith("ppv-channel-ai"),
+    );
+    expect(screen.getByRole("button", { name: /remove ppv/i })).toBeInTheDocument();
+    expect(screen.getByText("PPV saved")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /^play$/i }));
+    await waitFor(() =>
+      expect(mockedStartChannelPlayback).toHaveBeenCalledWith("ppv-channel-ai"),
+    );
   });
 
   it("pins title-derived live ppv favorites above non-live entries when epg is missing", async () => {
