@@ -511,6 +511,7 @@ fn spawn_search_refresh(
 
         if let Err(error) = search::indexing::refresh_search_metadata(&state, user_id).await {
             warn!("sync job {job_id}: failed to refresh PostgreSQL search metadata: {error:?}");
+            state.meili_bootstrapping_users.remove(&user_id);
             return;
         }
 

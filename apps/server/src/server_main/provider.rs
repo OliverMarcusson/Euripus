@@ -472,6 +472,36 @@ async fn delete_provider(
         .execute(&state.pool)
         .await?;
 
+    invalidate_channel_visibility_cache(&state, auth.user_id, Some(profile.id));
+    if let Err(error) =
+        search::indexing::rebuild_postgres_search_documents(&state, auth.user_id).await
+    {
+        warn!(
+            user_id = %auth.user_id,
+            profile_id = %profile.id,
+            "failed to rebuild PostgreSQL search documents after provider delete: {error:?}"
+        );
+    }
+
+    if let Some(meili) = state.meili.as_ref() {
+        if let Err(error) =
+            search::indexing::delete_meili_profile_documents(meili, auth.user_id, profile.id).await
+        {
+            warn!(
+                user_id = %auth.user_id,
+                profile_id = %profile.id,
+                "failed to remove provider documents from Meilisearch after provider delete: {error:?}"
+            );
+        }
+        if let Err(error) = search::indexing::refresh_meili_readiness(&state).await {
+            warn!(
+                user_id = %auth.user_id,
+                profile_id = %profile.id,
+                "failed to refresh Meilisearch readiness after provider delete: {error:?}"
+            );
+        }
+    }
+
     Ok(StatusCode::NO_CONTENT)
 }
 

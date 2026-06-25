@@ -1546,6 +1546,16 @@ async fn delete_meili_documents(
     Ok(())
 }
 
+pub(in crate::server_main) async fn delete_meili_profile_documents(
+    meili: &MeilisearchClient,
+    user_id: Uuid,
+    profile_id: Uuid,
+) -> Result<()> {
+    let profile_filter = format!(r#"user_id = "{user_id}" AND profile_id = "{profile_id}""#);
+    delete_meili_documents(meili, "channels", &profile_filter).await?;
+    delete_meili_documents(meili, "programs", &profile_filter).await
+}
+
 async fn delete_meili_document_ids(
     meili: &MeilisearchClient,
     index_name: &str,
