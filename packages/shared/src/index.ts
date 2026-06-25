@@ -323,6 +323,26 @@ export type ChannelSearchResults = SearchResultPage<Channel>;
 
 export type ProgramSearchResults = SearchResultPage<Program>;
 
+export type AiPpvSearchResult = {
+  channel: Channel;
+  program: Program | null;
+  confidence: number;
+  reason: string;
+  matchedTerms: string[];
+};
+
+export type AiPpvSearchResponse = {
+  query: string;
+  backend: "openrouter" | "local_fallback";
+  items: AiPpvSearchResult[];
+  message?: string | null;
+};
+
+export type AiPpvSearchRequest = {
+  query: string;
+  limit?: number;
+};
+
 export type FavoriteChannelEntry = GuideChannelEntry & {
   kind: "channel";
   order: number;

@@ -486,9 +486,7 @@ async fn list_receiver_favorite_channels(
     headers: HeaderMap,
 ) -> ApiResult<Vec<ReceiverFavoriteChannelEntryResponse>> {
     let device = require_paired_receiver_device(&state, &headers).await?;
-    let user_id = device
-        .owner_user_id
-        .ok_or_else(|| AppError::Unauthorized)?;
+    let user_id = device.owner_user_id.ok_or_else(|| AppError::Unauthorized)?;
     let request_base_url = request_base_url(&state.config, &headers)?;
     let rows = sqlx::query_as::<_, ReceiverFavoriteChannelRow>(
         r#"
@@ -584,9 +582,7 @@ async fn play_channel_from_receiver(
     Path(id): Path<Uuid>,
 ) -> ApiResult<PlaybackSourceResponse> {
     let device = require_paired_receiver_device(&state, &headers).await?;
-    let user_id = device
-        .owner_user_id
-        .ok_or_else(|| AppError::Unauthorized)?;
+    let user_id = device.owner_user_id.ok_or_else(|| AppError::Unauthorized)?;
     let source = resolve_channel_playback_source_for_receiver(
         &state,
         &headers,

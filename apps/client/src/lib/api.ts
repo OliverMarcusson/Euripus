@@ -9,6 +9,8 @@ import type {
   AdminSearchQueryTestResponse,
   AdminSearchTestRequest,
   AdminSearchTestResponse,
+  AiPpvSearchRequest,
+  AiPpvSearchResponse,
   ApiError,
   AuthSession,
   ChannelSearchResults,
@@ -520,6 +522,13 @@ export function searchPrograms(query: string, offset = 0, limit = 30) {
     limit: limit.toString(),
   });
   return request<ProgramSearchResults>(`/search/programs?${params.toString()}`);
+}
+
+export function searchAiPpv(payload: AiPpvSearchRequest) {
+  return request<AiPpvSearchResponse>("/search/ppv/ai", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
 }
 
 export function getFavorites() {
