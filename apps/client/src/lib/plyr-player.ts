@@ -6,6 +6,7 @@ import {
   isIptvHlsSupported,
   type HlsQualityOption,
   type HlsSession,
+  type LivePlaybackPreference,
   type PlaybackFailure,
 } from "@/lib/hls";
 import {
@@ -186,11 +187,13 @@ export function bindPlaybackSource(
   {
     playbackSessionId,
     uiMode = "local",
+    livePlaybackPreference = "stable",
     onPlaybackFailure,
     onPlaybackHealthy,
   }: {
     playbackSessionId?: string;
     uiMode?: PlayerUiMode;
+    livePlaybackPreference?: LivePlaybackPreference;
     onPlaybackFailure?: (failure: PlaybackFailure) => void | Promise<void>;
     onPlaybackHealthy?: () => void;
   } = {},
@@ -411,6 +414,7 @@ export function bindPlaybackSource(
   if (source.kind === "hls" && isIptvHlsSupported()) {
     hlsSession = createIptvHls(video, source.url, {
       live: source.live,
+      livePlaybackPreference,
       playbackSessionId,
       onPlaybackFailure: reportFailure,
     });

@@ -59,10 +59,25 @@ describe("bindPlaybackSource", () => {
     expect(Plyr).toHaveBeenCalledTimes(1);
     expect(createIptvHls).toHaveBeenCalledWith(video, HLS_SOURCE.url, {
       live: true,
+      livePlaybackPreference: "stable",
       onPlaybackFailure: expect.any(Function),
     });
     expect(onQualitiesChanged).toHaveBeenCalledTimes(1);
     expect(session.plyr).toBeDefined();
+  });
+
+  it("passes the low-latency preference to Hls.js", () => {
+    const video = document.createElement("video");
+
+    bindPlaybackSource(video, HLS_SOURCE, {
+      livePlaybackPreference: "low-latency",
+    });
+
+    expect(createIptvHls).toHaveBeenCalledWith(
+      video,
+      HLS_SOURCE.url,
+      expect.objectContaining({ livePlaybackPreference: "low-latency" }),
+    );
   });
 
   it("uses a direct video src when Hls.js is not available", () => {

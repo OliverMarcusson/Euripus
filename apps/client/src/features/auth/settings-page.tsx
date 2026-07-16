@@ -42,6 +42,7 @@ import {
 import type { ThemePreference } from "@/store/theme-store";
 import { useThemeStore } from "@/store/theme-store";
 import { useAuthStore } from "@/store/auth-store";
+import { usePlaybackSettingsStore } from "@/store/playback-settings-store";
 
 const themeOptions: Array<{
   value: ThemePreference;
@@ -93,6 +94,12 @@ export function SettingsPage() {
   const preference = useThemeStore((state) => state.preference);
   const resolvedTheme = useThemeStore((state) => state.resolvedTheme);
   const setPreference = useThemeStore((state) => state.setPreference);
+  const livePlaybackPreference = usePlaybackSettingsStore(
+    (state) => state.livePlaybackPreference,
+  );
+  const setLivePlaybackPreference = usePlaybackSettingsStore(
+    (state) => state.setLivePlaybackPreference,
+  );
   const recents = recentsQuery.data ?? [];
   const providers = providersQuery.data ?? [];
   const remoteDevices = remoteDevicesQuery.data ?? [];
@@ -147,6 +154,49 @@ export function SettingsPage() {
                 );
               })}
             </ToggleGroup>
+
+            <Separator />
+
+            <div className="flex flex-col gap-3">
+              <div>
+                <h2 className="text-base font-medium tracking-tight">
+                  Live playback
+                </h2>
+                <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
+                  Choose a larger buffer for stability or stay closer to the
+                  live broadcast.
+                </p>
+              </div>
+              <ToggleGroup
+                type="single"
+                value={livePlaybackPreference}
+                onValueChange={(value) => {
+                  if (value === "stable" || value === "low-latency") {
+                    setLivePlaybackPreference(value);
+                  }
+                }}
+                aria-label="Live playback preference"
+                className="grid w-full grid-cols-2 gap-1.5 rounded-2xl bg-black/20 p-1.5 shadow-inner"
+              >
+                <ToggleGroupItem
+                  value="stable"
+                  className="rounded-xl px-3 py-3 data-[state=on]:bg-secondary/80 data-[state=on]:shadow-sm"
+                >
+                  More stable
+                </ToggleGroupItem>
+                <ToggleGroupItem
+                  value="low-latency"
+                  className="rounded-xl px-3 py-3 data-[state=on]:bg-secondary/80 data-[state=on]:shadow-sm"
+                >
+                  Closer to live
+                </ToggleGroupItem>
+              </ToggleGroup>
+              <p className="text-xs leading-relaxed text-muted-foreground">
+                {livePlaybackPreference === "stable"
+                  ? "Uses a larger buffer to reduce interruptions."
+                  : "Uses a smaller buffer and briefly speeds up when needed to catch up with live."}
+              </p>
+            </div>
 
             <Separator />
 

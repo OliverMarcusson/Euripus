@@ -5,6 +5,8 @@ import {
   sanitizePlaybackDiagnosticUrl,
 } from "@/lib/playback-diagnostics";
 
+export type LivePlaybackPreference = "stable" | "low-latency";
+
 export const IPTV_HLS_CONFIG = {
   lowLatencyMode: false,
   liveSyncDurationCount: 10,
@@ -15,6 +17,22 @@ export const IPTV_HLS_CONFIG = {
   manifestLoadingTimeOut: 15_000,
   fragLoadingTimeOut: 25_000,
 } satisfies Partial<HlsConfig>;
+
+export const LOW_LATENCY_IPTV_HLS_CONFIG = {
+  ...IPTV_HLS_CONFIG,
+  lowLatencyMode: true,
+  liveSyncDurationCount: 4,
+  liveMaxLatencyDurationCount: 12,
+  maxBufferLength: 45,
+} satisfies Partial<HlsConfig>;
+
+export function getIptvHlsConfig(
+  livePlaybackPreference: LivePlaybackPreference = "stable",
+) {
+  return livePlaybackPreference === "low-latency"
+    ? LOW_LATENCY_IPTV_HLS_CONFIG
+    : IPTV_HLS_CONFIG;
+}
 
 type HlsErrorRecoveryState = {
   mediaRecoveryAttempts: number;
@@ -196,12 +214,45 @@ export function syncLivePlaybackPosition(
   // proved too aggressive and made jittery live streams feel worse.
 }
 
+const LIVE_CATCH_UP_PLAYBACK_RATE = 1.02;
+const LIVE_CATCH_UP_START_THRESHOLD_SECONDS = 2;
+const LIVE_CATCH_UP_STOP_THRESHOLD_SECONDS = 0.5;
+const LIVE_CATCH_UP_MIN_FORWARD_BUFFER_SECONDS = 3;
+
 export function updateLivePlaybackRate(
   video: HTMLVideoElement,
-  _hls: HlsLiveSyncController,
+  hls: HlsLiveSyncController,
+  livePlaybackPreference: LivePlaybackPreference = "stable",
 ) {
-  if (video.playbackRate !== 1) {
-    video.playbackRate = 1;
+  const liveSyncPosition = hls.liveSyncPosition;
+  if (
+    livePlaybackPreference !== "low-latency" ||
+    video.paused ||
+    liveSyncPosition == null ||
+    !Number.isFinite(liveSyncPosition)
+  ) {
+    if (video.playbackRate !== 1) {
+      video.playbackRate = 1;
+    }
+    return;
+  }
+
+  const secondsBehind = liveSyncPosition - video.currentTime;
+  const bufferedEnd = getBufferedEnd(video);
+  const hasCatchUpBuffer =
+    bufferedEnd != null &&
+    bufferedEnd - video.currentTime > LIVE_CATCH_UP_MIN_FORWARD_BUFFER_SECONDS;
+  const catchUpThreshold =
+    video.playbackRate > 1
+      ? LIVE_CATCH_UP_STOP_THRESHOLD_SECONDS
+      : LIVE_CATCH_UP_START_THRESHOLD_SECONDS;
+  const nextPlaybackRate =
+    hasCatchUpBuffer && secondsBehind > catchUpThreshold
+      ? LIVE_CATCH_UP_PLAYBACK_RATE
+      : 1;
+
+  if (video.playbackRate !== nextPlaybackRate) {
+    video.playbackRate = nextPlaybackRate;
   }
 }
 
@@ -210,15 +261,19 @@ export function createIptvHls(
   sourceUrl: string,
   {
     live = false,
+    livePlaybackPreference = "stable",
     playbackSessionId,
     onPlaybackFailure,
   }: {
     live?: boolean;
+    livePlaybackPreference?: LivePlaybackPreference;
     playbackSessionId?: string;
     onPlaybackFailure?: (failure: PlaybackFailure) => void;
   } = {},
 ): HlsSession {
-  const hls = new Hls(IPTV_HLS_CONFIG);
+  const hls = new Hls(
+    getIptvHlsConfig(live ? livePlaybackPreference : "stable"),
+  );
   const recoveryState: HlsErrorRecoveryState = { mediaRecoveryAttempts: 0 };
   const diagnosticSourceUrl = sanitizePlaybackDiagnosticUrl(sourceUrl);
   const qualityListeners = new Set<(options: HlsQualityOption[]) => void>();
@@ -302,7 +357,7 @@ export function createIptvHls(
       return;
     }
     syncLivePlaybackPosition(video, hls);
-    updateLivePlaybackRate(video, hls);
+    updateLivePlaybackRate(video, hls, livePlaybackPreference);
   };
 
   const handleLiveSeek = () => {
@@ -310,7 +365,7 @@ export function createIptvHls(
       return;
     }
     queueMicrotask(() => {
-      updateLivePlaybackRate(video, hls);
+      updateLivePlaybackRate(video, hls, livePlaybackPreference);
     });
   };
 
@@ -333,7 +388,7 @@ export function createIptvHls(
       return;
     }
 
-    updateLivePlaybackRate(video, hls);
+    updateLivePlaybackRate(video, hls, livePlaybackPreference);
   };
 
   const handleLevelsUpdated = () => {

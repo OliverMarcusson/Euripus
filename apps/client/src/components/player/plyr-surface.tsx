@@ -3,6 +3,7 @@ import type { PlaybackSource } from "@euripus/shared";
 import { bindPlaybackSource } from "@/lib/plyr-player";
 import type { PlaybackFailure } from "@/lib/hls";
 import { attachPlaybackSeekDebugging } from "@/lib/playback-diagnostics";
+import { usePlaybackSettingsStore } from "@/store/playback-settings-store";
 
 let nextPlaybackSessionSequence = 0;
 
@@ -33,6 +34,9 @@ export function PlyrSurface({
   videoRef,
 }: PlyrSurfaceProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const livePlaybackPreference = usePlaybackSettingsStore(
+    (state) => state.livePlaybackPreference,
+  );
   const onPlaybackFailureRef = useRef<typeof onPlaybackFailure>(onPlaybackFailure);
   const onPlaybackHealthyRef = useRef<typeof onPlaybackHealthy>(onPlaybackHealthy);
 
@@ -73,6 +77,7 @@ export function PlyrSurface({
     const session = bindPlaybackSource(video, source, {
       playbackSessionId,
       uiMode,
+      livePlaybackPreference,
       onPlaybackFailure: (failure) => onPlaybackFailureRef.current?.(failure),
       onPlaybackHealthy: () => onPlaybackHealthyRef.current?.(),
     });
@@ -84,7 +89,14 @@ export function PlyrSurface({
       }
       container.replaceChildren();
     };
-  }, [ariaLabel, source, uiMode, videoClassName, videoRef]);
+  }, [
+    ariaLabel,
+    livePlaybackPreference,
+    source,
+    uiMode,
+    videoClassName,
+    videoRef,
+  ]);
 
   return <div ref={containerRef} className={className} />;
 }

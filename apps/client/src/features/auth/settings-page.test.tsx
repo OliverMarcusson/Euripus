@@ -17,6 +17,7 @@ import {
   unpairReceiver,
 } from "@/lib/api";
 import { useThemeStore } from "@/store/theme-store";
+import { usePlaybackSettingsStore } from "@/store/playback-settings-store";
 
 vi.mock("@/lib/api", () => ({
   addFavorite: vi.fn(),
@@ -142,6 +143,9 @@ describe("SettingsPage", () => {
       createdAt: "2026-04-05T10:00:00.000Z",
     });
     useThemeStore.getState().setPreference("system");
+    usePlaybackSettingsStore
+      .getState()
+      .setLivePlaybackPreference("stable");
   });
 
   it("updates the theme when a toggle is selected", async () => {
@@ -155,6 +159,23 @@ describe("SettingsPage", () => {
 
     expect(useThemeStore.getState().preference).toBe("light");
     expect(document.documentElement.dataset.theme).toBe("light");
+  });
+
+  it("updates the live playback preference", () => {
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <SettingsPage />
+      </QueryClientProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("radio", { name: /closer to live/i }));
+
+    expect(
+      usePlaybackSettingsStore.getState().livePlaybackPreference,
+    ).toBe("low-latency");
+    expect(
+      screen.getByText(/smaller buffer and briefly speeds up/i),
+    ).toBeInTheDocument();
   });
 
   it("does not render deprecated remote ui controls", async () => {
