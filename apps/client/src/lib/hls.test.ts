@@ -5,6 +5,7 @@ import {
   getIptvHlsQualityLabel,
   getIptvHlsQualityOptions,
   handleIptvHlsError,
+  isProviderPlaceholderHlsError,
   syncLivePlaybackPosition,
   updateLivePlaybackRate,
 } from "@/lib/hls";
@@ -41,27 +42,31 @@ describe("IPTV HLS helpers", () => {
     expect(controller.destroy).not.toHaveBeenCalled();
   });
 
-  it("recovers a media error once before destroying the instance", () => {
+  it("recovers a media error once before requesting a fresh source", () => {
     const controller = {
       destroy: vi.fn(),
       recoverMediaError: vi.fn(),
       startLoad: vi.fn(),
     };
     const recoveryState = { mediaRecoveryAttempts: 0 };
+    const onFatalRecoveryNeeded = vi.fn();
 
     handleIptvHlsError(
       controller,
       { type: Hls.ErrorTypes.MEDIA_ERROR, fatal: false } as ErrorData,
       recoveryState,
+      { onFatalRecoveryNeeded },
     );
     handleIptvHlsError(
       controller,
       { type: Hls.ErrorTypes.MEDIA_ERROR, fatal: false } as ErrorData,
       recoveryState,
+      { onFatalRecoveryNeeded },
     );
 
     expect(controller.recoverMediaError).toHaveBeenCalledTimes(1);
-    expect(controller.destroy).toHaveBeenCalledTimes(1);
+    expect(onFatalRecoveryNeeded).toHaveBeenCalledTimes(1);
+    expect(controller.destroy).not.toHaveBeenCalled();
   });
 
   it("requests external recovery on fatal errors", () => {
@@ -83,6 +88,39 @@ describe("IPTV HLS helpers", () => {
     expect(controller.destroy).not.toHaveBeenCalled();
     expect(controller.startLoad).not.toHaveBeenCalled();
     expect(controller.recoverMediaError).not.toHaveBeenCalled();
+  });
+
+  it("classifies only the relay placeholder status as provider-unavailable", () => {
+    expect(
+      isProviderPlaceholderHlsError(
+        "/api/relay/hls?token=redacted",
+        {
+          fatal: true,
+          type: Hls.ErrorTypes.NETWORK_ERROR,
+          response: { code: 460 } as ErrorData["response"],
+        },
+      ),
+    ).toBe(true);
+    expect(
+      isProviderPlaceholderHlsError(
+        "/api/relay/hls?token=redacted",
+        {
+          fatal: true,
+          type: Hls.ErrorTypes.NETWORK_ERROR,
+          response: { code: 422 } as ErrorData["response"],
+        },
+      ),
+    ).toBe(false);
+    expect(
+      isProviderPlaceholderHlsError(
+        "https://provider.example.com/live.m3u8",
+        {
+          fatal: true,
+          type: Hls.ErrorTypes.NETWORK_ERROR,
+          response: { code: 460 } as ErrorData["response"],
+        },
+      ),
+    ).toBe(false);
   });
 
   it("does not force-seek live playback toward the live sync position", () => {

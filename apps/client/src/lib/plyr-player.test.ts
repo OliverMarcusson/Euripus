@@ -49,17 +49,17 @@ describe("bindPlaybackSource", () => {
 
   it("creates Plyr and Hls.js sessions for HLS playback", () => {
     const video = document.createElement("video");
-    const onRecoveryNeeded = vi.fn();
+    const onPlaybackFailure = vi.fn();
 
     const session = bindPlaybackSource(video, HLS_SOURCE, {
       uiMode: "local",
-      onRecoveryNeeded,
+      onPlaybackFailure,
     });
 
     expect(Plyr).toHaveBeenCalledTimes(1);
     expect(createIptvHls).toHaveBeenCalledWith(video, HLS_SOURCE.url, {
       live: true,
-      onRecoveryNeeded: expect.any(Function),
+      onPlaybackFailure: expect.any(Function),
     });
     expect(onQualitiesChanged).toHaveBeenCalledTimes(1);
     expect(session.plyr).toBeDefined();
@@ -133,6 +133,22 @@ describe("bindPlaybackSource", () => {
         settings: ["quality"],
       }),
     );
+  });
+
+  it("ignores HLS failures from a destroyed playback session", () => {
+    const video = document.createElement("video");
+    const onPlaybackFailure = vi.fn();
+    const session = bindPlaybackSource(video, HLS_SOURCE, {
+      onPlaybackFailure,
+      uiMode: "local",
+    });
+    const hlsFailure = vi.mocked(createIptvHls).mock.lastCall?.[2]
+      ?.onPlaybackFailure;
+
+    session.destroy();
+    hlsFailure?.({ kind: "recoverable", reason: "hls" });
+
+    expect(onPlaybackFailure).not.toHaveBeenCalled();
   });
 
   it("can bind a second session after destroying the first one", () => {

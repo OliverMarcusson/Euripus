@@ -48,7 +48,7 @@ describe("PlyrSurface", () => {
     const { rerender } = render(
       <PlyrSurface
         ariaLabel="Playing Arena Live"
-        onRecoveryNeeded={firstRecovery}
+        onPlaybackFailure={firstRecovery}
         source={SOURCE}
         uiMode="local"
       />,
@@ -57,7 +57,7 @@ describe("PlyrSurface", () => {
     rerender(
       <PlyrSurface
         ariaLabel="Playing Arena Live"
-        onRecoveryNeeded={secondRecovery}
+        onPlaybackFailure={secondRecovery}
         source={SOURCE}
         uiMode="local"
       />,

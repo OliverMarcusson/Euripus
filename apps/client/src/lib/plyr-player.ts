@@ -6,10 +6,12 @@ import {
   isIptvHlsSupported,
   type HlsQualityOption,
   type HlsSession,
+  type PlaybackFailure,
 } from "@/lib/hls";
 import {
   inferPlaybackOwnershipHint,
   logPlaybackDiagnostic,
+  sanitizePlaybackDiagnosticUrl,
 } from "@/lib/playback-diagnostics";
 
 type PlayerUiMode = "local" | "receiver";
@@ -184,21 +186,26 @@ export function bindPlaybackSource(
   {
     playbackSessionId,
     uiMode = "local",
-    onRecoveryNeeded,
+    onPlaybackFailure,
+    onPlaybackHealthy,
   }: {
     playbackSessionId?: string;
     uiMode?: PlayerUiMode;
-    onRecoveryNeeded?: () => void | Promise<void>;
+    onPlaybackFailure?: (failure: PlaybackFailure) => void | Promise<void>;
+    onPlaybackHealthy?: () => void;
   } = {},
 ): BoundPlaybackSession {
   resetMediaElement(video);
 
+  const diagnosticSourceUrl = sanitizePlaybackDiagnosticUrl(source.url);
   let destroyed = false;
   let recoveryInFlight = false;
   let hlsSession: HlsSession | undefined;
   let qualitySignature = "";
   let unsubscribeFromQualities: (() => void) | undefined;
   let stallRecoveryTimeout: number | undefined;
+  let healthyPlaybackStart: number | undefined;
+  let healthyPlaybackReported = false;
 
   const clearStallRecovery = () => {
     if (stallRecoveryTimeout != null) {
@@ -207,29 +214,37 @@ export function bindPlaybackSource(
     }
   };
 
-  const triggerRecovery = () => {
-    if (destroyed || recoveryInFlight || !onRecoveryNeeded) {
+  const reportFailure = (failure: PlaybackFailure) => {
+    if (destroyed || recoveryInFlight || !onPlaybackFailure) {
       return;
     }
 
-    logPlaybackDiagnostic("warn", "playback-session-recovery-requested", {
-      playbackSessionId,
-      ownershipHint: inferPlaybackOwnershipHint(source.url),
-      sourceKind: source.kind,
-      sourceUrl: source.url,
-      live: source.live,
-      currentTime: video.currentTime,
-      readyState: video.readyState,
-    });
+    logPlaybackDiagnostic(
+      failure.kind === "provider-unavailable" ? "error" : "warn",
+      failure.kind === "provider-unavailable"
+        ? "playback-terminal-failure"
+        : "playback-session-recovery-requested",
+      {
+        playbackSessionId,
+        ownershipHint: inferPlaybackOwnershipHint(source.url),
+        sourceKind: source.kind,
+        sourceUrl: diagnosticSourceUrl,
+        live: source.live,
+        currentTime: video.currentTime,
+        readyState: video.readyState,
+        failureKind: failure.kind,
+        failureReason: failure.kind === "recoverable" ? failure.reason : null,
+      },
+    );
 
     recoveryInFlight = true;
-    void Promise.resolve(onRecoveryNeeded()).finally(() => {
+    void Promise.resolve(onPlaybackFailure(failure)).finally(() => {
       recoveryInFlight = false;
     });
   };
 
   const scheduleStallRecovery = () => {
-    if (!source.live || !onRecoveryNeeded || video.paused || video.ended) {
+    if (!source.live || !onPlaybackFailure || video.paused || video.ended) {
       return;
     }
 
@@ -237,7 +252,7 @@ export function bindPlaybackSource(
       playbackSessionId,
       ownershipHint: inferPlaybackOwnershipHint(source.url),
       sourceKind: source.kind,
-      sourceUrl: source.url,
+      sourceUrl: diagnosticSourceUrl,
       currentTime: video.currentTime,
       readyState: video.readyState,
     });
@@ -263,17 +278,34 @@ export function bindPlaybackSource(
         playbackSessionId,
         ownershipHint: inferPlaybackOwnershipHint(source.url),
         sourceKind: source.kind,
-        sourceUrl: source.url,
+        sourceUrl: diagnosticSourceUrl,
         currentTime: video.currentTime,
         readyState: video.readyState,
         forwardBufferSeconds,
       });
-      triggerRecovery();
+      reportFailure({ kind: "recoverable", reason: "stall" });
     }, LIVE_STALL_RECOVERY_DELAY_MS);
   };
 
   const handlePlaybackProgress = () => {
     clearStallRecovery();
+    if (healthyPlaybackStart == null) {
+      healthyPlaybackStart = video.currentTime;
+    }
+    if (
+      !healthyPlaybackReported &&
+      Math.abs(video.currentTime - healthyPlaybackStart) >= 5
+    ) {
+      healthyPlaybackReported = true;
+      logPlaybackDiagnostic("info", "playback-became-healthy", {
+        playbackSessionId,
+        ownershipHint: inferPlaybackOwnershipHint(source.url),
+        sourceKind: source.kind,
+        live: source.live,
+        currentTime: video.currentTime,
+      });
+      onPlaybackHealthy?.();
+    }
   };
 
   const handlePlaybackStall = () => {
@@ -285,13 +317,13 @@ export function bindPlaybackSource(
       playbackSessionId,
       ownershipHint: inferPlaybackOwnershipHint(source.url),
       sourceKind: source.kind,
-      sourceUrl: source.url,
+      sourceUrl: diagnosticSourceUrl,
       currentTime: video.currentTime,
       readyState: video.readyState,
       mediaErrorCode: video.error?.code ?? null,
       mediaErrorMessage: video.error?.message ?? null,
     });
-    triggerRecovery();
+    reportFailure({ kind: "recoverable", reason: "video-error" });
   };
 
   const handlePlaybackPause = () => {
@@ -304,10 +336,10 @@ export function bindPlaybackSource(
         playbackSessionId,
         ownershipHint: inferPlaybackOwnershipHint(source.url),
         sourceKind: source.kind,
-        sourceUrl: source.url,
+        sourceUrl: diagnosticSourceUrl,
         currentTime: video.currentTime,
       });
-      triggerRecovery();
+      reportFailure({ kind: "recoverable", reason: "unexpected-end" });
     }
   };
 
@@ -325,7 +357,7 @@ export function bindPlaybackSource(
     playbackSessionId,
     ownershipHint: inferPlaybackOwnershipHint(source.url),
     sourceKind: source.kind,
-    sourceUrl: source.url,
+    sourceUrl: diagnosticSourceUrl,
     live: source.live,
     uiMode,
   });
@@ -338,7 +370,7 @@ export function bindPlaybackSource(
         playbackSessionId,
         ownershipHint: inferPlaybackOwnershipHint(source.url),
         sourceKind: source.kind,
-        sourceUrl: source.url,
+        sourceUrl: diagnosticSourceUrl,
         live: source.live,
         currentTime: video.currentTime,
         readyState: video.readyState,
@@ -380,7 +412,7 @@ export function bindPlaybackSource(
     hlsSession = createIptvHls(video, source.url, {
       live: source.live,
       playbackSessionId,
-      onRecoveryNeeded: triggerRecovery,
+      onPlaybackFailure: reportFailure,
     });
     unsubscribeFromQualities = hlsSession.onQualitiesChanged(() => {
       syncPlyr();

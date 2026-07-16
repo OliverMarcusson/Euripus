@@ -143,15 +143,9 @@ pub(in crate::server_main) fn playback_source_for_mode(
     let relay_required_for_android_tv = matches!(target, PlaybackTarget::ReceiverAndroidTv);
     let relay_required_for_https = matches!(target, PlaybackTarget::Browser)
         && should_force_relay_for_secure_request(&request_base_url, &upstream_url);
-    let bypass_relay_in_local_dev = matches!(target, PlaybackTarget::Browser)
-        && playback_mode == PlaybackMode::Relay
-        && state.config.public_origin.is_none()
-        && !state.config.vpn_enabled
-        && !relay_required_for_https;
-    if (playback_mode == PlaybackMode::Direct
+    if playback_mode == PlaybackMode::Direct
         && !relay_required_for_https
-        && !relay_required_for_android_tv)
-        || bypass_relay_in_local_dev
+        && !relay_required_for_android_tv
     {
         return Ok(direct);
     }

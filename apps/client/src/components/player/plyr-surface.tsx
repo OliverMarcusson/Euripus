@@ -1,6 +1,7 @@
 import { useEffect, useRef, type MutableRefObject } from "react";
 import type { PlaybackSource } from "@euripus/shared";
 import { bindPlaybackSource } from "@/lib/plyr-player";
+import type { PlaybackFailure } from "@/lib/hls";
 import { attachPlaybackSeekDebugging } from "@/lib/playback-diagnostics";
 
 let nextPlaybackSessionSequence = 0;
@@ -13,7 +14,8 @@ function createPlaybackSessionId() {
 type PlyrSurfaceProps = {
   ariaLabel: string;
   className?: string;
-  onRecoveryNeeded?: () => void | Promise<void>;
+  onPlaybackFailure?: (failure: PlaybackFailure) => void | Promise<void>;
+  onPlaybackHealthy?: () => void;
   source: PlaybackSource;
   uiMode: "local" | "receiver";
   videoClassName?: string;
@@ -23,18 +25,21 @@ type PlyrSurfaceProps = {
 export function PlyrSurface({
   ariaLabel,
   className,
-  onRecoveryNeeded,
+  onPlaybackFailure,
+  onPlaybackHealthy,
   source,
   uiMode,
   videoClassName,
   videoRef,
 }: PlyrSurfaceProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const onRecoveryNeededRef = useRef<typeof onRecoveryNeeded>(onRecoveryNeeded);
+  const onPlaybackFailureRef = useRef<typeof onPlaybackFailure>(onPlaybackFailure);
+  const onPlaybackHealthyRef = useRef<typeof onPlaybackHealthy>(onPlaybackHealthy);
 
   useEffect(() => {
-    onRecoveryNeededRef.current = onRecoveryNeeded;
-  }, [onRecoveryNeeded]);
+    onPlaybackFailureRef.current = onPlaybackFailure;
+    onPlaybackHealthyRef.current = onPlaybackHealthy;
+  }, [onPlaybackFailure, onPlaybackHealthy]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -68,7 +73,8 @@ export function PlyrSurface({
     const session = bindPlaybackSource(video, source, {
       playbackSessionId,
       uiMode,
-      onRecoveryNeeded: () => onRecoveryNeededRef.current?.(),
+      onPlaybackFailure: (failure) => onPlaybackFailureRef.current?.(failure),
+      onPlaybackHealthy: () => onPlaybackHealthyRef.current?.(),
     });
     return () => {
       detachSeekDebugging();
