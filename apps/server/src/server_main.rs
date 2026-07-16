@@ -68,6 +68,7 @@ mod admin;
 mod app;
 mod auth;
 mod error;
+mod google_calendar;
 mod guide;
 mod on_demand;
 mod playback;

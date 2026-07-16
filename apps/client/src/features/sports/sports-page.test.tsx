@@ -10,6 +10,8 @@ import {
 } from "@/lib/api";
 
 vi.mock("@/lib/api", () => ({
+  addSportsEventToCalendar: vi.fn(),
+  getGoogleCalendarStatus: vi.fn().mockResolvedValue({ configured: false, connected: false, needsReauthorization: false, selectedCalendarId: null, selectedCalendarName: null }),
   getSportsEvent: vi.fn(),
   getSportsLiveEvents: vi.fn(),
   getSportsProviders: vi.fn(),
@@ -64,6 +66,7 @@ const sampleEvent = {
 describe("SportsPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    window.history.replaceState({}, "", "/sports");
     mockedGetSportsLiveEvents.mockResolvedValue({
       count: 1,
       events: [sampleEvent],

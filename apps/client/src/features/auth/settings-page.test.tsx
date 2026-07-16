@@ -21,6 +21,11 @@ import { usePlaybackSettingsStore } from "@/store/playback-settings-store";
 
 vi.mock("@/lib/api", () => ({
   addFavorite: vi.fn(),
+  connectGoogleCalendar: vi.fn(),
+  disconnectGoogleCalendar: vi.fn(),
+  getGoogleCalendars: vi.fn().mockResolvedValue([]),
+  getGoogleCalendarStatus: vi.fn().mockResolvedValue({ configured: false, connected: false, needsReauthorization: false, selectedCalendarId: null, selectedCalendarName: null }),
+  selectGoogleCalendar: vi.fn(),
   deleteProvider: vi.fn(),
   getProviders: vi.fn(),
   getRecents: vi.fn(),

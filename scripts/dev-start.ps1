@@ -91,6 +91,33 @@ function Get-ServerLogs {
     return (& docker compose logs --tail 200 server 2>&1 | Out-String)
 }
 
+function Connect-ExternalSportsApi {
+    $containerName = if ($env:EURIPUS_SPORTS_API_CONTAINER_NAME) { $env:EURIPUS_SPORTS_API_CONTAINER_NAME } else { "sports-api" }
+    & docker inspect $containerName *> $null
+    if ($LASTEXITCODE -ne 0) {
+        return
+    }
+
+    $serverContainerId = Get-ComposeServiceContainerId -ServiceName "server"
+    $networks = (& docker inspect -f "{{json .NetworkSettings.Networks}}" $serverContainerId 2>$null | ConvertFrom-Json)
+    $networkName = $networks.PSObject.Properties.Name | Select-Object -First 1
+    if (-not $networkName) {
+        Write-Warning "Unable to determine the Euripus development network for Sports API."
+        return
+    }
+
+    & docker network connect $networkName $containerName *> $null
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "Connected external Sports API container '$containerName' to '$networkName'." -ForegroundColor Cyan
+        return
+    }
+
+    $connectedNetworks = (& docker inspect -f "{{json .NetworkSettings.Networks}}" $containerName 2>$null | ConvertFrom-Json)
+    if ($connectedNetworks.PSObject.Properties.Name -notcontains $networkName) {
+        Write-Warning "Unable to connect Sports API container '$containerName' to '$networkName'."
+    }
+}
+
 function Wait-ForApiHealth {
     param([int]$TimeoutSeconds = 180)
 
@@ -195,6 +222,7 @@ try {
 
     Write-Host "Starting PostgreSQL + API..." -ForegroundColor Cyan
     & docker @composeArgs | Out-Host
+    Connect-ExternalSportsApi
 
     Write-Host "Waiting for API health..." -ForegroundColor Cyan
     Wait-ForApiHealth -TimeoutSeconds 180

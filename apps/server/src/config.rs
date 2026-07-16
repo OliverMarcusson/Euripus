@@ -25,6 +25,9 @@ pub struct Config {
     pub openrouter_api_key: Option<String>,
     pub openrouter_model: String,
     pub sports_api_base_url: Option<Url>,
+    pub google_client_id: Option<String>,
+    pub google_client_secret: Option<String>,
+    pub google_calendar_redirect_url: Option<Url>,
     pub admin_password: Option<String>,
 }
 
@@ -75,6 +78,20 @@ impl Config {
         let sports_api_base_url = read_optional_env("APP_SPORTS_API_BASE_URL")?
             .map(|value| Url::parse(&value).context("APP_SPORTS_API_BASE_URL must be a valid URL"))
             .transpose()?;
+        let google_client_id = read_optional_env("APP_GOOGLE_CLIENT_ID")?;
+        let google_client_secret = read_optional_env("APP_GOOGLE_CLIENT_SECRET")?;
+        let google_calendar_redirect_url =
+            match read_optional_env("APP_GOOGLE_CALENDAR_REDIRECT_URL")? {
+                Some(value) => Some(
+                    Url::parse(&value)
+                        .context("APP_GOOGLE_CALENDAR_REDIRECT_URL must be a valid URL")?,
+                ),
+                None => public_origin
+                    .as_ref()
+                    .map(|origin| origin.join("/api/integrations/google-calendar/callback"))
+                    .transpose()
+                    .context("failed to build Google Calendar redirect URL")?,
+            };
         let admin_password = read_optional_env("APP_ADMIN_PASSWORD")?;
         let decoded_key = STANDARD
             .decode(read_env("APP_ENCRYPTION_KEY_B64")?)
@@ -103,6 +120,9 @@ impl Config {
             openrouter_api_key,
             openrouter_model,
             sports_api_base_url,
+            google_client_id,
+            google_client_secret,
+            google_calendar_redirect_url,
             admin_password,
         })
     }

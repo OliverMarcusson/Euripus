@@ -24,7 +24,10 @@ export function useSportsPageState() {
   const queryClient = useQueryClient();
   const [selectedCompetition, setSelectedCompetition] =
     useState<string>(ALL_COMPETITIONS);
-  const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
+  const [selectedEventId, setSelectedEventId] = useState<string | null>(() => {
+    if (typeof window === "undefined") return null;
+    return new URLSearchParams(window.location.search).get("event");
+  });
 
   const liveQuery = useQuery({
     queryKey: ["sports", "live"],
@@ -160,12 +163,22 @@ export function useSportsPageState() {
     ]);
   }
 
+  function setEventQuery(eventId: string | null) {
+    if (typeof window === "undefined") return;
+    const url = new URL(window.location.href);
+    if (eventId) url.searchParams.set("event", eventId);
+    else url.searchParams.delete("event");
+    window.history.replaceState({}, "", url);
+  }
+
   function openEventDetail(eventId: string) {
     setSelectedEventId(eventId);
+    setEventQuery(eventId);
   }
 
   function closeEventDetail() {
     setSelectedEventId(null);
+    setEventQuery(null);
   }
 
   return {
