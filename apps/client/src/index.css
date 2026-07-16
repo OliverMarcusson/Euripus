@@ -160,8 +160,8 @@ body {
   --plyr-video-controls-background: linear-gradient(
     180deg,
     transparent,
-    color-mix(in oklab, black 24%, transparent) 24%,
-    color-mix(in oklab, var(--card) 86%, black)
+    color-mix(in oklab, black 24%, transparent) 45%,
+    color-mix(in oklab, black 78%, transparent)
   );
   --plyr-range-thumb-background: var(--foreground);
   --plyr-range-fill-background: linear-gradient(
@@ -201,12 +201,12 @@ body {
 }
 
 .euripus-plyr-shell .plyr__controls {
-  position: relative;
+  position: absolute;
+  inset-inline: 0;
+  bottom: 0;
   z-index: 2;
   gap: 0.2rem;
-  padding: 0.7rem 0.8rem 0.8rem;
-  backdrop-filter: blur(18px) saturate(120%);
-  border-top: 1px solid color-mix(in oklab, white 10%, transparent);
+  padding: 0.4rem 0.55rem 0.5rem;
 }
 
 .euripus-plyr-shell .euripus-plyr--live .plyr__controls {
