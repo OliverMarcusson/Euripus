@@ -2,6 +2,8 @@ import Hls, { type ErrorData } from "hls.js";
 import { describe, expect, it, vi } from "vitest";
 import {
   IPTV_HLS_CONFIG,
+  LOW_LATENCY_IPTV_HLS_CONFIG,
+  getIptvHlsConfig,
   getIptvHlsQualityLabel,
   getIptvHlsQualityOptions,
   handleIptvHlsError,
@@ -21,6 +23,19 @@ describe("IPTV HLS helpers", () => {
       nudgeOnVideoHole: true,
       manifestLoadingTimeOut: 15_000,
       fragLoadingTimeOut: 25_000,
+    });
+  });
+
+  it("offers a smaller low-latency buffer while keeping stable playback as the default", () => {
+    expect(getIptvHlsConfig()).toBe(IPTV_HLS_CONFIG);
+    expect(getIptvHlsConfig("low-latency")).toBe(
+      LOW_LATENCY_IPTV_HLS_CONFIG,
+    );
+    expect(LOW_LATENCY_IPTV_HLS_CONFIG).toMatchObject({
+      lowLatencyMode: true,
+      liveSyncDurationCount: 4,
+      liveMaxLatencyDurationCount: 12,
+      maxBufferLength: 45,
     });
   });
 
@@ -145,6 +160,50 @@ describe("IPTV HLS helpers", () => {
     } as unknown as HTMLVideoElement;
 
     updateLivePlaybackRate(video, { liveSyncPosition: 102.5 });
+
+    expect(video.playbackRate).toBe(1);
+  });
+
+  it("slightly speeds up low-latency playback until it catches up", () => {
+    const video = {
+      currentTime: 100,
+      paused: false,
+      playbackRate: 1,
+      buffered: {
+        length: 1,
+        end: () => 106,
+      },
+    } as unknown as HTMLVideoElement;
+    const hls = { liveSyncPosition: 102.5 };
+
+    updateLivePlaybackRate(video, hls, "low-latency");
+    expect(video.playbackRate).toBe(1.02);
+
+    video.currentTime = 101.2;
+    updateLivePlaybackRate(video, hls, "low-latency");
+    expect(video.playbackRate).toBe(1.02);
+
+    video.currentTime = 102.4;
+    updateLivePlaybackRate(video, hls, "low-latency");
+    expect(video.playbackRate).toBe(1);
+  });
+
+  it("does not speed up without enough forward buffer", () => {
+    const video = {
+      currentTime: 100,
+      paused: false,
+      playbackRate: 1,
+      buffered: {
+        length: 1,
+        end: () => 100.5,
+      },
+    } as unknown as HTMLVideoElement;
+
+    updateLivePlaybackRate(
+      video,
+      { liveSyncPosition: 103 },
+      "low-latency",
+    );
 
     expect(video.playbackRate).toBe(1);
   });
