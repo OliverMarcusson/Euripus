@@ -419,6 +419,52 @@ fn rewrite_title_images(
     Ok(())
 }
 
+fn consume_catalog_title_tag<'a>(value: &'a str, tag: &str) -> Option<&'a str> {
+    let prefix = value.get(..tag.len())?;
+    if !prefix.eq_ignore_ascii_case(tag) {
+        return None;
+    }
+
+    let remainder = &value[tag.len()..];
+    if remainder.is_empty() {
+        return Some(remainder);
+    }
+    let first = remainder.chars().next()?;
+    if !first.is_ascii_whitespace() && !matches!(first, '-' | '_' | ':' | '|') {
+        return None;
+    }
+    Some(remainder.trim_start_matches(|character: char| {
+        character.is_ascii_whitespace() || matches!(character, '-' | '_' | ':' | '|')
+    }))
+}
+
+fn is_preferred_catalog_title(name: &str) -> bool {
+    let mut remainder = name.trim_start();
+    loop {
+        let quality_remainder = ["4K", "UHD", "FHD", "HD"]
+            .iter()
+            .find_map(|tag| consume_catalog_title_tag(remainder, tag));
+        match quality_remainder {
+            Some(value) if !value.is_empty() => remainder = value,
+            _ => break,
+        }
+    }
+
+    // Xtream title prefixes are overloaded: EN/SE identify language while the other
+    // supported tags identify the source platform. Platform catalogs are retained even
+    // when the provider does not include a separate language tag.
+    [
+        "EN", "SE", "NF", "AMZ", "A+", "D+", "PRMT", "VP", "MRVL", "DSC+", "SKY", "MAX", "P+",
+        "PCOK", "SHWT",
+    ]
+    .iter()
+    .any(|tag| consume_catalog_title_tag(remainder, tag).is_some())
+}
+
+fn should_persist_title(item: &xtreme::XtreamOnDemandTitle) -> bool {
+    !item.remote_id.is_empty() && is_preferred_catalog_title(&item.name)
+}
+
 pub(super) async fn persist_catalog(
     pool: &PgPool,
     user_id: Uuid,
@@ -437,7 +483,7 @@ pub(super) async fn persist_catalog(
           DO UPDATE SET name=EXCLUDED.name, updated_at=NOW()"#)
           .bind(user_id).bind(profile_id).bind(media_type).bind(&category.remote_category_id).bind(&category.name).execute(&mut *tx).await?;
     }
-    for item in titles.iter().filter(|item| !item.remote_id.is_empty()) {
+    for item in titles.iter().filter(|item| should_persist_title(item)) {
         sqlx::query(r#"INSERT INTO on_demand_titles
           (user_id,profile_id,category_id,media_type,remote_id,name,poster_url,backdrop_url,plot,genre,cast_names,director,release_date,rating,duration_minutes,container_extension,provider_updated_at)
           SELECT $1,$2,c.id,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16 FROM (SELECT 1) x
@@ -452,7 +498,7 @@ pub(super) async fn persist_catalog(
     }
     let ids = titles
         .iter()
-        .filter(|item| !item.remote_id.is_empty())
+        .filter(|item| should_persist_title(item))
         .map(|item| item.remote_id.clone())
         .collect::<Vec<_>>();
     sqlx::query("DELETE FROM on_demand_titles WHERE user_id=$1 AND profile_id=$2 AND media_type=$3 AND NOT (remote_id = ANY($4::text[]))")
@@ -461,4 +507,46 @@ pub(super) async fn persist_catalog(
       .bind(user_id).bind(profile_id).bind(media_type).execute(&mut *tx).await?;
     tx.commit().await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_preferred_catalog_title;
+
+    #[test]
+    fn accepts_language_and_platform_title_prefixes() {
+        for title in [
+            "EN - Slow Horses",
+            "SE - Bron",
+            "4K-EN - Foundation",
+            "4K - SE: Tunna blå linjen",
+            "uhd_en | Silo",
+            "FHD:EN- The Bear",
+            "NF - The Crown",
+            "4K-AMZ - Reacher",
+            "A+ - Severance",
+            "4K-D+ - Andor",
+            "MAX - The Last of Us",
+            "P+ - Star Trek",
+            "NF-DO - Our Planet",
+        ] {
+            assert!(is_preferred_catalog_title(title), "rejected {title:?}");
+        }
+    }
+
+    #[test]
+    fn rejects_other_or_embedded_language_markers() {
+        for title in [
+            "ES - La casa de papel",
+            "AR-EN-S - Example",
+            "IN-EN - Example",
+            "ENGLISH SERIES",
+            "4K-TOP - Example",
+            "SC - Nordic collection",
+            "The Last Enemy",
+            "",
+        ] {
+            assert!(!is_preferred_catalog_title(title), "accepted {title:?}");
+        }
+    }
 }
