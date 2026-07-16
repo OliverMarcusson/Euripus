@@ -4,6 +4,10 @@ import { OnDemandPage } from "@/features/on-demand/on-demand-page";
 import { getOnDemandCategories, getOnDemandTitles } from "@/lib/api";
 
 vi.mock("@/lib/api", () => ({
+  addOnDemandCategoryFavorite: vi.fn(),
+  addOnDemandTitleFavorite: vi.fn(),
+  removeOnDemandCategoryFavorite: vi.fn(),
+  removeOnDemandTitleFavorite: vi.fn(),
   getOnDemandCategories: vi.fn(),
   getOnDemandTitles: vi.fn(),
   getOnDemandTitle: vi.fn(),
@@ -25,9 +29,9 @@ function renderPage() {
 describe("OnDemandPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockedCategories.mockResolvedValue([{ id: "movies", mediaType: "movie", name: "Movies", titleCount: 1 }]);
+    mockedCategories.mockResolvedValue([{ id: "movies", mediaType: "movie", name: "Movies", titleCount: 1, isFavorite: false }]);
     mockedTitles.mockResolvedValue({
-      items: [{ id: "title-1", mediaType: "movie", name: "Example Movie", categoryId: "movies", categoryName: "Movies", posterUrl: null, backdropUrl: null, plot: "A movie.", genre: "Drama", castNames: null, director: null, releaseDate: "2026", rating: 8, durationMinutes: 90, containerExtension: "mp4" }],
+      items: [{ id: "title-1", mediaType: "movie", name: "Example Movie", categoryId: "movies", categoryName: "Movies", posterUrl: null, backdropUrl: null, plot: "A movie.", genre: "Drama", castNames: null, director: null, releaseDate: "2026", rating: 8, durationMinutes: 90, containerExtension: "mp4", isFavorite: false }],
       totalCount: 1,
       nextOffset: null,
     });

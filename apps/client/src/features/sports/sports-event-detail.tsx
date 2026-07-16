@@ -1,6 +1,8 @@
 import type { SportsEvent } from "@euripus/shared";
-import { ExternalLink, Globe2, MapPin, ShieldCheck, Trophy } from "lucide-react";
+import { useMutation, useQuery } from "@tanstack/react-query";
+import { CalendarPlus, ExternalLink, Globe2, MapPin, ShieldCheck, Trophy } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
@@ -23,6 +25,7 @@ import {
   getSportIcon,
   getStatusBadgeVariant,
 } from "@/features/sports/sports-formatting";
+import { addSportsEventToCalendar, getGoogleCalendarStatus } from "@/lib/api";
 
 export function SportsEventDetail({
   event,
@@ -38,6 +41,18 @@ export function SportsEventDetail({
   onOpenChange: (open: boolean) => void;
 }) {
   const SportIcon = event ? getSportIcon(event.sport) : null;
+  const calendarStatusQuery = useQuery({
+    queryKey: ["google-calendar", "status"],
+    queryFn: getGoogleCalendarStatus,
+    enabled: open,
+  });
+  const calendarMutation = useMutation({
+    mutationFn: (eventId: string) => addSportsEventToCalendar(eventId),
+  });
+  const calendarReady = !!calendarStatusQuery.data?.configured
+    && !!calendarStatusQuery.data.connected
+    && !calendarStatusQuery.data.needsReauthorization
+    && !!calendarStatusQuery.data.selectedCalendarId;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -90,6 +105,22 @@ export function SportsEventDetail({
                   {formatEventSecondaryText(event) ?? "Watch guidance and source details"}
                   {event.endTime ? null : " · End time not published yet"}
                 </DialogDescription>
+              </div>
+              <div className="flex flex-wrap items-center gap-3">
+                <Button
+                  onClick={() => calendarMutation.mutate(event.id)}
+                  disabled={!calendarReady || calendarMutation.isPending}
+                >
+                  <CalendarPlus data-icon="inline-start" />
+                  {calendarMutation.isPending ? "Adding…" : calendarMutation.data ? "Update calendar event" : "Add to calendar"}
+                </Button>
+                {calendarMutation.data?.htmlLink ? (
+                  <a href={calendarMutation.data.htmlLink} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-sm text-primary hover:underline">
+                    Open in Google Calendar <ExternalLink className="size-3.5" />
+                  </a>
+                ) : null}
+                {!calendarStatusQuery.isPending && !calendarReady ? <a href="/settings" className="text-sm text-muted-foreground hover:text-foreground hover:underline">Connect and choose a calendar in Settings</a> : null}
+                {calendarMutation.isError ? <span className="text-sm text-destructive">Could not add this event.</span> : null}
               </div>
             </DialogHeader>
 

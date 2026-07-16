@@ -20,6 +20,10 @@ import type {
   FavoriteOrderPayload,
   GuidePreferences,
   GuideCategoryResponse,
+  GoogleCalendarConnectionStatus,
+  GoogleCalendarInfo,
+  GoogleCalendarConnectResponse,
+  GoogleCalendarSelection,
   GuideResponse,
   LoginPayload,
   OnDemandCategory,
@@ -41,6 +45,7 @@ import type {
   SportsEvent,
   SportsEventListResponse,
   SportsProviderCatalogResponse,
+  SportsCalendarEventResponse,
   ReceiverDevice,
   ReceiverPairingCode,
   ReceiverPlaybackStatePayload,
@@ -441,10 +446,11 @@ export function getOnDemandCategories(mediaType: OnDemandMediaType) {
   return request<OnDemandCategory[]>(`/on-demand/categories?type=${mediaType}`);
 }
 
-export function getOnDemandTitles(mediaType: OnDemandMediaType, options: { categoryId?: string; query?: string; offset?: number; limit?: number } = {}) {
+export function getOnDemandTitles(mediaType: OnDemandMediaType, options: { categoryId?: string; query?: string; favoriteOnly?: boolean; offset?: number; limit?: number } = {}) {
   const params = new URLSearchParams({ type: mediaType });
   if (options.categoryId) params.set("categoryId", options.categoryId);
   if (options.query) params.set("query", options.query);
+  if (options.favoriteOnly) params.set("favoriteOnly", "true");
   if (options.offset != null) params.set("offset", String(options.offset));
   if (options.limit != null) params.set("limit", String(options.limit));
   return request<OnDemandPage>(`/on-demand/titles?${params.toString()}`);
@@ -452,6 +458,22 @@ export function getOnDemandTitles(mediaType: OnDemandMediaType, options: { categ
 
 export function getOnDemandTitle(id: string) {
   return request<OnDemandTitle>(`/on-demand/titles/${id}`);
+}
+
+export function addOnDemandCategoryFavorite(id: string) {
+  return request<void>(`/on-demand/favorites/categories/${id}`, { method: "POST" });
+}
+
+export function removeOnDemandCategoryFavorite(id: string) {
+  return request<void>(`/on-demand/favorites/categories/${id}`, { method: "DELETE" });
+}
+
+export function addOnDemandTitleFavorite(id: string) {
+  return request<void>(`/on-demand/favorites/titles/${id}`, { method: "POST" });
+}
+
+export function removeOnDemandTitleFavorite(id: string) {
+  return request<void>(`/on-demand/favorites/titles/${id}`, { method: "DELETE" });
 }
 
 export function getSeriesEpisodes(id: string) {
@@ -530,6 +552,38 @@ export function getSportsCompetition(slug: string) {
 
 export function getSportsProviders() {
   return request<SportsProviderCatalogResponse>("/sports/providers");
+}
+
+export function getGoogleCalendarStatus() {
+  return request<GoogleCalendarConnectionStatus>("/integrations/google-calendar/status");
+}
+
+export function connectGoogleCalendar() {
+  return request<GoogleCalendarConnectResponse>("/integrations/google-calendar/connect", {
+    method: "POST",
+  });
+}
+
+export function getGoogleCalendars() {
+  return request<GoogleCalendarInfo[]>("/integrations/google-calendar/calendars");
+}
+
+export function selectGoogleCalendar(payload: GoogleCalendarSelection) {
+  return request<GoogleCalendarConnectionStatus>("/integrations/google-calendar/calendar", {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function disconnectGoogleCalendar() {
+  return request<void>("/integrations/google-calendar", { method: "DELETE" });
+}
+
+export function addSportsEventToCalendar(id: string) {
+  return request<SportsCalendarEventResponse>(
+    `/sports/events/${encodeURIComponent(id)}/calendar`,
+    { method: "POST" },
+  );
 }
 
 export function searchChannels(query: string, offset = 0, limit = 30) {

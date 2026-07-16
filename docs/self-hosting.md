@@ -72,6 +72,31 @@ By default, the deploy script pulls and starts:
 
 By default, the `web` service is published on host port `8088`. Override it with `EURIPUS_WEB_PORT` if needed.
 
+## Optional Google Calendar Integration
+
+To let users add Sports API events to Google Calendar:
+
+1. In Google Cloud, enable the **Google Calendar API**.
+2. Configure the OAuth consent screen and create an **OAuth 2.0 Web application** client.
+3. Add this exact authorized redirect URI:
+
+   ```text
+   https://YOUR-EURIPUS-ORIGIN/api/integrations/google-calendar/callback
+   ```
+
+4. Set these values in `apps/server/.env`:
+
+   ```bash
+   APP_GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
+   APP_GOOGLE_CLIENT_SECRET=your-client-secret
+   # Optional; normally derived from APP_PUBLIC_ORIGIN:
+   APP_GOOGLE_CALENDAR_REDIRECT_URL=https://YOUR-EURIPUS-ORIGIN/api/integrations/google-calendar/callback
+   ```
+
+Euripus requests only calendar-event write access and read-only calendar-list access. Google access and refresh tokens are encrypted with `APP_ENCRYPTION_KEY_B64`. Keep that encryption key stable across deployments; changing it requires users to reconnect Google Calendar.
+
+For an external consent screen left in Google Cloud's testing mode, Google may expire refresh tokens after seven days. Publish the OAuth app for durable connections, subject to Google's consent and verification requirements.
+
 ## Optional Mullvad Routing
 
 If you want Euripus server-side traffic to leave through Mullvad, enable it in `.env.selfhosted-images`:

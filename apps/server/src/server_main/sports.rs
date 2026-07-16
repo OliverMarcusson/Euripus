@@ -228,9 +228,7 @@ async fn get_event_detail(
     Path(id): Path<String>,
 ) -> ApiResult<SportsEventResponse> {
     require_auth(&state, &headers).await?;
-    let payload =
-        fetch_upstream_json::<UpstreamSportsEvent>(&state, &format!("v1/events/{id}")).await?;
-    Ok(Json(payload.into()))
+    Ok(Json(fetch_event_by_id(&state, &id).await?))
 }
 
 async fn get_competition(
@@ -262,6 +260,15 @@ async fn get_providers(
         count: payload.count,
         providers: payload.providers.into_iter().map(Into::into).collect(),
     }))
+}
+
+pub(super) async fn fetch_event_by_id(
+    state: &AppState,
+    id: &str,
+) -> Result<SportsEventResponse, AppError> {
+    let payload =
+        fetch_upstream_json::<UpstreamSportsEvent>(state, &format!("v1/events/{id}")).await?;
+    Ok(payload.into())
 }
 
 async fn fetch_upstream_json<T>(state: &AppState, path: &str) -> Result<T, AppError>

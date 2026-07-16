@@ -214,6 +214,7 @@ export type OnDemandCategory = {
   mediaType: OnDemandMediaType;
   name: string;
   titleCount: number;
+  isFavorite: boolean;
 };
 
 export type OnDemandTitle = {
@@ -232,6 +233,7 @@ export type OnDemandTitle = {
   rating: number | null;
   durationMinutes: number | null;
   containerExtension: string | null;
+  isFavorite: boolean;
 };
 
 export type OnDemandEpisode = {
@@ -354,6 +356,35 @@ export type SportsProvider = {
 export type SportsProviderCatalogResponse = {
   count: number;
   providers: SportsProvider[];
+};
+
+export type GoogleCalendarConnectionStatus = {
+  configured: boolean;
+  connected: boolean;
+  needsReauthorization: boolean;
+  selectedCalendarId: string | null;
+  selectedCalendarName: string | null;
+};
+
+export type GoogleCalendarInfo = {
+  id: string;
+  summary: string;
+  primary: boolean;
+  accessRole: string;
+};
+
+export type GoogleCalendarConnectResponse = {
+  authorizationUrl: string;
+};
+
+export type GoogleCalendarSelection = {
+  calendarId: string;
+};
+
+export type SportsCalendarEventResponse = {
+  googleEventId: string;
+  htmlLink: string | null;
+  created: boolean;
 };
 
 export type SearchResultPage<T> = {

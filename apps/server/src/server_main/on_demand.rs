@@ -24,6 +24,7 @@ pub(super) struct OnDemandTitleResponse {
     pub(super) rating: Option<f64>,
     pub(super) duration_minutes: Option<i32>,
     pub(super) container_extension: Option<String>,
+    pub(super) is_favorite: bool,
 }
 
 #[derive(Debug, Serialize, FromRow)]
@@ -33,6 +34,7 @@ struct OnDemandCategoryResponse {
     media_type: String,
     name: String,
     title_count: i64,
+    is_favorite: bool,
 }
 
 #[derive(Debug, Serialize, FromRow)]
@@ -68,6 +70,7 @@ struct CatalogQuery {
     query: Option<String>,
     offset: Option<i64>,
     limit: Option<i64>,
+    favorite_only: Option<bool>,
 }
 
 pub(super) fn shared_router() -> Router<AppState> {
@@ -76,6 +79,14 @@ pub(super) fn shared_router() -> Router<AppState> {
         .route("/on-demand/titles", get(list_titles))
         .route("/on-demand/titles/{id}", get(get_title))
         .route("/on-demand/series/{id}/episodes", get(list_series_episodes))
+        .route(
+            "/on-demand/favorites/categories/{id}",
+            post(add_category_favorite).delete(remove_category_favorite),
+        )
+        .route(
+            "/on-demand/favorites/titles/{id}",
+            post(add_title_favorite).delete(remove_title_favorite),
+        )
 }
 
 fn normalize_media_type(raw: Option<&str>) -> Result<&str, AppError> {
@@ -97,11 +108,15 @@ async fn list_categories(
     let media_type = normalize_media_type(query.media_type.as_deref())?;
     let rows = sqlx::query_as::<_, OnDemandCategoryResponse>(
         r#"
-        SELECT c.id, c.media_type, c.name, COUNT(t.id) AS title_count
+        SELECT c.id, c.media_type, c.name, COUNT(t.id) AS title_count,
+          EXISTS (
+            SELECT 1 FROM favorite_on_demand_categories f
+            WHERE f.user_id = $1 AND f.category_id = c.id
+          ) AS is_favorite
         FROM on_demand_categories c
         LEFT JOIN on_demand_titles t ON t.category_id = c.id
         WHERE c.user_id = $1 AND c.media_type = $2
-        GROUP BY c.id ORDER BY lower(c.name), c.id
+        GROUP BY c.id ORDER BY is_favorite DESC, lower(c.name), c.id
     "#,
     )
     .bind(auth.user_id)
@@ -131,30 +146,44 @@ async fn list_titles(
         WHERE t.user_id = $1 AND t.media_type = $2
           AND ($3::uuid IS NULL OR t.category_id = $3)
           AND ($4::text IS NULL OR t.name ILIKE ('%' || $4 || '%'))
+          AND (NOT $5 OR EXISTS (
+            SELECT 1 FROM favorite_on_demand_titles f
+            WHERE f.user_id = $1 AND f.title_id = t.id
+          ))
     "#,
     )
     .bind(auth.user_id)
     .bind(media_type)
     .bind(query.category_id)
     .bind(term)
+    .bind(query.favorite_only.unwrap_or(false))
     .fetch_one(&state.pool)
     .await?;
     let mut items = sqlx::query_as::<_, OnDemandTitleResponse>(&format!(
         r#"
         SELECT t.id, t.profile_id, t.media_type, t.name, t.category_id, c.name AS category_name,
           t.poster_url, t.backdrop_url, t.plot, t.genre, t.cast_names, t.director,
-          t.release_date, t.rating, t.duration_minutes, t.container_extension
+          t.release_date, t.rating, t.duration_minutes, t.container_extension,
+          EXISTS (
+            SELECT 1 FROM favorite_on_demand_titles f
+            WHERE f.user_id = $1 AND f.title_id = t.id
+          ) AS is_favorite
         FROM on_demand_titles t LEFT JOIN on_demand_categories c ON c.id = t.category_id
         WHERE t.user_id = $1 AND t.media_type = $2
           AND ($3::uuid IS NULL OR t.category_id = $3)
           AND ($4::text IS NULL OR t.name ILIKE ('%' || $4 || '%'))
-        ORDER BY lower(t.name), t.id OFFSET $5 LIMIT $6
+          AND (NOT $5 OR EXISTS (
+            SELECT 1 FROM favorite_on_demand_titles f
+            WHERE f.user_id = $1 AND f.title_id = t.id
+          ))
+        ORDER BY is_favorite DESC, lower(t.name), t.id OFFSET $6 LIMIT $7
     "#
     ))
     .bind(auth.user_id)
     .bind(media_type)
     .bind(query.category_id)
     .bind(term)
+    .bind(query.favorite_only.unwrap_or(false))
     .bind(offset)
     .bind(limit)
     .fetch_all(&state.pool)
@@ -257,7 +286,11 @@ async fn load_title(
         r#"
         SELECT t.id, t.profile_id, t.media_type, t.name, t.category_id, c.name AS category_name,
           t.poster_url, t.backdrop_url, t.plot, t.genre, t.cast_names, t.director,
-          t.release_date, t.rating, t.duration_minutes, t.container_extension
+          t.release_date, t.rating, t.duration_minutes, t.container_extension,
+          EXISTS (
+            SELECT 1 FROM favorite_on_demand_titles f
+            WHERE f.user_id = $1 AND f.title_id = t.id
+          ) AS is_favorite
         FROM on_demand_titles t LEFT JOIN on_demand_categories c ON c.id = t.category_id
         WHERE t.user_id = $1 AND t.id = $2
     "#,
@@ -507,6 +540,102 @@ pub(super) async fn persist_catalog(
       .bind(user_id).bind(profile_id).bind(media_type).execute(&mut *tx).await?;
     tx.commit().await?;
     Ok(())
+}
+
+async fn add_category_favorite(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+) -> Result<StatusCode, AppError> {
+    let auth = require_auth(&state, &headers).await?;
+    let result = sqlx::query(
+        r#"
+        INSERT INTO favorite_on_demand_categories (user_id, category_id)
+        SELECT $1, id FROM on_demand_categories WHERE id = $2 AND user_id = $1
+        ON CONFLICT DO NOTHING
+        "#,
+    )
+    .bind(auth.user_id)
+    .bind(id)
+    .execute(&state.pool)
+    .await?;
+    if result.rows_affected() == 0 {
+        let exists = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS(SELECT 1 FROM on_demand_categories WHERE id = $1 AND user_id = $2)",
+        )
+        .bind(id)
+        .bind(auth.user_id)
+        .fetch_one(&state.pool)
+        .await?;
+        if !exists {
+            return Err(AppError::NotFound(
+                "On-demand category not found".to_string(),
+            ));
+        }
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn remove_category_favorite(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+) -> Result<StatusCode, AppError> {
+    let auth = require_auth(&state, &headers).await?;
+    sqlx::query(
+        "DELETE FROM favorite_on_demand_categories WHERE user_id = $1 AND category_id = $2",
+    )
+    .bind(auth.user_id)
+    .bind(id)
+    .execute(&state.pool)
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn add_title_favorite(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+) -> Result<StatusCode, AppError> {
+    let auth = require_auth(&state, &headers).await?;
+    let result = sqlx::query(
+        r#"
+        INSERT INTO favorite_on_demand_titles (user_id, title_id)
+        SELECT $1, id FROM on_demand_titles WHERE id = $2 AND user_id = $1
+        ON CONFLICT DO NOTHING
+        "#,
+    )
+    .bind(auth.user_id)
+    .bind(id)
+    .execute(&state.pool)
+    .await?;
+    if result.rows_affected() == 0 {
+        let exists = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS(SELECT 1 FROM on_demand_titles WHERE id = $1 AND user_id = $2)",
+        )
+        .bind(id)
+        .bind(auth.user_id)
+        .fetch_one(&state.pool)
+        .await?;
+        if !exists {
+            return Err(AppError::NotFound("On-demand title not found".to_string()));
+        }
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn remove_title_favorite(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+) -> Result<StatusCode, AppError> {
+    let auth = require_auth(&state, &headers).await?;
+    sqlx::query("DELETE FROM favorite_on_demand_titles WHERE user_id = $1 AND title_id = $2")
+        .bind(auth.user_id)
+        .bind(id)
+        .execute(&state.pool)
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[cfg(test)]

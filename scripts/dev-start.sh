@@ -64,6 +64,28 @@ get_server_logs() {
     docker compose logs --tail 200 server 2>&1 || true
 }
 
+connect_external_sports_api() {
+    local container_name="${EURIPUS_SPORTS_API_CONTAINER_NAME:-sports-api}"
+    if ! docker inspect "$container_name" >/dev/null 2>&1; then
+        return 0
+    fi
+
+    local server_container_id
+    server_container_id="$(get_compose_service_container_id "server")"
+    local network_name
+    network_name="$(docker inspect -f '{{range $name, $_ := .NetworkSettings.Networks}}{{println $name}}{{end}}' "$server_container_id" 2>/dev/null | head -n1 | tr -d '\r')"
+    if [[ -z "$network_name" ]]; then
+        echo "Unable to determine the Euripus development network for Sports API." >&2
+        return 0
+    fi
+
+    if docker network connect "$network_name" "$container_name" >/dev/null 2>&1; then
+        echo "Connected external Sports API container '$container_name' to '$network_name'."
+    elif ! docker inspect -f '{{json .NetworkSettings.Networks}}' "$container_name" | grep -q "\"$network_name\""; then
+        echo "Unable to connect Sports API container '$container_name' to '$network_name'." >&2
+    fi
+}
+
 wait_for_api_health() {
     local timeout_seconds="${1:-180}"
     local deadline=$((SECONDS + timeout_seconds))
@@ -212,6 +234,7 @@ compose_args+=(-d postgres server)
 
 echo "Starting PostgreSQL + API..."
 docker "${compose_args[@]}"
+connect_external_sports_api
 
 echo "Waiting for API health..."
 wait_for_api_health 180

@@ -19,6 +19,7 @@ import { Separator } from "@/components/ui/separator";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { ProviderSettingsSection } from "@/features/provider/provider-settings-section";
 import { RestrictedProviderSyncSection } from "@/features/provider/restricted-provider-sync-section";
+import { GoogleCalendarSettings } from "@/features/calendar/google-calendar-settings";
 import { useChannelFavoriteMutation } from "@/hooks/use-channel-favorite";
 import { useChannelPlaybackMutation } from "@/hooks/use-playback-actions";
 import { usePpvFavoriteMutation } from "@/hooks/use-ppv-favorite";
@@ -400,6 +401,8 @@ export function SettingsPage() {
       <Separator className="sm:hidden" />
 
       {user?.providerLocked ? <RestrictedProviderSyncSection /> : <ProviderSettingsSection />}
+
+      <GoogleCalendarSettings />
 
       {remoteDevices.length ? (
         <Card className="rounded-none border-0 bg-transparent shadow-none sm:rounded-3xl sm:border sm:border-border/50 sm:bg-card/40 sm:backdrop-blur-xl sm:shadow-2xl">
