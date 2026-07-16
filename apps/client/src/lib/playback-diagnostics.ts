@@ -8,6 +8,33 @@ type PlaybackOwnershipHint =
   | "iptv-provider"
   | "unknown";
 
+export function sanitizePlaybackDiagnosticUrl(value: string) {
+  try {
+    const baseUrl =
+      typeof window === "undefined" ? "http://localhost" : window.location.origin;
+    const url = new URL(value, baseUrl);
+    url.search = "";
+    url.hash = "";
+
+    return /^[a-z][a-z\d+.-]*:/i.test(value) || value.startsWith("//")
+      ? url.toString()
+      : url.pathname;
+  } catch {
+    return value.split(/[?#]/, 1)[0];
+  }
+}
+
+function sanitizePlaybackDiagnosticPayload(payload: PlaybackDiagnosticPayload) {
+  return Object.fromEntries(
+    Object.entries(payload).map(([key, value]) => [
+      key,
+      /url$/i.test(key) && typeof value === "string"
+        ? sanitizePlaybackDiagnosticUrl(value)
+        : value,
+    ]),
+  );
+}
+
 function playbackDiagnosticsEnabled() {
   if (import.meta.env.DEV) {
     return true;
@@ -68,7 +95,7 @@ export function logPlaybackDiagnostic(
   logger("[playback]", {
     event,
     timestamp: new Date().toISOString(),
-    ...payload,
+    ...sanitizePlaybackDiagnosticPayload(payload),
   });
 }
 
@@ -92,6 +119,7 @@ export function attachPlaybackSeekDebugging(
   }
 
   const ownershipHint = inferPlaybackOwnershipHint(sourceUrl);
+  const diagnosticSourceUrl = sanitizePlaybackDiagnosticUrl(sourceUrl);
   let lastUserInputAt: number | null = null;
   let lastUserInputType: string | null = null;
   let lastObservedTime = video.currentTime;
@@ -110,7 +138,7 @@ export function attachPlaybackSeekDebugging(
       playbackSessionId,
       ownershipHint,
       sourceKind,
-      sourceUrl,
+      sourceUrl: diagnosticSourceUrl,
       live,
       currentTime: video.currentTime,
       readyState: video.readyState,
@@ -143,7 +171,7 @@ export function attachPlaybackSeekDebugging(
         playbackSessionId,
         ownershipHint,
         sourceKind,
-        sourceUrl,
+        sourceUrl: diagnosticSourceUrl,
         live,
         previousTime: lastObservedTime,
         currentTime,

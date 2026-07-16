@@ -153,6 +153,18 @@ async fn relay_hls_playlist(
         );
         AppError::BadRequest("The upstream playlist could not be decoded as UTF-8.".to_string())
     })?;
+    if is_provider_placeholder_manifest(&response_url, &manifest) {
+        warn!(
+            component = "iptv-provider",
+            event = "provider-placeholder-detected",
+            asset = "hls-playlist",
+            relay_token_id = %relay_token_id,
+            upstream_host = %upstream_host,
+            "IPTV provider returned a known unavailable-channel placeholder"
+        );
+        return provider_placeholder_response();
+    }
+
     let rewritten = rewrite_hls_manifest(
         &state,
         relay.user_id,
@@ -421,6 +433,91 @@ fn relay_response_headers(
     builder
 }
 
+const PROVIDER_PLACEHOLDER_ERROR: &str = "provider-placeholder";
+const PROVIDER_PLACEHOLDER_STATUS: u16 = 460;
+
+fn is_provider_placeholder_manifest(upstream_base_url: &Url, manifest: &str) -> bool {
+    let mut has_extm3u_header = false;
+    let mut saw_content = false;
+    let mut has_end_list = false;
+    let mut has_master_semantics = false;
+    let mut extinf_count = 0;
+    let mut pending_extinf = false;
+    let mut malformed_segment_metadata = false;
+    let mut paired_segment_count = 0;
+    let mut media_uris = Vec::new();
+
+    for raw_line in manifest.lines() {
+        let line = raw_line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let is_first_content = !saw_content;
+        saw_content = true;
+        if line.starts_with('#') {
+            let upper = line.to_ascii_uppercase();
+            if is_first_content {
+                has_extm3u_header = upper == "#EXTM3U";
+            }
+            if upper == "#EXT-X-ENDLIST" {
+                has_end_list = true;
+                malformed_segment_metadata |= pending_extinf;
+            }
+            has_master_semantics |= upper.starts_with("#EXT-X-STREAM-INF")
+                || upper.starts_with("#EXT-X-I-FRAME-STREAM-INF")
+                || upper.starts_with("#EXT-X-MEDIA:");
+            if upper.starts_with("#EXTINF:") {
+                malformed_segment_metadata |= pending_extinf;
+                extinf_count += 1;
+                pending_extinf = true;
+            }
+            continue;
+        }
+        if pending_extinf {
+            paired_segment_count += 1;
+            pending_extinf = false;
+        }
+        media_uris.push(line);
+    }
+
+    if !has_extm3u_header
+        || !has_end_list
+        || has_master_semantics
+        || malformed_segment_metadata
+        || pending_extinf
+        || media_uris.len() != 1
+        || extinf_count != 1
+        || paired_segment_count != 1
+    {
+        return false;
+    }
+
+    let resolved = Url::parse(media_uris[0]).or_else(|_| upstream_base_url.join(media_uris[0]));
+    resolved
+        .ok()
+        .and_then(|url| {
+            url.path_segments()
+                .and_then(|segments| segments.last())
+                .map(ToString::to_string)
+        })
+        .is_some_and(|name| name.eq_ignore_ascii_case("black.ts"))
+}
+
+fn provider_placeholder_response() -> Result<Response, AppError> {
+    Response::builder()
+        .status(
+            StatusCode::from_u16(PROVIDER_PLACEHOLDER_STATUS)
+                .expect("provider placeholder status is valid"),
+        )
+        .header(header::CACHE_CONTROL, "no-store")
+        .header("x-euripus-playback-error", PROVIDER_PLACEHOLDER_ERROR)
+        .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+        .body(Body::from(
+            "This channel is currently unavailable from the provider.",
+        ))
+        .map_err(|error| AppError::Internal(anyhow!(error)))
+}
+
 pub(super) fn rewrite_hls_manifest(
     state: &AppState,
     user_id: Uuid,
@@ -665,6 +762,68 @@ mod tests {
 
         assert_eq!(urls.len(), 3);
         assert!(urls.iter().all(Result::is_ok));
+    }
+
+    #[test]
+    fn detects_known_provider_placeholder_manifests() {
+        let base =
+            Url::parse("https://provider.example.com/live/channel.m3u8").expect("upstream url");
+
+        assert!(is_provider_placeholder_manifest(
+            &base,
+            "#EXTM3U\n#EXTINF:15,\nblack.ts?token=ignored\n#EXT-X-ENDLIST\n",
+        ));
+        assert!(is_provider_placeholder_manifest(
+            &base,
+            "#EXTM3U\n#EXTINF:15,\nhttps://cdn.example.com/video/BLACK.TS?x=1\n#EXT-X-ENDLIST\n",
+        ));
+    }
+
+    #[test]
+    fn rejects_non_placeholder_hls_manifests() {
+        let base =
+            Url::parse("https://provider.example.com/live/channel.m3u8").expect("upstream url");
+        let cases = [
+            // A master playlist is never a media placeholder.
+            "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1000\nblack.ts\n#EXT-X-ENDLIST\n",
+            // Multiple media segments are not the strict placeholder shape.
+            "#EXTM3U\n#EXTINF:5,\nblack.ts\n#EXTINF:5,\nblack.ts\n#EXT-X-ENDLIST\n",
+            // A live playlist without ENDLIST may legitimately use a black slate.
+            "#EXTM3U\n#EXTINF:5,\nblack.ts\n",
+            // An ordinary one-segment recording is valid media.
+            "#EXTM3U\n#EXTINF:5,\nrecording.ts\n#EXT-X-ENDLIST\n",
+            // A lookalike without the required HLS header is not a manifest.
+            "#EXTINF:5,\nblack.ts\n#EXT-X-ENDLIST\n",
+            // A URI without segment duration metadata is not the known placeholder.
+            "#EXTM3U\nblack.ts\n#EXT-X-ENDLIST\n",
+            // ENDLIST before the segment URI does not pair EXTINF with that URI.
+            "#EXTM3U\n#EXTINF:5,\n#EXT-X-ENDLIST\nblack.ts\n",
+        ];
+
+        for manifest in cases {
+            assert!(!is_provider_placeholder_manifest(&base, manifest));
+        }
+    }
+
+    #[test]
+    fn placeholder_response_has_terminal_machine_readable_status() {
+        let response = provider_placeholder_response().expect("placeholder response");
+
+        assert_eq!(response.status().as_u16(), PROVIDER_PLACEHOLDER_STATUS);
+        assert_eq!(
+            response
+                .headers()
+                .get("x-euripus-playback-error")
+                .and_then(|value| value.to_str().ok()),
+            Some(PROVIDER_PLACEHOLDER_ERROR)
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get(header::CACHE_CONTROL)
+                .and_then(|value| value.to_str().ok()),
+            Some("no-store")
+        );
     }
 
     #[test]

@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ChevronDown,
   ChevronUp,
@@ -30,6 +30,7 @@ import {
   useRemoteControllerTargetQuery,
 } from "@/hooks/use-remote-control-state";
 import { logPlaybackDiagnostic } from "@/lib/playback-diagnostics";
+import type { PlaybackFailure } from "@/lib/hls";
 import { receiverPlaybackBadgeLabel } from "@/lib/receiver-playback";
 import { usePlayerStore } from "@/store/player-store";
 import { useRemoteControllerStore } from "@/store/remote-controller-store";
@@ -56,7 +57,11 @@ export function PlayerView() {
     remoteTargetQuery.data?.device,
   );
   const [minimized, setMinimized] = useState(false);
+  const [playbackFailure, setPlaybackFailure] = useState<string | null>(null);
   const recoveryInFlightRef = useRef(false);
+  const recoveryAttemptsRef = useRef(0);
+  const recoveryTimerRef = useRef<number | null>(null);
+  const recoveryGenerationRef = useRef(0);
   const displaySourceTitle = source
     ? formatEventChannelTitle(source.title)
     : null;
@@ -64,44 +69,152 @@ export function PlayerView() {
     ? formatEventChannelTitle(remoteTarget.currentPlayback.title)
     : null;
 
-  const handleRecoveryNeeded = useCallback(async () => {
-    if (!currentRequest || recoveryInFlightRef.current || loading) {
-      return;
+  const clearRecoveryTimer = useCallback(() => {
+    if (recoveryTimerRef.current != null) {
+      window.clearTimeout(recoveryTimerRef.current);
+      recoveryTimerRef.current = null;
     }
+  }, []);
 
-    recoveryInFlightRef.current = true;
-    setLoading(true);
-    logPlaybackDiagnostic("warn", "playback-recovery-started", {
+  useEffect(() => {
+    recoveryGenerationRef.current += 1;
+    recoveryAttemptsRef.current = 0;
+    recoveryInFlightRef.current = false;
+    clearRecoveryTimer();
+    setPlaybackFailure(null);
+    return clearRecoveryTimer;
+  }, [clearRecoveryTimer, currentRequest]);
+
+  const scheduleRecovery = useCallback(
+    (failure: PlaybackFailure, immediate = false) => {
+      if (!currentRequest) {
+        return;
+      }
+
+      if (failure.kind === "provider-unavailable") {
+        recoveryGenerationRef.current += 1;
+        clearRecoveryTimer();
+        setLoading(false);
+        setPlaybackFailure(failure.message);
+        logPlaybackDiagnostic("error", "playback-provider-unavailable", {
+          ownershipHint: "iptv-provider",
+          requestKind: currentRequest.kind,
+          requestId: currentRequest.id,
+        });
+        return;
+      }
+
+      if (recoveryInFlightRef.current || recoveryTimerRef.current != null) {
+        return;
+      }
+
+      if (recoveryAttemptsRef.current >= 3) {
+        setLoading(false);
+        setPlaybackFailure("Playback failed after multiple attempts.");
+        logPlaybackDiagnostic("error", "playback-recovery-exhausted", {
+          ownershipHint: "client-player",
+          requestKind: currentRequest.kind,
+          requestId: currentRequest.id,
+          attempts: recoveryAttemptsRef.current,
+        });
+        return;
+      }
+
+      const attempt = recoveryAttemptsRef.current + 1;
+      recoveryAttemptsRef.current = attempt;
+      const delayMs = immediate ? 0 : [1_000, 3_000, 10_000][attempt - 1];
+      const generation = recoveryGenerationRef.current;
+      const previousSourceUrl = source?.url ?? null;
+      setPlaybackFailure(null);
+      logPlaybackDiagnostic("warn", "playback-recovery-scheduled", {
+        ownershipHint: "client-player",
+        requestKind: currentRequest.kind,
+        requestId: currentRequest.id,
+        attempt,
+        delayMs,
+        reason: failure.reason,
+      });
+
+      recoveryTimerRef.current = window.setTimeout(async () => {
+        recoveryTimerRef.current = null;
+        if (generation !== recoveryGenerationRef.current) {
+          return;
+        }
+
+        recoveryInFlightRef.current = true;
+        setLoading(true);
+        logPlaybackDiagnostic("warn", "playback-recovery-started", {
+          ownershipHint: "client-player",
+          requestKind: currentRequest.kind,
+          requestId: currentRequest.id,
+          attempt,
+        });
+        try {
+          const nextSource =
+            currentRequest.kind === "channel"
+              ? await startChannelPlayback(currentRequest.id)
+              : await startProgramPlayback(currentRequest.id);
+          if (generation !== recoveryGenerationRef.current) {
+            return;
+          }
+          const sameSource = nextSource.url === previousSourceUrl;
+          setPlayback(nextSource, currentRequest);
+          logPlaybackDiagnostic("info", "playback-recovery-succeeded", {
+            ownershipHint: "client-player",
+            requestKind: currentRequest.kind,
+            requestId: currentRequest.id,
+            attempt,
+            sameSource,
+            nextSourceKind: nextSource.kind,
+          });
+        } catch {
+          if (generation !== recoveryGenerationRef.current) {
+            return;
+          }
+          setLoading(false);
+          logPlaybackDiagnostic("error", "playback-recovery-failed", {
+            ownershipHint: "client-player",
+            requestKind: currentRequest.kind,
+            requestId: currentRequest.id,
+            attempt,
+          });
+          window.queueMicrotask(() => {
+            scheduleRecovery({ kind: "recoverable", reason: "hls" });
+          });
+        } finally {
+          if (generation === recoveryGenerationRef.current) {
+            recoveryInFlightRef.current = false;
+          }
+        }
+      }, delayMs);
+    },
+    [
+      clearRecoveryTimer,
+      currentRequest,
+      setLoading,
+      setPlayback,
+      source?.url,
+    ],
+  );
+
+  const handlePlaybackHealthy = useCallback(() => {
+    recoveryAttemptsRef.current = 0;
+    setPlaybackFailure(null);
+    logPlaybackDiagnostic("info", "playback-recovery-budget-reset", {
       ownershipHint: "client-player",
-      requestKind: currentRequest.kind,
-      requestId: currentRequest.id,
-      previousSourceKind: source?.kind ?? null,
-      previousSourceUrl: source?.url ?? null,
+      requestKind: currentRequest?.kind ?? null,
+      requestId: currentRequest?.id ?? null,
     });
-    try {
-      const nextSource =
-        currentRequest.kind === "channel"
-          ? await startChannelPlayback(currentRequest.id)
-          : await startProgramPlayback(currentRequest.id);
-      setPlayback(nextSource, currentRequest);
-      logPlaybackDiagnostic("info", "playback-recovery-succeeded", {
-        ownershipHint: "client-player",
-        requestKind: currentRequest.kind,
-        requestId: currentRequest.id,
-        nextSourceKind: nextSource.kind,
-        nextSourceUrl: nextSource.url,
-      });
-    } catch {
-      logPlaybackDiagnostic("error", "playback-recovery-failed", {
-        ownershipHint: "client-player",
-        requestKind: currentRequest.kind,
-        requestId: currentRequest.id,
-      });
-      setLoading(false);
-    } finally {
-      recoveryInFlightRef.current = false;
-    }
-  }, [currentRequest, loading, setLoading, setPlayback]);
+  }, [currentRequest]);
+
+  const handleManualRetry = useCallback(() => {
+    recoveryGenerationRef.current += 1;
+    recoveryAttemptsRef.current = 0;
+    recoveryInFlightRef.current = false;
+    clearRecoveryTimer();
+    setPlaybackFailure(null);
+    scheduleRecovery({ kind: "recoverable", reason: "hls" }, true);
+  }, [clearRecoveryTimer, scheduleRecovery]);
 
   if (!source) {
     if (remoteTarget?.currentPlayback) {
@@ -299,17 +412,33 @@ export function PlayerView() {
               </div>
             </div>
 
-            {source.kind === "unsupported" ? (
+            {source.kind === "unsupported" || playbackFailure ? (
               <div className="rounded-2xl border border-border/40 bg-muted/20 p-5 text-sm text-muted-foreground w-full">
-                {source.unsupportedReason ??
-                  "This provider stream is not browser-compatible in v1."}
+                <p>
+                  {playbackFailure ??
+                    source.unsupportedReason ??
+                    "This provider stream is not browser-compatible in v1."}
+                </p>
+                {playbackFailure ? (
+                  <Button
+                    className="mt-4"
+                    disabled={loading}
+                    onClick={handleManualRetry}
+                    size="sm"
+                    variant="secondary"
+                  >
+                    <Play data-icon="inline-start" />
+                    Retry
+                  </Button>
+                ) : null}
               </div>
             ) : (
               <div className="euripus-plyr-shell euripus-plyr-shell--local overflow-hidden rounded-2xl border border-border/40 bg-black/90 w-full ring-1 ring-white/10 shadow-[0_8px_32px_rgba(0,0,0,0.5)]">
                 <PlyrSurface
                   ariaLabel={`Playing ${displaySourceTitle}`}
                   className="contents"
-                  onRecoveryNeeded={handleRecoveryNeeded}
+                  onPlaybackFailure={scheduleRecovery}
+                  onPlaybackHealthy={handlePlaybackHealthy}
                   source={source}
                   uiMode="local"
                   videoClassName="euripus-plyr-media aspect-video w-full bg-black object-contain max-md:min-h-[220px]"

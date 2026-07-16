@@ -2,6 +2,7 @@ import Hls, { type ErrorData, type HlsConfig, type Level } from "hls.js";
 import {
   inferPlaybackOwnershipHint,
   logPlaybackDiagnostic,
+  sanitizePlaybackDiagnosticUrl,
 } from "@/lib/playback-diagnostics";
 
 export const IPTV_HLS_CONFIG = {
@@ -30,6 +31,16 @@ export type HlsQualityOption = {
 
 type HlsErrorController = Pick<Hls, "destroy" | "recoverMediaError" | "startLoad">;
 type HlsLiveSyncController = Pick<Hls, "liveSyncPosition">;
+export type PlaybackFailure =
+  | {
+      kind: "recoverable";
+      reason: "hls" | "video-error" | "stall" | "unexpected-end";
+    }
+  | {
+      kind: "provider-unavailable";
+      message: string;
+    };
+
 export type HlsSession = {
   readonly qualityOptions: HlsQualityOption[];
   destroy: () => void;
@@ -84,6 +95,25 @@ export function isIptvHlsSupported() {
   return Hls.isSupported();
 }
 
+export function isProviderPlaceholderHlsError(
+  sourceUrl: string,
+  data: Pick<ErrorData, "fatal" | "response" | "type">,
+) {
+  if (
+    !data.fatal ||
+    data.type !== Hls.ErrorTypes.NETWORK_ERROR ||
+    data.response?.code !== 460
+  ) {
+    return false;
+  }
+
+  try {
+    return new URL(sourceUrl, window.location.origin).pathname === "/api/relay/hls";
+  } catch {
+    return false;
+  }
+}
+
 export function handleIptvHlsError(
   hls: HlsErrorController,
   data: ErrorData,
@@ -111,7 +141,7 @@ export function handleIptvHlsError(
       return;
     }
 
-    hls.destroy();
+    onFatalRecoveryNeeded?.();
   }
 }
 
@@ -150,7 +180,9 @@ function describeFrag(data: {
     fragStart: data.frag?.start ?? null,
     fragDuration: data.frag?.duration ?? null,
     fragType: data.frag?.type ?? null,
-    fragUrl: data.frag?.url ?? null,
+    fragUrl: data.frag?.url
+      ? sanitizePlaybackDiagnosticUrl(data.frag.url)
+      : null,
     partIndex: data.part?.index ?? null,
     partDuration: data.part?.duration ?? null,
   };
@@ -179,15 +211,16 @@ export function createIptvHls(
   {
     live = false,
     playbackSessionId,
-    onRecoveryNeeded,
+    onPlaybackFailure,
   }: {
     live?: boolean;
     playbackSessionId?: string;
-    onRecoveryNeeded?: () => void;
+    onPlaybackFailure?: (failure: PlaybackFailure) => void;
   } = {},
 ): HlsSession {
   const hls = new Hls(IPTV_HLS_CONFIG);
   const recoveryState: HlsErrorRecoveryState = { mediaRecoveryAttempts: 0 };
+  const diagnosticSourceUrl = sanitizePlaybackDiagnosticUrl(sourceUrl);
   const qualityListeners = new Set<(options: HlsQualityOption[]) => void>();
   let currentQuality = AUTO_HLS_QUALITY;
   let qualityOptions = getIptvHlsQualityOptions(hls.levels);
@@ -228,8 +261,8 @@ export function createIptvHls(
     logPlaybackDiagnostic(data.fatal ? "error" : "warn", "hls-error", {
       playbackSessionId,
       ownershipHint,
-      sourceUrl,
-      failingUrl,
+      sourceUrl: diagnosticSourceUrl,
+      failingUrl: sanitizePlaybackDiagnosticUrl(failingUrl),
       live,
       fatal: data.fatal,
       errorType: data.type,
@@ -243,8 +276,24 @@ export function createIptvHls(
       liveSyncPosition: hls.liveSyncPosition,
     });
 
+    if (isProviderPlaceholderHlsError(sourceUrl, data)) {
+      logPlaybackDiagnostic("error", "provider-placeholder-detected", {
+        playbackSessionId,
+        ownershipHint: "euripus-relay",
+        live,
+        responseCode,
+      });
+      onPlaybackFailure?.({
+        kind: "provider-unavailable",
+        message: "This channel is currently unavailable from the provider.",
+      });
+      return;
+    }
+
     handleIptvHlsError(hls, data, recoveryState, {
-      onFatalRecoveryNeeded: onRecoveryNeeded,
+      onFatalRecoveryNeeded: () => {
+        onPlaybackFailure?.({ kind: "recoverable", reason: "hls" });
+      },
     });
   };
 
@@ -275,7 +324,7 @@ export function createIptvHls(
     logPlaybackDiagnostic("info", "hls-manifest-parsed", {
       playbackSessionId,
       ownershipHint: inferPlaybackOwnershipHint(sourceUrl),
-      sourceUrl,
+      sourceUrl: diagnosticSourceUrl,
       live,
       levelCount: hls.levels.length,
     });
@@ -331,7 +380,7 @@ export function createIptvHls(
     logPlaybackDiagnostic("info", eventName, {
       playbackSessionId,
       ownershipHint: inferPlaybackOwnershipHint(sourceUrl),
-      sourceUrl,
+      sourceUrl: diagnosticSourceUrl,
       live,
       currentTime: video.currentTime,
       bufferedRanges: getBufferedRanges(video),
@@ -418,7 +467,7 @@ export function createIptvHls(
       logPlaybackDiagnostic("warn", "hls-frag-sequence-anomaly", {
         playbackSessionId,
         ownershipHint: inferPlaybackOwnershipHint(sourceUrl),
-        sourceUrl,
+        sourceUrl: diagnosticSourceUrl,
         live,
         currentTime: video.currentTime,
         bufferedRanges: getBufferedRanges(video),
@@ -452,7 +501,7 @@ export function createIptvHls(
   logPlaybackDiagnostic("info", "hls-session-created", {
     playbackSessionId,
     ownershipHint: inferPlaybackOwnershipHint(sourceUrl),
-    sourceUrl,
+    sourceUrl: diagnosticSourceUrl,
     live,
   });
 
@@ -499,7 +548,7 @@ export function createIptvHls(
       logPlaybackDiagnostic("info", "hls-session-destroyed", {
         playbackSessionId,
         ownershipHint: inferPlaybackOwnershipHint(sourceUrl),
-        sourceUrl,
+        sourceUrl: diagnosticSourceUrl,
         live,
         currentTime: video.currentTime,
         bufferedRanges: getBufferedRanges(video),

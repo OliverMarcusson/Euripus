@@ -633,7 +633,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn playback_source_for_mode_bypasses_relay_in_local_dev() {
+    async fn playback_source_for_mode_uses_relay_in_local_dev() {
         let state = sample_app_state_without_public_origin();
         let headers = local_request_headers();
 
@@ -655,8 +655,12 @@ mod tests {
         .expect("local dev playback source");
 
         assert_eq!(response.kind, "hls");
-        assert_eq!(response.url, "https://provider.example.com/live/42.m3u8");
-        assert!(response.expires_at.is_none());
+        assert!(
+            response
+                .url
+                .starts_with("http://127.0.0.1:8080/api/relay/hls?token=")
+        );
+        assert!(response.expires_at.is_some());
     }
 
     #[tokio::test]
