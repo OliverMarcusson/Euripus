@@ -2,8 +2,12 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import type { PlaybackSource, RemotePlaybackCommand } from "@euripus/shared";
 import {
   startChannelPlayback,
+  startEpisodePlayback,
+  startOnDemandPlayback,
   startProgramPlayback,
   startRemoteChannelPlayback,
+  startRemoteEpisodePlayback,
+  startRemoteOnDemandPlayback,
   startRemoteProgramPlayback,
 } from "@/lib/api";
 import { usePlayerStore } from "@/store/player-store";
@@ -40,6 +44,28 @@ export function useChannelPlaybackMutation() {
         setLoading(false);
       }
     },
+  });
+}
+
+export function useOnDemandPlaybackMutation(kind: "onDemand" | "episode") {
+  const queryClient = useQueryClient();
+  const target = useRemoteControllerStore((state) => state.target);
+  const setLoading = usePlayerStore((state) => state.setLoading);
+  const setPlayback = usePlayerStore((state) => state.setPlayback);
+
+  return useMutation<PlaybackSource | RemotePlaybackCommand, Error, string>({
+    mutationFn: (id) => target
+      ? (kind === "episode" ? startRemoteEpisodePlayback(id) : startRemoteOnDemandPlayback(id))
+      : (kind === "episode" ? startEpisodePlayback(id) : startOnDemandPlayback(id)),
+    onMutate: () => { if (!target) setLoading(true); },
+    onSuccess: (result, id) => {
+      if (isRemotePlaybackCommand(result)) {
+        void queryClient.invalidateQueries({ queryKey: ["remote"] });
+      } else {
+        setPlayback(result, { kind, id });
+      }
+    },
+    onSettled: () => { if (!target) setLoading(false); },
   });
 }
 

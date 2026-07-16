@@ -233,6 +233,7 @@ export function useProviderSettingsForm() {
         queryClient.invalidateQueries({ queryKey: ["providers"] }),
         queryClient.invalidateQueries({ queryKey: ["channels"] }),
         queryClient.invalidateQueries({ queryKey: ["guide"] }),
+        queryClient.invalidateQueries({ queryKey: ["on-demand"] }),
         queryClient.invalidateQueries({ queryKey: ["sync-status"] }),
       ])
     },
@@ -256,6 +257,7 @@ export function useProviderSettingsForm() {
         }),
         queryClient.invalidateQueries({ queryKey: ["channels"] }),
         queryClient.invalidateQueries({ queryKey: ["guide"] }),
+        queryClient.invalidateQueries({ queryKey: ["on-demand"] }),
       ])
     },
     onError: async () => {
@@ -347,7 +349,7 @@ export function useProviderSettingsForm() {
 
     if (
       typeof window !== "undefined" &&
-      !window.confirm(`Delete provider ${provider.username}? This removes its synced channels, guide data, and sync history.`)
+      !window.confirm(`Delete provider ${provider.username}? This removes its synced channels, on-demand catalog, guide data, and sync history.`)
     ) {
       return
     }

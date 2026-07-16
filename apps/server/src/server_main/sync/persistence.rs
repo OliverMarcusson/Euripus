@@ -152,7 +152,7 @@ pub(super) async fn persist_full_sync_data(
         pool,
         job_id,
         "saving-programs",
-        5,
+        if job_type == "full" { 6 } else { 3 },
         job_type,
         "Saving guide entries",
     )

@@ -211,14 +211,6 @@ fn parse_search_pagination(
     Ok((term, offset, limit.min(SEARCH_MAX_LIMIT), parsed))
 }
 
-fn visible_scan_limit(offset: i64, limit: i64) -> usize {
-    (offset + limit)
-        .max(limit)
-        .saturating_add(MEILI_VISIBILITY_SCAN_BATCH as i64)
-        .min(MEILI_MAX_TOTAL_HITS as i64)
-        .max(0) as usize
-}
-
 async fn execute_meili_channel_search(
     meili: &MeilisearchClient,
     user_id: Uuid,
@@ -328,8 +320,11 @@ async fn search_channels_meili(
         });
     }
 
-    let primary_limit =
-        lexicon::meili_channel_primary_limit(offset, limit).max(visible_scan_limit(offset, limit));
+    // Visibility rules are more expressive than the fields stored in Meilisearch, so they
+    // must be applied after search. Fetch the complete result window supported by the index;
+    // otherwise a page can be empty simply because invisible hits ranked ahead of visible
+    // ones, even though valid matches exist later in the result set.
+    let primary_limit = MEILI_MAX_TOTAL_HITS;
     let primary_results = execute_meili_channel_search(
         meili,
         user_id,

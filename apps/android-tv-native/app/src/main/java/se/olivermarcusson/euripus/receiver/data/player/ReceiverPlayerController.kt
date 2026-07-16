@@ -113,12 +113,14 @@ class ReceiverPlayerController(
 
         val mediaItem = MediaItem.Builder()
             .setUri(source.url)
-            .setMimeType(
+            .apply {
                 when (source.kind) {
-                    "hls" -> MimeTypes.APPLICATION_M3U8
-                    else -> MimeTypes.VIDEO_MP2T
-                },
-            )
+                    "hls" -> setMimeType(MimeTypes.APPLICATION_M3U8)
+                    "mpegts" -> setMimeType(MimeTypes.VIDEO_MP2T)
+                    // Let Media3 infer progressive containers such as MP4 or MKV.
+                    "progressive" -> Unit
+                }
+            }
             .apply {
                 if (source.live) {
                     setLiveConfiguration(

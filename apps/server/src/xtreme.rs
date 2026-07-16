@@ -41,6 +41,49 @@ pub struct XtreamCategory {
     pub name: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct XtreamOnDemandTitle {
+    pub remote_id: String,
+    pub name: String,
+    pub category_id: Option<String>,
+    pub poster_url: Option<String>,
+    pub backdrop_url: Option<String>,
+    pub plot: Option<String>,
+    pub genre: Option<String>,
+    pub cast_names: Option<String>,
+    pub director: Option<String>,
+    pub release_date: Option<String>,
+    pub rating: Option<f64>,
+    pub duration_minutes: Option<i32>,
+    pub container_extension: Option<String>,
+    pub provider_updated_at: Option<i64>,
+}
+
+#[derive(Debug, Clone)]
+pub struct XtreamVodDetails {
+    pub poster_url: Option<String>,
+    pub backdrop_url: Option<String>,
+    pub plot: Option<String>,
+    pub genre: Option<String>,
+    pub cast_names: Option<String>,
+    pub director: Option<String>,
+    pub release_date: Option<String>,
+    pub rating: Option<f64>,
+    pub duration_minutes: Option<i32>,
+}
+
+#[derive(Debug, Clone)]
+pub struct XtreamEpisode {
+    pub remote_id: String,
+    pub season_number: i32,
+    pub episode_number: i32,
+    pub name: String,
+    pub plot: Option<String>,
+    pub duration_minutes: Option<i32>,
+    pub poster_url: Option<String>,
+    pub container_extension: Option<String>,
+}
+
 #[derive(Debug, Deserialize)]
 struct XtreamValidationPayload {
     user_info: Option<XtreamUserInfo>,
@@ -67,6 +110,48 @@ struct XtreamChannelPayload {
     tv_archive: Option<serde_json::Value>,
     tv_archive_duration: Option<serde_json::Value>,
     container_extension: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct XtreamVodInfoPayload {
+    info: Option<XtreamVodInfoDetailsPayload>,
+}
+
+#[derive(Debug, Deserialize)]
+struct XtreamVodInfoDetailsPayload {
+    movie_image: Option<String>,
+    backdrop_path: Option<serde_json::Value>,
+    plot: Option<String>,
+    genre: Option<String>,
+    cast: Option<String>,
+    director: Option<String>,
+    #[serde(alias = "releaseDate", alias = "releasedate")]
+    release_date: Option<String>,
+    rating: Option<serde_json::Value>,
+    duration_secs: Option<serde_json::Value>,
+    duration: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct XtreamSeriesInfoPayload {
+    #[serde(default)]
+    episodes: serde_json::Value,
+}
+
+#[derive(Debug, Deserialize)]
+struct XtreamEpisodePayload {
+    id: serde_json::Value,
+    episode_num: Option<serde_json::Value>,
+    title: Option<String>,
+    container_extension: Option<String>,
+    info: Option<XtreamEpisodeInfoPayload>,
+}
+
+#[derive(Debug, Deserialize)]
+struct XtreamEpisodeInfoPayload {
+    plot: Option<String>,
+    duration_secs: Option<serde_json::Value>,
+    movie_image: Option<String>,
 }
 
 const BROWSER_HLS_PROBE_TIMEOUT: Duration = Duration::from_secs(8);
@@ -119,6 +204,191 @@ pub async fn fetch_categories(
             name: category.category_name,
         })
         .collect())
+}
+
+pub async fn fetch_on_demand_categories(
+    client: &Client,
+    credentials: &XtreamCredentials,
+    media_type: &str,
+) -> Result<Vec<XtreamCategory>> {
+    let action = if media_type == "series" {
+        "get_series_categories"
+    } else {
+        "get_vod_categories"
+    };
+    let url = player_api_url(credentials, Some(("action", action)))?;
+    let payload = client
+        .get(url)
+        .send()
+        .await?
+        .error_for_status()?
+        .json::<serde_json::Value>()
+        .await?;
+    let items = json_collection_values(&payload)
+        .context("Xtream on-demand categories response was not a collection")?;
+    Ok(items
+        .into_iter()
+        .filter_map(|category| {
+            let remote_category_id = object_string(category, "category_id")?;
+            let name = object_string(category, "category_name")?;
+            Some(XtreamCategory {
+                remote_category_id,
+                name,
+            })
+        })
+        .collect())
+}
+
+pub async fn fetch_on_demand_titles(
+    client: &Client,
+    credentials: &XtreamCredentials,
+    media_type: &str,
+) -> Result<Vec<XtreamOnDemandTitle>> {
+    let action = if media_type == "series" {
+        "get_series"
+    } else {
+        "get_vod_streams"
+    };
+    let url = player_api_url(credentials, Some(("action", action)))?;
+    let payload = client
+        .get(url)
+        .send()
+        .await?
+        .error_for_status()?
+        .json::<serde_json::Value>()
+        .await?;
+    let items = json_collection_values(&payload)
+        .context("Xtream on-demand titles response was not a collection")?;
+    Ok(items
+        .into_iter()
+        .filter_map(|item| {
+            let remote_id = object_string(
+                item,
+                if media_type == "series" {
+                    "series_id"
+                } else {
+                    "stream_id"
+                },
+            )?;
+            let name = object_string(item, "name")?;
+            Some(XtreamOnDemandTitle {
+                remote_id,
+                name,
+                category_id: object_string(item, "category_id"),
+                poster_url: object_string(
+                    item,
+                    if media_type == "series" {
+                        "cover"
+                    } else {
+                        "stream_icon"
+                    },
+                ),
+                backdrop_url: item.get("backdrop_path").cloned().and_then(first_image_url),
+                plot: object_string(item, "plot"),
+                genre: object_string(item, "genre"),
+                cast_names: object_string(item, "cast"),
+                director: object_string(item, "director"),
+                release_date: object_string(item, "release_date")
+                    .or_else(|| object_string(item, "releaseDate"))
+                    .or_else(|| object_string(item, "releasedate")),
+                rating: value_to_f64(item.get("rating")),
+                duration_minutes: if media_type == "series" {
+                    item.get("episode_run_time").and_then(value_to_i32)
+                } else {
+                    value_to_i64(item.get("duration_secs")).map(|seconds| (seconds / 60) as i32)
+                },
+                container_extension: object_string(item, "container_extension"),
+                provider_updated_at: value_to_i64(item.get(if media_type == "series" {
+                    "last_modified"
+                } else {
+                    "added"
+                })),
+            })
+        })
+        .collect())
+}
+
+pub async fn fetch_vod_info(
+    client: &Client,
+    credentials: &XtreamCredentials,
+    vod_id: &str,
+) -> Result<XtreamVodDetails> {
+    let url = player_api_url_with_params(
+        credentials,
+        &[("action", "get_vod_info"), ("vod_id", vod_id)],
+    )?;
+    let payload = client
+        .get(url)
+        .send()
+        .await?
+        .error_for_status()?
+        .json::<XtreamVodInfoPayload>()
+        .await?;
+    let info = payload
+        .info
+        .context("Xtream VOD info response did not contain info")?;
+    Ok(XtreamVodDetails {
+        poster_url: clean_optional(info.movie_image),
+        backdrop_url: info.backdrop_path.and_then(first_image_url),
+        plot: clean_optional(info.plot),
+        genre: clean_optional(info.genre),
+        cast_names: clean_optional(info.cast),
+        director: clean_optional(info.director),
+        release_date: clean_optional(info.release_date),
+        rating: value_to_f64(info.rating.as_ref()),
+        duration_minutes: value_to_i64(info.duration_secs.as_ref())
+            .map(|seconds| (seconds / 60) as i32)
+            .or_else(|| info.duration.as_deref().and_then(parse_duration_minutes)),
+    })
+}
+
+pub async fn fetch_series_episodes(
+    client: &Client,
+    credentials: &XtreamCredentials,
+    series_id: &str,
+) -> Result<Vec<XtreamEpisode>> {
+    let url = player_api_url_with_params(
+        credentials,
+        &[("action", "get_series_info"), ("series_id", series_id)],
+    )?;
+    let payload = client
+        .get(url)
+        .send()
+        .await?
+        .error_for_status()?
+        .json::<XtreamSeriesInfoPayload>()
+        .await?;
+    let mut episodes = Vec::new();
+    let seasons = payload.episodes.as_object().cloned().unwrap_or_default();
+    for (season_key, items) in seasons {
+        let season_number = season_key.parse::<i32>().unwrap_or_default();
+        let items = serde_json::from_value::<Vec<XtreamEpisodePayload>>(items)
+            .with_context(|| format!("unable to decode Xtream season {season_key}"))?;
+        for (index, item) in items.into_iter().enumerate() {
+            let info = item.info;
+            episodes.push(XtreamEpisode {
+                remote_id: json_value_to_string(&item.id),
+                season_number,
+                episode_number: item
+                    .episode_num
+                    .as_ref()
+                    .and_then(value_to_i32)
+                    .unwrap_or(index as i32 + 1),
+                name: item
+                    .title
+                    .unwrap_or_else(|| format!("Episode {}", index + 1)),
+                plot: info.as_ref().and_then(|v| clean_optional(v.plot.clone())),
+                duration_minutes: info
+                    .as_ref()
+                    .and_then(|v| value_to_i64(v.duration_secs.as_ref()))
+                    .map(|seconds| (seconds / 60) as i32),
+                poster_url: info.and_then(|v| clean_optional(v.movie_image)),
+                container_extension: clean_optional(item.container_extension),
+            });
+        }
+    }
+    episodes.sort_by_key(|item| (item.season_number, item.episode_number));
+    Ok(episodes)
 }
 
 pub async fn fetch_live_streams(
@@ -205,6 +475,26 @@ pub fn build_live_stream_url(
     Ok(url.to_string())
 }
 
+pub fn build_on_demand_stream_url(
+    credentials: &XtreamCredentials,
+    media_type: &str,
+    stream_id: &str,
+    extension: Option<&str>,
+) -> Result<String> {
+    let mut url = normalized_base_url(&credentials.base_url)?;
+    let segment = if media_type == "series" {
+        "series"
+    } else {
+        "movie"
+    };
+    let ext = extension.filter(|value| !value.is_empty()).unwrap_or("mp4");
+    url.set_path(&format!(
+        "{}/{}/{}/{}.{}",
+        segment, credentials.username, credentials.password, stream_id, ext
+    ));
+    Ok(url.to_string())
+}
+
 pub fn build_catchup_url(
     credentials: &XtreamCredentials,
     stream_id: i32,
@@ -224,14 +514,22 @@ pub fn build_catchup_url(
 }
 
 fn player_api_url(credentials: &XtreamCredentials, action: Option<(&str, &str)>) -> Result<Url> {
+    let params = action.map(|pair| vec![pair]).unwrap_or_default();
+    player_api_url_with_params(credentials, &params)
+}
+
+fn player_api_url_with_params(
+    credentials: &XtreamCredentials,
+    params: &[(&str, &str)],
+) -> Result<Url> {
     let mut url = normalized_base_url(&credentials.base_url)?;
     url.set_path("player_api.php");
     {
         let mut query = HashMap::new();
         query.insert("username", credentials.username.clone());
         query.insert("password", credentials.password.clone());
-        if let Some((key, value)) = action {
-            query.insert(key, value.to_string());
+        for (key, value) in params {
+            query.insert(*key, (*value).to_string());
         }
         let mut pairs = url.query_pairs_mut();
         for (key, value) in query {
@@ -264,6 +562,70 @@ fn xtream_truthy(value: &serde_json::Value) -> bool {
         serde_json::Value::String(string) => matches!(string.as_str(), "1" | "true" | "True"),
         _ => false,
     }
+}
+
+fn parse_duration_minutes(value: &str) -> Option<i32> {
+    let parts = value
+        .split(':')
+        .map(|part| part.parse::<i32>().ok())
+        .collect::<Option<Vec<_>>>()?;
+    match parts.as_slice() {
+        [hours, minutes, _seconds] => Some(hours.saturating_mul(60).saturating_add(*minutes)),
+        [minutes, _seconds] => Some(*minutes),
+        _ => None,
+    }
+}
+
+fn first_image_url(value: serde_json::Value) -> Option<String> {
+    match value {
+        serde_json::Value::Array(values) => values
+            .into_iter()
+            .find_map(|value| value.as_str().map(str::to_string))
+            .filter(|value| !value.is_empty()),
+        serde_json::Value::String(value) if !value.is_empty() => Some(value),
+        _ => None,
+    }
+}
+
+fn json_collection_values(value: &serde_json::Value) -> Option<Vec<&serde_json::Value>> {
+    if let Some(items) = value.as_array() {
+        Some(items.iter().collect())
+    } else {
+        value.as_object().map(|items| items.values().collect())
+    }
+}
+
+fn object_string(value: &serde_json::Value, key: &str) -> Option<String> {
+    value
+        .get(key)
+        .map(json_value_to_string)
+        .filter(|value| !value.trim().is_empty() && value != "null")
+}
+
+fn clean_optional(value: Option<String>) -> Option<String> {
+    value
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn value_to_i64(value: Option<&serde_json::Value>) -> Option<i64> {
+    value.and_then(|value| match value {
+        serde_json::Value::Number(number) => number.as_i64(),
+        serde_json::Value::String(string) => string.parse().ok(),
+        _ => None,
+    })
+}
+
+fn value_to_i32(value: &serde_json::Value) -> Option<i32> {
+    value_to_i64(Some(value)).and_then(|value| i32::try_from(value).ok())
+}
+
+fn value_to_f64(value: Option<&serde_json::Value>) -> Option<f64> {
+    value.and_then(|value| match value {
+        serde_json::Value::Number(number) => number.as_f64(),
+        serde_json::Value::String(string) => string.parse().ok(),
+        _ => None,
+    })
 }
 
 fn json_value_to_string(value: &serde_json::Value) -> String {
@@ -302,6 +664,48 @@ mod tests {
         .expect("catchup url");
 
         assert!(url.contains("timeshift/user/pass/60/2026-04-04:12-00/7.m3u8"));
+    }
+
+    #[test]
+    fn builds_on_demand_urls() {
+        let credentials = XtreamCredentials {
+            base_url: "https://iptv.example.com".to_string(),
+            username: "user".to_string(),
+            password: "pass".to_string(),
+            output_format: "m3u8".to_string(),
+        };
+
+        assert!(
+            build_on_demand_stream_url(&credentials, "movie", "42", Some("mp4"))
+                .expect("movie url")
+                .contains("movie/user/pass/42.mp4")
+        );
+        assert!(
+            build_on_demand_stream_url(&credentials, "series", "84", Some("mkv"))
+                .expect("episode url")
+                .contains("series/user/pass/84.mkv")
+        );
+    }
+
+    #[test]
+    fn decodes_series_payload_with_string_ids() {
+        let payload: serde_json::Value = serde_json::from_str(r#"{
+          "series_id":"12","name":"Example","category_id":7,"rating":"8.5",
+          "last_modified":"1710000000","episode_run_time":"45","backdrop_path":["https://img/back.jpg"]
+        }"#).expect("series payload");
+        assert_eq!(object_string(&payload, "series_id").as_deref(), Some("12"));
+        assert_eq!(value_to_f64(payload.get("rating")), Some(8.5));
+        assert_eq!(
+            payload.get("episode_run_time").and_then(value_to_i32),
+            Some(45)
+        );
+    }
+
+    #[test]
+    fn parses_provider_durations() {
+        assert_eq!(parse_duration_minutes("01:42:30"), Some(102));
+        assert_eq!(parse_duration_minutes("42:30"), Some(42));
+        assert_eq!(parse_duration_minutes("unknown"), None);
     }
 
     #[test]

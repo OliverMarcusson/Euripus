@@ -3,7 +3,9 @@ import { create } from "zustand";
 
 export type PlaybackRequest =
   | { kind: "channel"; id: string }
-  | { kind: "program"; id: string };
+  | { kind: "program"; id: string }
+  | { kind: "onDemand"; id: string }
+  | { kind: "episode"; id: string };
 
 type PlayerState = {
   currentRequest: PlaybackRequest | null;

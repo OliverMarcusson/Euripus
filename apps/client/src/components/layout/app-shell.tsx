@@ -5,6 +5,7 @@ import {
   ChevronDown,
   Clapperboard,
   Heart,
+  Film,
   LogOut,
   MonitorUp,
   Search,
@@ -45,6 +46,7 @@ import { useRemoteControllerStore } from "@/store/remote-controller-store";
 
 const navigation = [
   { to: "/guide", label: "Guide", icon: TvMinimal },
+  { to: "/on-demand", label: "On Demand", icon: Film },
   { to: "/sports", label: "Sports", icon: Trophy },
   { to: "/search", label: "Search", icon: Search },
   { to: "/favorites", label: "Favorites", icon: Heart },
@@ -375,7 +377,7 @@ export function AppShell() {
         </aside>
       </div>
 
-      <nav className="z-30 flex h-16 shrink-0 items-center justify-around border-t border-border/40 bg-sidebar pb-[env(safe-area-inset-bottom)] md:hidden">
+      <nav className="z-30 flex h-16 shrink-0 items-center overflow-x-auto border-t border-border/40 bg-sidebar pb-[env(safe-area-inset-bottom)] md:hidden">
         {navigation.map((item) => {
           const Icon = item.icon;
           const active = pathname === item.to;
@@ -384,7 +386,7 @@ export function AppShell() {
               key={item.to}
               to={item.to}
               className={cn(
-                "relative flex h-full w-full flex-col items-center justify-center gap-[3px] transition-colors",
+                "relative flex h-full min-w-20 flex-1 flex-col items-center justify-center gap-[3px] transition-colors",
                 active
                   ? "text-primary"
                   : "text-muted-foreground/60 hover:text-foreground",

@@ -354,6 +354,60 @@ async fn run_sync_job(
         (None, None)
     };
 
+    if job_type == "full" {
+        update_sync_job_phase(
+            &state.pool,
+            job_id,
+            "fetching-on-demand",
+            3,
+            &job_type,
+            "Fetching on-demand catalog",
+        )
+        .await?;
+        let client = &state.provider_http_client;
+        let provider_credentials = &credentials;
+        let movie_future = async {
+            let (categories, titles) = tokio::join!(
+                xtreme::fetch_on_demand_categories(client, provider_credentials, "movie"),
+                xtreme::fetch_on_demand_titles(client, provider_credentials, "movie")
+            );
+            ("movie", categories, titles)
+        };
+        let series_future = async {
+            let (categories, titles) = tokio::join!(
+                xtreme::fetch_on_demand_categories(client, provider_credentials, "series"),
+                xtreme::fetch_on_demand_titles(client, provider_credentials, "series")
+            );
+            ("series", categories, titles)
+        };
+        let (movie_result, series_result) = tokio::join!(movie_future, series_future);
+        for (media_type, categories, titles) in [movie_result, series_result] {
+            match (categories, titles) {
+                (Ok(categories), Ok(titles)) => {
+                    on_demand::persist_catalog(
+                        &state.pool,
+                        user_id,
+                        profile_id,
+                        media_type,
+                        &categories,
+                        &titles,
+                    )
+                    .await?;
+                    info!(job_id = %job_id, media_type, title_count = titles.len(), "persisted on-demand catalog");
+                }
+                (category_result, title_result) => {
+                    warn!(
+                        job_id = %job_id,
+                        media_type,
+                        category_error = ?category_result.err(),
+                        title_error = ?title_result.err(),
+                        "provider on-demand catalog is unavailable; preserving previous catalog"
+                    );
+                }
+            }
+        }
+    }
+
     let search_refresh_scope = if sync_epg {
         let epg_sources = sqlx::query_as::<_, EpgSourceRecord>(
             r#"
@@ -367,7 +421,13 @@ async fn run_sync_job(
         .bind(profile_id)
         .fetch_all(&state.pool)
         .await?;
-        let epg_fetch_completed_phases = if refresh_channels { 3 } else { 1 };
+        let epg_fetch_completed_phases = if job_type == "full" {
+            4
+        } else if refresh_channels {
+            3
+        } else {
+            1
+        };
         update_sync_job_phase(
             &state.pool,
             job_id,
@@ -387,7 +447,13 @@ async fn run_sync_job(
             "fetched EPG feeds"
         );
 
-        let epg_match_completed_phases = if refresh_channels { 4 } else { 2 };
+        let epg_match_completed_phases = if job_type == "full" {
+            5
+        } else if refresh_channels {
+            4
+        } else {
+            2
+        };
         update_sync_job_phase(
             &state.pool,
             job_id,
@@ -515,7 +581,6 @@ fn spawn_search_refresh(
             return;
         }
 
-        let mut rebuild_postgres_fallback = state.meili.is_none();
         if let Some(meili) = &state.meili {
             info!("sync job {job_id}: refreshing Meilisearch indexes in background");
             let meili_refresh = match &scope {
@@ -566,7 +631,6 @@ fn spawn_search_refresh(
             match user_readiness {
                 Ok(MeiliReadiness::Ready) => {
                     state.meili_bootstrapping_users.remove(&user_id);
-                    rebuild_postgres_fallback = false;
                     if let Err(error) = search::indexing::refresh_meili_readiness(&state).await {
                         warn!(
                             "sync job {job_id}: failed to refresh Meilisearch readiness: {error:?}"
@@ -576,7 +640,6 @@ fn spawn_search_refresh(
                     }
                 }
                 Ok(MeiliReadiness::Bootstrapping) => {
-                    rebuild_postgres_fallback = true;
                     warn!(
                         "sync job {job_id}: Meilisearch rebuild finished but the user index is still incomplete"
                     );
@@ -586,11 +649,8 @@ fn spawn_search_refresh(
                         );
                     }
                 }
-                Ok(MeiliReadiness::Disabled) => {
-                    rebuild_postgres_fallback = true;
-                }
+                Ok(MeiliReadiness::Disabled) => {}
                 Err(error) => {
-                    rebuild_postgres_fallback = true;
                     warn!(
                         "sync job {job_id}: failed to inspect Meilisearch readiness for user after refresh: {error:?}"
                     );
@@ -605,22 +665,15 @@ fn spawn_search_refresh(
             info!("sync job {job_id}: Meilisearch is disabled; skipping Meilisearch refresh");
         }
 
-        if rebuild_postgres_fallback {
-            info!(
-                "sync job {job_id}: rebuilding PostgreSQL fallback search documents in background"
-            );
-            if let Err(error) =
-                search::indexing::rebuild_postgres_search_documents(&state, user_id).await
-            {
-                warn!(
-                    "sync job {job_id}: failed to rebuild PostgreSQL search documents: {error:?}"
-                );
-                return;
-            }
-        } else {
-            info!(
-                "sync job {job_id}: skipping PostgreSQL fallback search rebuild because Meilisearch is healthy"
-            );
+        // Keep the fallback current even while Meilisearch is healthy. Readiness can change
+        // between requests, and serving stale documents after a Meilisearch error makes a
+        // backend outage look like missing search results.
+        info!("sync job {job_id}: rebuilding PostgreSQL fallback search documents in background");
+        if let Err(error) =
+            search::indexing::rebuild_postgres_search_documents(&state, user_id).await
+        {
+            warn!("sync job {job_id}: failed to rebuild PostgreSQL search documents: {error:?}");
+            return;
         }
 
         if state.meili.is_some()

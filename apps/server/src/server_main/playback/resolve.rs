@@ -31,6 +31,7 @@ pub(in crate::server_main) enum PlaybackTarget {
 pub(in crate::server_main) enum PlaybackStreamFormat {
     Hls,
     Ts,
+    Progressive,
 }
 
 #[derive(Debug, FromRow)]
@@ -92,6 +93,7 @@ pub(in crate::server_main) fn output_format_as_str(format: PlaybackStreamFormat)
     match format {
         PlaybackStreamFormat::Hls => "m3u8",
         PlaybackStreamFormat::Ts => "ts",
+        PlaybackStreamFormat::Progressive => "mp4",
     }
 }
 
@@ -231,6 +233,7 @@ pub(in crate::server_main) fn playback_kind_for_format(
     match format {
         PlaybackStreamFormat::Hls => "hls",
         PlaybackStreamFormat::Ts => "mpegts",
+        PlaybackStreamFormat::Progressive => "progressive",
     }
 }
 
@@ -240,6 +243,7 @@ pub(in crate::server_main) fn relay_asset_kind_for_format(
     match format {
         PlaybackStreamFormat::Hls => RelayAssetKind::Hls,
         PlaybackStreamFormat::Ts => RelayAssetKind::Raw,
+        PlaybackStreamFormat::Progressive => RelayAssetKind::Raw,
     }
 }
 
