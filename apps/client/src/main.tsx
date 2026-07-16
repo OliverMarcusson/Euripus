@@ -10,8 +10,8 @@ import { useThemeSync } from "@/hooks/use-theme-sync";
 import { registerPwaServiceWorker } from "@/lib/pwa";
 import { QUERY_CACHE_GC_TIME_MS } from "@/lib/query-cache";
 import { useThemeStore } from "@/store/theme-store";
-import "./index.css";
 import "plyr/dist/plyr.css";
+import "./index.css";
 
 const queryClient = new QueryClient({
   defaultOptions: {
