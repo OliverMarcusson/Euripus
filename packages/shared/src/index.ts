@@ -207,6 +207,51 @@ export type Channel = {
   isPpvFavorite?: boolean;
 };
 
+export type OnDemandMediaType = "movie" | "series";
+
+export type OnDemandCategory = {
+  id: string;
+  mediaType: OnDemandMediaType;
+  name: string;
+  titleCount: number;
+};
+
+export type OnDemandTitle = {
+  id: string;
+  mediaType: OnDemandMediaType;
+  name: string;
+  categoryId: string | null;
+  categoryName: string | null;
+  posterUrl: string | null;
+  backdropUrl: string | null;
+  plot: string | null;
+  genre: string | null;
+  castNames: string | null;
+  director: string | null;
+  releaseDate: string | null;
+  rating: number | null;
+  durationMinutes: number | null;
+  containerExtension: string | null;
+};
+
+export type OnDemandEpisode = {
+  id: string;
+  seriesId: string;
+  seasonNumber: number;
+  episodeNumber: number;
+  name: string;
+  plot: string | null;
+  durationMinutes: number | null;
+  posterUrl: string | null;
+  containerExtension: string | null;
+};
+
+export type OnDemandPage = {
+  items: OnDemandTitle[];
+  totalCount: number;
+  nextOffset: number | null;
+};
+
 export type Program = {
   id: string;
   channelId: string | null;
@@ -371,7 +416,7 @@ export type RecentChannel = {
 };
 
 export type PlaybackSource = {
-  kind: "hls" | "mpegts" | "unsupported";
+  kind: "hls" | "mpegts" | "progressive" | "unsupported";
   url: string;
   headers: Record<string, string>;
   live: boolean;

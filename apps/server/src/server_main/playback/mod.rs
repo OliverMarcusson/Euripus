@@ -25,10 +25,26 @@ struct ChannelPlaybackRecord {
     playback_mode: String,
 }
 
+#[derive(Debug, FromRow)]
+struct OnDemandPlaybackRecord {
+    profile_id: Uuid,
+    name: String,
+    media_type: String,
+    remote_id: String,
+    container_extension: Option<String>,
+    base_url: String,
+    provider_username: String,
+    password_encrypted: String,
+    output_format: String,
+    playback_mode: String,
+}
+
 pub(super) fn shared_router() -> Router<AppState> {
     Router::new()
         .route("/playback/channel/{id}", post(play_channel))
         .route("/playback/program/{id}", post(play_program))
+        .route("/playback/on-demand/{id}", post(play_on_demand))
+        .route("/playback/episode/{id}", post(play_episode))
 }
 
 async fn play_channel(
@@ -51,6 +67,129 @@ async fn play_program(
     Ok(Json(
         resolve_program_playback_source(&state, &headers, auth.user_id, id).await?,
     ))
+}
+
+async fn play_on_demand(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+) -> ApiResult<PlaybackSourceResponse> {
+    let auth = require_auth(&state, &headers).await?;
+    Ok(Json(
+        resolve_on_demand_playback_source_for_target(
+            &state,
+            &headers,
+            None,
+            auth.user_id,
+            id,
+            false,
+            PlaybackTarget::Browser,
+        )
+        .await?,
+    ))
+}
+
+async fn play_episode(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+) -> ApiResult<PlaybackSourceResponse> {
+    let auth = require_auth(&state, &headers).await?;
+    Ok(Json(
+        resolve_on_demand_playback_source_for_target(
+            &state,
+            &headers,
+            None,
+            auth.user_id,
+            id,
+            true,
+            PlaybackTarget::Browser,
+        )
+        .await?,
+    ))
+}
+
+pub(in crate::server_main) async fn resolve_on_demand_playback_source_for_receiver(
+    state: &AppState,
+    headers: &HeaderMap,
+    user_id: Uuid,
+    id: Uuid,
+    episode: bool,
+    receiver_app_kind: &str,
+    receiver_public_origin: Option<&str>,
+) -> Result<PlaybackSourceResponse, AppError> {
+    resolve_on_demand_playback_source_for_target(
+        state,
+        headers,
+        receiver_public_origin,
+        user_id,
+        id,
+        episode,
+        playback_target_for_receiver_app(receiver_app_kind),
+    )
+    .await
+}
+
+async fn resolve_on_demand_playback_source_for_target(
+    state: &AppState,
+    headers: &HeaderMap,
+    target_public_origin: Option<&str>,
+    user_id: Uuid,
+    id: Uuid,
+    episode: bool,
+    target: PlaybackTarget,
+) -> Result<PlaybackSourceResponse, AppError> {
+    let query = if episode {
+        r#"SELECT e.profile_id, e.name, 'series'::text AS media_type, e.remote_id, e.container_extension,
+          p.base_url, p.username AS provider_username, p.password_encrypted, p.output_format, p.playback_mode
+          FROM on_demand_episodes e JOIN provider_profiles p ON p.id=e.profile_id WHERE e.user_id=$1 AND e.id=$2"#
+    } else {
+        r#"SELECT t.profile_id, t.name, t.media_type, t.remote_id, t.container_extension,
+          p.base_url, p.username AS provider_username, p.password_encrypted, p.output_format, p.playback_mode
+          FROM on_demand_titles t JOIN provider_profiles p ON p.id=t.profile_id
+          WHERE t.user_id=$1 AND t.id=$2 AND t.media_type='movie'"#
+    };
+    let row = sqlx::query_as::<_, OnDemandPlaybackRecord>(query)
+        .bind(user_id)
+        .bind(id)
+        .fetch_optional(&state.pool)
+        .await?
+        .ok_or_else(|| AppError::NotFound("On-demand item not found".to_string()))?;
+    let extension = row
+        .container_extension
+        .as_deref()
+        .unwrap_or("mp4")
+        .trim_start_matches('.')
+        .to_ascii_lowercase();
+    let credentials = XtreamCredentials {
+        base_url: row.base_url,
+        username: row.provider_username,
+        password: decrypt_secret(&state.config.encryption_key, &row.password_encrypted)?,
+        output_format: row.output_format,
+    };
+    let url = xtreme::build_on_demand_stream_url(
+        &credentials,
+        &row.media_type,
+        &row.remote_id,
+        Some(&extension),
+    )?;
+    finalize_playback_source(
+        state,
+        headers,
+        target_public_origin,
+        user_id,
+        row.profile_id,
+        target,
+        &row.playback_mode,
+        &row.name,
+        url,
+        false,
+        false,
+        PlaybackStreamFormat::Progressive,
+        None,
+        false,
+    )
+    .await
 }
 
 async fn resolve_channel_playback_source(
@@ -365,7 +504,7 @@ fn target_requires_browser_hls_preflight(
         )
 }
 
-async fn finalize_playback_source(
+pub(super) async fn finalize_playback_source(
     state: &AppState,
     headers: &HeaderMap,
     target_public_origin: Option<&str>,

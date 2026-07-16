@@ -20,6 +20,8 @@ import {
 } from "@/components/ui/empty";
 import {
   startChannelPlayback,
+  startEpisodePlayback,
+  startOnDemandPlayback,
   startProgramPlayback,
   pauseRemotePlayback,
   resumeRemotePlayback,
@@ -150,10 +152,13 @@ export function PlayerView() {
           attempt,
         });
         try {
-          const nextSource =
-            currentRequest.kind === "channel"
-              ? await startChannelPlayback(currentRequest.id)
-              : await startProgramPlayback(currentRequest.id);
+          const nextSource = currentRequest.kind === "channel"
+            ? await startChannelPlayback(currentRequest.id)
+            : currentRequest.kind === "program"
+              ? await startProgramPlayback(currentRequest.id)
+              : currentRequest.kind === "episode"
+                ? await startEpisodePlayback(currentRequest.id)
+                : await startOnDemandPlayback(currentRequest.id);
           if (generation !== recoveryGenerationRef.current) {
             return;
           }

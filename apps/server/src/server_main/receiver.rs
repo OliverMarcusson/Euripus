@@ -1,6 +1,7 @@
 use super::playback::resolve::PlaybackSourceResponse;
 use super::playback::{
-    resolve_channel_playback_source_for_receiver, resolve_program_playback_source_for_receiver,
+    resolve_channel_playback_source_for_receiver, resolve_on_demand_playback_source_for_receiver,
+    resolve_program_playback_source_for_receiver,
 };
 use super::*;
 
@@ -42,6 +43,8 @@ pub(super) fn shared_router() -> Router<AppState> {
         )
         .route("/remote/play/channel/{id}", post(play_channel_remotely))
         .route("/remote/play/program/{id}", post(play_program_remotely))
+        .route("/remote/play/on-demand/{id}", post(play_on_demand_remotely))
+        .route("/remote/play/episode/{id}", post(play_episode_remotely))
         .route("/remote/command/pause", post(pause_remote_playback))
         .route("/remote/command/play", post(resume_remote_playback))
         .route("/remote/command/seek", post(seek_remote_playback))
@@ -1036,6 +1039,45 @@ async fn play_program_remotely(
     )
     .await?;
 
+    Ok(Json(
+        deliver_remote_playback_command(&state, &auth, &target, source).await?,
+    ))
+}
+
+async fn play_on_demand_remotely(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+) -> ApiResult<RemotePlaybackCommandResponse> {
+    play_on_demand_item_remotely(state, headers, id, false).await
+}
+
+async fn play_episode_remotely(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+) -> ApiResult<RemotePlaybackCommandResponse> {
+    play_on_demand_item_remotely(state, headers, id, true).await
+}
+
+async fn play_on_demand_item_remotely(
+    state: AppState,
+    headers: HeaderMap,
+    id: Uuid,
+    episode: bool,
+) -> ApiResult<RemotePlaybackCommandResponse> {
+    let auth = require_auth(&state, &headers).await?;
+    let target = current_remote_target_for_control(&state, &auth).await?;
+    let source = resolve_on_demand_playback_source_for_receiver(
+        &state,
+        &headers,
+        auth.user_id,
+        id,
+        episode,
+        &target.app_kind,
+        target.last_public_origin.as_deref(),
+    )
+    .await?;
     Ok(Json(
         deliver_remote_playback_command(&state, &auth, &target, source).await?,
     ))

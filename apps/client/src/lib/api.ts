@@ -22,6 +22,11 @@ import type {
   GuideCategoryResponse,
   GuideResponse,
   LoginPayload,
+  OnDemandCategory,
+  OnDemandEpisode,
+  OnDemandMediaType,
+  OnDemandPage,
+  OnDemandTitle,
   PlaybackSource,
   Program,
   ProgramSearchResults,
@@ -432,6 +437,27 @@ export function getSyncStatus(providerId: string) {
   return request<SyncJob | null>(`/providers/${providerId}/sync-status`);
 }
 
+export function getOnDemandCategories(mediaType: OnDemandMediaType) {
+  return request<OnDemandCategory[]>(`/on-demand/categories?type=${mediaType}`);
+}
+
+export function getOnDemandTitles(mediaType: OnDemandMediaType, options: { categoryId?: string; query?: string; offset?: number; limit?: number } = {}) {
+  const params = new URLSearchParams({ type: mediaType });
+  if (options.categoryId) params.set("categoryId", options.categoryId);
+  if (options.query) params.set("query", options.query);
+  if (options.offset != null) params.set("offset", String(options.offset));
+  if (options.limit != null) params.set("limit", String(options.limit));
+  return request<OnDemandPage>(`/on-demand/titles?${params.toString()}`);
+}
+
+export function getOnDemandTitle(id: string) {
+  return request<OnDemandTitle>(`/on-demand/titles/${id}`);
+}
+
+export function getSeriesEpisodes(id: string) {
+  return request<OnDemandEpisode[]>(`/on-demand/series/${id}/episodes`);
+}
+
 export function getChannels() {
   return request<Channel[]>("/channels");
 }
@@ -581,6 +607,14 @@ export function getRecents() {
   return request<RecentChannel[]>("/recents");
 }
 
+export function startOnDemandPlayback(id: string) {
+  return request<PlaybackSource>(`/playback/on-demand/${id}`, { method: "POST" });
+}
+
+export function startEpisodePlayback(id: string) {
+  return request<PlaybackSource>(`/playback/episode/${id}`, { method: "POST" });
+}
+
 export function startChannelPlayback(channelId: string) {
   return request<PlaybackSource>(`/playback/channel/${channelId}`, {
     method: "POST",
@@ -625,6 +659,14 @@ export function clearRemoteControllerTarget() {
   return request<void>("/remote/controller/target", {
     method: "DELETE",
   });
+}
+
+export function startRemoteOnDemandPlayback(id: string) {
+  return request<RemotePlaybackCommand>(`/remote/play/on-demand/${id}`, { method: "POST" });
+}
+
+export function startRemoteEpisodePlayback(id: string) {
+  return request<RemotePlaybackCommand>(`/remote/play/episode/${id}`, { method: "POST" });
 }
 
 export function startRemoteChannelPlayback(channelId: string) {

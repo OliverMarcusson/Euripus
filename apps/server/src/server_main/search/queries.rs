@@ -179,6 +179,7 @@ pub(in crate::server_main) async fn search_channels_postgres(
                 AND (
                   sd.tsv @@ plainto_tsquery('simple', $2)
                   OR sd.search_text % $2
+                  OR sd.search_text ILIKE ('%' || $2 || '%')
                 )
                 AND ($6::text[] IS NULL OR lower(c.search_country_code) = ANY($6))
                 AND ($7::text[] IS NULL OR lower(c.search_provider_name) = ANY($7))
@@ -423,6 +424,7 @@ pub(in crate::server_main) async fn search_programs_postgres(
                 AND (
                   sd.tsv @@ plainto_tsquery('simple', $2)
                   OR sd.search_text % $2
+                  OR sd.search_text ILIKE ('%' || $2 || '%')
                 )
                 AND (
                   $6::text[] IS NULL

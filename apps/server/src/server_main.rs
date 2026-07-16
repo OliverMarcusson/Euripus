@@ -69,6 +69,7 @@ mod app;
 mod auth;
 mod error;
 mod guide;
+mod on_demand;
 mod playback;
 mod provider;
 mod receiver;
@@ -443,7 +444,7 @@ enum RelayAssetKind {
 const SYNC_BATCH_SIZE: usize = 10_000;
 const EPG_FETCH_CONCURRENCY: usize = 4;
 const CHANNEL_SYNC_TOTAL_PHASES: i32 = 4;
-const FULL_SYNC_TOTAL_PHASES: i32 = 7;
+const FULL_SYNC_TOTAL_PHASES: i32 = 8;
 const EPG_SYNC_TOTAL_PHASES: i32 = 4;
 const SEARCH_DEFAULT_LIMIT: i64 = 30;
 const SEARCH_MAX_LIMIT: i64 = 100;

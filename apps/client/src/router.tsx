@@ -6,6 +6,7 @@ import { AuthPage } from "@/features/auth/auth-page";
 import { FavoritesPage } from "@/features/channels/favorites-page";
 import { GuidePage } from "@/features/channels/guide-page";
 import { PpvFavoritesPage } from "@/features/channels/ppv-favorites-page";
+import { OnDemandPage } from "@/features/on-demand/on-demand-page";
 import { SearchPage } from "@/features/search/search-page";
 import { SportsPage } from "@/features/sports/sports-page";
 import { SettingsPage } from "@/features/auth/settings-page";
@@ -91,6 +92,12 @@ const guideRoute = createRoute({
   component: GuidePage,
 });
 
+const onDemandRoute = createRoute({
+  getParentRoute: () => authenticatedRoute,
+  path: "/on-demand",
+  component: OnDemandPage,
+});
+
 const searchRoute = createRoute({
   getParentRoute: () => authenticatedRoute,
   path: "/search",
@@ -134,6 +141,7 @@ const routeTree = rootRoute.addChildren([
   receiverRoute,
   authenticatedRoute.addChildren([
     guideRoute,
+    onDemandRoute,
     sportsRoute,
     searchRoute,
     favoritesRoute,
