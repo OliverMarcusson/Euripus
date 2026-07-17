@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link, Outlet, useRouterState } from "@tanstack/react-router";
+import { toast } from "sonner";
 import {
   ChevronDown,
+  Cast,
   Clapperboard,
   Heart,
   Film,
@@ -38,6 +40,12 @@ import {
   useRemoteControllerTargetQuery,
   useRemoteReceiversQuery,
 } from "@/hooks/use-remote-control-state";
+import { castPlaybackRequest } from "@/lib/cast-playback";
+import {
+  endGoogleCastSession,
+  requestGoogleCastSession,
+  useGoogleCastStore,
+} from "@/lib/google-cast";
 import { formatReceiverPlaybackSummary } from "@/lib/receiver-playback";
 import { cn } from "@/lib/utils";
 import { useAuthStore } from "@/store/auth-store";
@@ -65,11 +73,15 @@ function RemoteTargetMenu({
   const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
   const remoteTarget = useRemoteControllerStore((state) => state.target);
+  const castAvailable = useGoogleCastStore((state) => state.available);
+  const castConnected = useGoogleCastStore((state) => state.connected);
+  const castDeviceName = useGoogleCastStore((state) => state.deviceName);
   const setTargetSelection = useRemoteControllerStore(
     (state) => state.setTargetSelection,
   );
   const clearTarget = useRemoteControllerStore((state) => state.clearTarget);
   const setPlayerSource = usePlayerStore((state) => state.setSource);
+  const currentPlaybackRequest = usePlayerStore((state) => state.currentRequest);
   const shouldPollTarget = userAuthenticated && (open || !!remoteTarget);
   const targetQuery = useRemoteControllerTargetQuery({
     enabled: userAuthenticated,
@@ -80,7 +92,12 @@ function RemoteTargetMenu({
     refetchInterval: open ? 5_000 : false,
   });
   const selectTargetMutation = useMutation({
-    mutationFn: selectRemoteControllerTarget,
+    mutationFn: async (deviceId: string) => {
+      if (castConnected) {
+        endGoogleCastSession();
+      }
+      return selectRemoteControllerTarget(deviceId);
+    },
     onSuccess: async (selection) => {
       setTargetSelection(selection);
       setPlayerSource(null);
@@ -99,18 +116,41 @@ function RemoteTargetMenu({
       setOpen(false);
     },
   });
+  const connectCastMutation = useMutation({
+    mutationFn: async () => {
+      await requestGoogleCastSession();
+      if (remoteTarget) {
+        await clearRemoteControllerTarget();
+      }
+      clearTarget();
+      queryClient.setQueryData(["remote", "controller", "target"], null);
+      if (currentPlaybackRequest) {
+        await castPlaybackRequest(currentPlaybackRequest);
+      }
+    },
+    onSuccess: () => {
+      setPlayerSource(null);
+      setOpen(false);
+    },
+    onError: (error) => {
+      toast.error(error instanceof Error ? error.message : "Could not start casting.");
+    },
+  });
   const remoteDevices = devicesQuery.data ?? [];
   const resolvedTarget = resolveRemoteTargetDevice(
     remoteTarget,
     targetQuery.data?.device,
   );
-  const buttonLabel = resolvedTarget?.name ?? remoteTarget?.name ?? "This device";
+  const buttonLabel = castConnected
+    ? castDeviceName ?? "Google Cast"
+    : resolvedTarget?.name ?? remoteTarget?.name ?? "This device";
+  const targetActive = castConnected || !!remoteTarget;
 
   return (
     <DropdownMenu open={open} onOpenChange={setOpen}>
       <DropdownMenuTrigger asChild>
         <Button
-          variant={remoteTarget ? "default" : "outline"}
+          variant={targetActive ? "default" : "outline"}
           size={compact ? "sm" : "default"}
           className={cn("shrink-0", compact ? "h-9 px-3" : "justify-start")}
         >
@@ -119,13 +159,34 @@ function RemoteTargetMenu({
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-72">
-        <DropdownMenuLabel>Receiver</DropdownMenuLabel>
+        <DropdownMenuLabel>Playback device</DropdownMenuLabel>
         <DropdownMenuSeparator />
         <DropdownMenuItem
-          onClick={() => clearTargetMutation.mutate()}
-          disabled={!remoteTarget || clearTargetMutation.isPending}
+          onClick={() => {
+            if (castConnected) {
+              endGoogleCastSession();
+              setPlayerSource(null);
+              setOpen(false);
+            } else {
+              clearTargetMutation.mutate();
+            }
+          }}
+          disabled={!targetActive || clearTargetMutation.isPending}
         >
           Play on this device
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          onClick={() => connectCastMutation.mutate()}
+          disabled={
+            castConnected || !castAvailable || connectCastMutation.isPending
+          }
+        >
+          <Cast data-icon="inline-start" />
+          {connectCastMutation.isPending
+            ? "Connecting..."
+            : castAvailable
+              ? "Google Cast..."
+              : "No Cast devices found"}
         </DropdownMenuItem>
         <DropdownMenuSeparator />
         {remoteDevices.length ? (
@@ -159,6 +220,8 @@ function RemoteTargetMenu({
 
 function RemoteTargetStatusBanner() {
   const remoteTarget = useRemoteControllerStore((state) => state.target);
+  const castConnected = useGoogleCastStore((state) => state.connected);
+  const castDeviceName = useGoogleCastStore((state) => state.deviceName);
   const targetQuery = useRemoteControllerTargetQuery({
     enabled: !!remoteTarget,
     refetchInterval: remoteTarget ? 5_000 : false,
@@ -168,17 +231,25 @@ function RemoteTargetStatusBanner() {
     targetQuery.data?.device,
   );
 
-  if (!remoteTarget) {
+  if (!remoteTarget && !castConnected) {
     return null;
   }
 
   return (
     <div className="shrink-0 border-b border-border/40 bg-primary/5 px-4 py-2 text-sm text-foreground/80 md:px-8">
       <div className="mx-auto w-full max-w-[1240px] text-center">
-        Controlling <span className="font-semibold">{remoteTarget.name}</span>
-        {resolvedTarget?.currentPlayback
-          ? ` - ${formatReceiverPlaybackSummary(resolvedTarget)}`
-          : ""}
+        {castConnected ? (
+          <>
+            Casting to <span className="font-semibold">{castDeviceName ?? "Google Cast"}</span>
+          </>
+        ) : (
+          <>
+            Controlling <span className="font-semibold">{remoteTarget?.name}</span>
+            {resolvedTarget?.currentPlayback
+              ? ` - ${formatReceiverPlaybackSummary(resolvedTarget)}`
+              : ""}
+          </>
+        )}
       </div>
     </div>
   );
@@ -204,6 +275,7 @@ export function AppShell() {
   useEffect(() => {
     if (!user) {
       clearTarget();
+      endGoogleCastSession();
     }
   }, [clearTarget, user]);
 

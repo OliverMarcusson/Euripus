@@ -1,6 +1,6 @@
 # Euripus
 
-Euripus is a self-hostable IPTV application with a Rust API, a React web client, and a planned native Android TV receiver. It is now a full web deployment with the receiver path kept separate from the browser app.
+Euripus is a self-hostable IPTV application with a Rust API, a React web client, a native Android TV receiver, and Google Cast support. It is a full web deployment with the receiver path kept separate from the browser app.
 
 ## Workspace
 
@@ -61,7 +61,13 @@ cp apps/server/.env.mullvad.example apps/server/.env.mullvad
 EURIPUS_ENABLE_MULLVAD=true bun run prod:start
 ```
 
-That only affects server-originated traffic such as provider validation, sync jobs, and EPG fetches. Browser playback still goes directly from the client device to the IPTV provider.
+That only affects server-originated traffic such as provider validation, sync jobs, and EPG fetches. Browser playback may go directly from the client device to the IPTV provider, depending on the provider playback mode and mixed-content requirements.
+
+## Google Cast
+
+The web client can cast live channels, catch-up programs, movies, and episodes to Chromecast and Google TV devices through the default Google Cast receiver. Cast media URLs are always signed Euripus relay URLs, even when the provider is configured for direct playback, so provider credentials are not sent to the Cast device.
+
+Casting requires a supported Chromium browser, a Cast device on the sender's local network, and an Euripus public origin that the Cast device can reach. For self-hosted production deployments, configure `APP_PUBLIC_ORIGIN` with the externally reachable HTTPS origin.
 
 ## Operational Docs
 
