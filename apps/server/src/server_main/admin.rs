@@ -552,6 +552,11 @@ async fn save_managed_provider(
         sqlx::query("INSERT INTO provider_profiles (id, user_id, provider_type, base_url, username, password_encrypted, output_format, playback_mode, status, last_validated_at) VALUES ($1, $2, 'xtreme', $3, $4, $5, $6, $7, 'valid', NOW())")
             .bind(id).bind(user_id).bind(&payload.base_url).bind(&payload.username).bind(encrypt_secret(&state.config.encryption_key, &password)?).bind(output_format_as_str(output_format)).bind(playback_mode_as_str(playback_mode)).execute(&state.pool).await?;
     }
+    sqlx::query("UPDATE users SET active_provider_id = $2 WHERE id = $1")
+        .bind(user_id)
+        .bind(id)
+        .execute(&state.pool)
+        .await?;
     sqlx::query("DELETE FROM epg_sources WHERE profile_id = $1")
         .bind(id)
         .execute(&state.pool)

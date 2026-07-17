@@ -194,7 +194,9 @@ async function adminRequest<T>(
       message: response.statusText,
       status: response.status,
     };
-    const payload = (await response.json().catch(() => fallback)) as ApiErrorPayload;
+    const payload = (await response
+      .json()
+      .catch(() => fallback)) as ApiErrorPayload;
     throw new ApiRequestError(payload);
   }
 
@@ -264,14 +266,22 @@ export function getSearchFilterOptions() {
 }
 
 export function getAdminQualityChannelPrefixes() {
-  return adminRequest<AdminQualityPrefixSettings>("/admin/quality-channel-prefixes");
+  return adminRequest<AdminQualityPrefixSettings>(
+    "/admin/quality-channel-prefixes",
+  );
 }
 
-export function saveAdminQualityChannelPrefixes(payload: AdminQualityPrefixSettingsInput) {
-  return adminRequest<AdminQualityPrefixSettings>("/admin/quality-channel-prefixes", {
-    method: "PUT",
-    body: JSON.stringify(payload),
-  }, { includeCsrf: true });
+export function saveAdminQualityChannelPrefixes(
+  payload: AdminQualityPrefixSettingsInput,
+) {
+  return adminRequest<AdminQualityPrefixSettings>(
+    "/admin/quality-channel-prefixes",
+    {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    },
+    { includeCsrf: true },
+  );
 }
 
 export function getAdminPatternGroups() {
@@ -300,25 +310,46 @@ export function adminLogout() {
 }
 
 export function getAdminRestrictedAccounts() {
-  return adminRequest<AdminRestrictedAccountSummary[]>("/admin/restricted-accounts");
+  return adminRequest<AdminRestrictedAccountSummary[]>(
+    "/admin/restricted-accounts",
+  );
 }
 
-export function createAdminRestrictedAccount(payload: AdminRestrictedAccountInput) {
-  return adminRequest<AdminRestrictedAccountSummary>("/admin/restricted-accounts", {
-    method: "POST", body: JSON.stringify(payload),
-  }, { includeCsrf: true });
+export function createAdminRestrictedAccount(
+  payload: AdminRestrictedAccountInput,
+) {
+  return adminRequest<AdminRestrictedAccountSummary>(
+    "/admin/restricted-accounts",
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+    },
+    { includeCsrf: true },
+  );
 }
 
-export function updateAdminRestrictedAccount(id: string, payload: AdminRestrictedAccountInput) {
-  return adminRequest<AdminRestrictedAccountSummary>(`/admin/restricted-accounts/${id}`, {
-    method: "PUT", body: JSON.stringify(payload),
-  }, { includeCsrf: true });
+export function updateAdminRestrictedAccount(
+  id: string,
+  payload: AdminRestrictedAccountInput,
+) {
+  return adminRequest<AdminRestrictedAccountSummary>(
+    `/admin/restricted-accounts/${id}`,
+    {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    },
+    { includeCsrf: true },
+  );
 }
 
 export function deleteAdminRestrictedAccount(id: string) {
-  return adminRequest<void>(`/admin/restricted-accounts/${id}`, {
-    method: "DELETE",
-  }, { includeCsrf: true });
+  return adminRequest<void>(
+    `/admin/restricted-accounts/${id}`,
+    {
+      method: "DELETE",
+    },
+    { includeCsrf: true },
+  );
 }
 
 export function createAdminPatternGroup(payload: AdminPatternGroupInput) {
@@ -332,7 +363,9 @@ export function createAdminPatternGroup(payload: AdminPatternGroupInput) {
   );
 }
 
-export function importAdminPatternGroups(payload: AdminPatternGroupImportRequest) {
+export function importAdminPatternGroups(
+  payload: AdminPatternGroupImportRequest,
+) {
   return adminRequest<AdminPatternGroup[]>(
     "/admin/search/pattern-group-import",
     {
@@ -399,7 +432,9 @@ export function testAdminSearchQuery(payload: AdminSearchQueryTestRequest) {
   );
 }
 
-export function getAdminImportErrors(error: unknown): AdminPatternGroupImportError[] {
+export function getAdminImportErrors(
+  error: unknown,
+): AdminPatternGroupImportError[] {
   if (error instanceof ApiRequestError && Array.isArray(error.details)) {
     return error.details.filter(isAdminImportError);
   }
@@ -407,7 +442,9 @@ export function getAdminImportErrors(error: unknown): AdminPatternGroupImportErr
   return [];
 }
 
-function isAdminImportError(value: unknown): value is AdminPatternGroupImportError {
+function isAdminImportError(
+  value: unknown,
+): value is AdminPatternGroupImportError {
   return (
     typeof value === "object" &&
     value !== null &&
@@ -447,6 +484,12 @@ export function deleteProvider(providerId: string) {
   return request<void>(`/providers/${providerId}`, { method: "DELETE" });
 }
 
+export function activateProvider(providerId: string) {
+  return request<ProviderProfile>(`/providers/${providerId}/activate`, {
+    method: "PUT",
+  });
+}
+
 export function triggerProviderSync(providerId: string) {
   return request<SyncJob>(`/providers/${providerId}/sync`, { method: "POST" });
 }
@@ -459,7 +502,16 @@ export function getOnDemandCategories(mediaType: OnDemandMediaType) {
   return request<OnDemandCategory[]>(`/on-demand/categories?type=${mediaType}`);
 }
 
-export function getOnDemandTitles(mediaType: OnDemandMediaType, options: { categoryId?: string; query?: string; favoriteOnly?: boolean; offset?: number; limit?: number } = {}) {
+export function getOnDemandTitles(
+  mediaType: OnDemandMediaType,
+  options: {
+    categoryId?: string;
+    query?: string;
+    favoriteOnly?: boolean;
+    offset?: number;
+    limit?: number;
+  } = {},
+) {
   const params = new URLSearchParams({ type: mediaType });
   if (options.categoryId) params.set("categoryId", options.categoryId);
   if (options.query) params.set("query", options.query);
@@ -474,11 +526,15 @@ export function getOnDemandTitle(id: string) {
 }
 
 export function addOnDemandCategoryFavorite(id: string) {
-  return request<void>(`/on-demand/favorites/categories/${id}`, { method: "POST" });
+  return request<void>(`/on-demand/favorites/categories/${id}`, {
+    method: "POST",
+  });
 }
 
 export function removeOnDemandCategoryFavorite(id: string) {
-  return request<void>(`/on-demand/favorites/categories/${id}`, { method: "DELETE" });
+  return request<void>(`/on-demand/favorites/categories/${id}`, {
+    method: "DELETE",
+  });
 }
 
 export function addOnDemandTitleFavorite(id: string) {
@@ -486,7 +542,9 @@ export function addOnDemandTitleFavorite(id: string) {
 }
 
 export function removeOnDemandTitleFavorite(id: string) {
-  return request<void>(`/on-demand/favorites/titles/${id}`, { method: "DELETE" });
+  return request<void>(`/on-demand/favorites/titles/${id}`, {
+    method: "DELETE",
+  });
 }
 
 export function getSeriesEpisodes(id: string) {
@@ -558,7 +616,9 @@ export function getSportsTodayEvents() {
 
 export function getSportsUpcomingEvents(hours = 72) {
   const params = new URLSearchParams({ hours: hours.toString() });
-  return request<SportsEventListResponse>(`/sports/upcoming?${params.toString()}`);
+  return request<SportsEventListResponse>(
+    `/sports/upcoming?${params.toString()}`,
+  );
 }
 
 export function getSportsEvent(id: string) {
@@ -576,24 +636,34 @@ export function getSportsProviders() {
 }
 
 export function getGoogleCalendarStatus() {
-  return request<GoogleCalendarConnectionStatus>("/integrations/google-calendar/status");
+  return request<GoogleCalendarConnectionStatus>(
+    "/integrations/google-calendar/status",
+  );
 }
 
 export function connectGoogleCalendar() {
-  return request<GoogleCalendarConnectResponse>("/integrations/google-calendar/connect", {
-    method: "POST",
-  });
+  return request<GoogleCalendarConnectResponse>(
+    "/integrations/google-calendar/connect",
+    {
+      method: "POST",
+    },
+  );
 }
 
 export function getGoogleCalendars() {
-  return request<GoogleCalendarInfo[]>("/integrations/google-calendar/calendars");
+  return request<GoogleCalendarInfo[]>(
+    "/integrations/google-calendar/calendars",
+  );
 }
 
 export function selectGoogleCalendar(payload: GoogleCalendarSelection) {
-  return request<GoogleCalendarConnectionStatus>("/integrations/google-calendar/calendar", {
-    method: "PUT",
-    body: JSON.stringify(payload),
-  });
+  return request<GoogleCalendarConnectionStatus>(
+    "/integrations/google-calendar/calendar",
+    {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    },
+  );
 }
 
 export function disconnectGoogleCalendar() {
@@ -607,7 +677,12 @@ export function addSportsEventToCalendar(id: string) {
   );
 }
 
-export function searchChannels(query: string, offset = 0, limit = 30, qualityChannelsOnly = false) {
+export function searchChannels(
+  query: string,
+  offset = 0,
+  limit = 30,
+  qualityChannelsOnly = false,
+) {
   const params = new URLSearchParams({
     q: query,
     offset: offset.toString(),
@@ -658,11 +733,15 @@ export function removePpvFavorite(channelId: string) {
 }
 
 export function addCategoryFavorite(categoryId: string) {
-  return request<void>(`/favorites/categories/${categoryId}`, { method: "POST" });
+  return request<void>(`/favorites/categories/${categoryId}`, {
+    method: "POST",
+  });
 }
 
 export function removeCategoryFavorite(categoryId: string) {
-  return request<void>(`/favorites/categories/${categoryId}`, { method: "DELETE" });
+  return request<void>(`/favorites/categories/${categoryId}`, {
+    method: "DELETE",
+  });
 }
 
 export function reorderFavorites(payload: FavoriteOrderPayload) {
@@ -684,7 +763,9 @@ export function getRecents() {
 }
 
 export function startOnDemandPlayback(id: string) {
-  return request<PlaybackSource>(`/playback/on-demand/${id}`, { method: "POST" });
+  return request<PlaybackSource>(`/playback/on-demand/${id}`, {
+    method: "POST",
+  });
 }
 
 export function startEpisodePlayback(id: string) {
@@ -738,11 +819,15 @@ export function clearRemoteControllerTarget() {
 }
 
 export function startRemoteOnDemandPlayback(id: string) {
-  return request<RemotePlaybackCommand>(`/remote/play/on-demand/${id}`, { method: "POST" });
+  return request<RemotePlaybackCommand>(`/remote/play/on-demand/${id}`, {
+    method: "POST",
+  });
 }
 
 export function startRemoteEpisodePlayback(id: string) {
-  return request<RemotePlaybackCommand>(`/remote/play/episode/${id}`, { method: "POST" });
+  return request<RemotePlaybackCommand>(`/remote/play/episode/${id}`, {
+    method: "POST",
+  });
 }
 
 export function startRemoteChannelPlayback(channelId: string) {
@@ -813,7 +898,9 @@ async function receiverRequest<T>(
       message: response.statusText,
       status: response.status,
     };
-    const payload = (await response.json().catch(() => fallback)) as ApiErrorPayload;
+    const payload = (await response
+      .json()
+      .catch(() => fallback)) as ApiErrorPayload;
     throw new ApiRequestError(payload);
   }
   if (response.status === 204) {

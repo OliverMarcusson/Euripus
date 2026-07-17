@@ -16,10 +16,11 @@ async fn queue_scheduled_channel_syncs(state: AppState) -> Result<()> {
     let profiles = sqlx::query_as::<_, ProviderProfileRecord>(
         r#"
         SELECT
-          id, user_id, provider_type, base_url, username, password_encrypted, output_format, playback_mode,
-          status, last_validated_at, last_sync_at, last_sync_error, created_at, updated_at
-        FROM provider_profiles
-        WHERE status = 'valid'
+          p.id, p.user_id, p.provider_type, p.base_url, p.username, p.password_encrypted, p.output_format, p.playback_mode,
+          p.status, p.last_validated_at, p.last_sync_at, p.last_sync_error, p.created_at, p.updated_at
+        FROM provider_profiles p
+        JOIN users u ON u.id = p.user_id AND u.active_provider_id = p.id
+        WHERE p.status = 'valid'
         "#,
     )
     .fetch_all(&state.pool)

@@ -53,33 +53,36 @@ export function ProviderSettingsSection() {
           {state.providers.length ? (
             <div className="grid gap-2 sm:grid-cols-2">
               {state.providers.map((provider) => {
-                const isSelected =
-                  !state.isCreatingProvider &&
-                  state.selectedProviderId === provider.id;
-
                 return (
                   <button
                     key={provider.id}
                     type="button"
                     onClick={() => state.selectProvider(provider.id)}
                     className="flex flex-col items-start gap-1 rounded-lg border border-border/60 px-4 py-3 text-left transition-colors hover:bg-muted/50 data-[state=active]:border-primary/50 data-[state=active]:bg-muted"
-                    data-state={isSelected ? "active" : "inactive"}
+                    data-state={provider.isActive ? "active" : "inactive"}
+                    aria-pressed={provider.isActive}
+                    aria-label={`${formatProviderLabel(provider)}${provider.isActive ? ", active provider" : ", use provider"}`}
                   >
                     <div className="flex w-full items-center justify-between gap-3">
                       <span className="truncate text-sm font-semibold">
                         {formatProviderLabel(provider)}
                       </span>
-                      <Badge
-                        variant={
-                          provider.status === "valid"
-                            ? "accent"
-                            : provider.status === "error"
-                              ? "destructive"
-                              : "outline"
-                        }
-                      >
-                        {provider.status}
-                      </Badge>
+                      <span className="flex shrink-0 items-center gap-2">
+                        {provider.isActive ? (
+                          <Badge variant="default">Active</Badge>
+                        ) : null}
+                        <Badge
+                          variant={
+                            provider.status === "valid"
+                              ? "accent"
+                              : provider.status === "error"
+                                ? "destructive"
+                                : "outline"
+                          }
+                        >
+                          {provider.status}
+                        </Badge>
+                      </span>
                     </div>
                     <span className="truncate text-xs text-muted-foreground">
                       {provider.baseUrl}
