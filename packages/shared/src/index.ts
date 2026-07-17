@@ -8,6 +8,7 @@ export type User = {
   id: string;
   username: string;
   providerLocked: boolean;
+  isAdmin: boolean;
   createdAt: string;
 };
 
@@ -117,6 +118,35 @@ export type AdminQualityPrefixSettings = {
 export type AdminQualityPrefixSettingsInput = {
   prefixes: string[];
   includeCategoriesWithoutCountryPrefix: boolean;
+};
+
+export type AdminUserSummary = User;
+
+export type AdminNoEventStream = {
+  id: string;
+  hlsStreamOrigin: string;
+  hlsStreamPath: string;
+  observedChannelId: string | null;
+  observedChannelName: string;
+  enabled: boolean;
+  createdAt: string;
+};
+
+export type AdminNoEventRegexRuleStatus =
+  | "pending"
+  | "confirmed"
+  | "rejected"
+  | "disabled";
+
+export type AdminNoEventRegexRule = {
+  id: string;
+  sample: string;
+  pattern: string;
+  explanation: string;
+  status: AdminNoEventRegexRuleStatus;
+  matchCount: number;
+  matchingChannelNames: string[];
+  createdAt: string;
 };
 
 export type AdminPatternKind = "country" | "provider" | "flag";

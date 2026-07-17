@@ -1,5 +1,8 @@
 import type {
   AdminPatternGroup,
+  AdminNoEventRegexRule,
+  AdminNoEventStream,
+  AdminUserSummary,
   AdminQualityPrefixSettings,
   AdminQualityPrefixSettingsInput,
   AdminRestrictedAccountInput,
@@ -170,10 +173,14 @@ async function request<T>(
 async function adminRequest<T>(
   path: string,
   init: RequestInit = {},
-  { includeCsrf = false }: Pick<RequestOptions, "includeCsrf"> = {},
+  { includeCsrf = false, retry = true }: RequestOptions = {},
 ): Promise<T> {
   const headers = new Headers(init.headers);
   withJsonHeaders(headers);
+  const { accessToken } = useAuthStore.getState();
+  if (accessToken) {
+    headers.set("Authorization", `Bearer ${accessToken}`);
+  }
 
   if (includeCsrf) {
     const csrfToken = readCookie(ADMIN_CSRF_COOKIE_NAME);
@@ -187,6 +194,16 @@ async function adminRequest<T>(
     headers,
     credentials: "include",
   });
+
+  if (response.status === 401 && accessToken && retry) {
+    try {
+      const nextSession = await refresh();
+      useAuthStore.getState().setSession(nextSession);
+      return adminRequest<T>(path, init, { includeCsrf, retry: false });
+    } catch {
+      useAuthStore.getState().clearSession();
+    }
+  }
 
   if (!response.ok) {
     const fallback: ApiErrorPayload = {
@@ -305,6 +322,66 @@ export function adminLogout() {
     {
       method: "POST",
     },
+    { includeCsrf: true },
+  );
+}
+
+export function getAdminUsers() {
+  return adminRequest<AdminUserSummary[]>("/admin/users");
+}
+
+export function setAdminUserRole(id: string, isAdmin: boolean) {
+  return adminRequest<AdminUserSummary>(
+    `/admin/users/${id}/admin`,
+    { method: "PUT", body: JSON.stringify({ isAdmin }) },
+    { includeCsrf: true },
+  );
+}
+
+export function getAdminNoEventStreams() {
+  return adminRequest<AdminNoEventStream[]>("/admin/no-event/streams");
+}
+
+export function markAdminChannelNoEvent(channelId: string) {
+  return adminRequest<AdminNoEventStream>(
+    `/admin/no-event/streams/channel/${channelId}`,
+    { method: "POST" },
+    { includeCsrf: true },
+  );
+}
+
+export function deleteAdminNoEventStream(id: string) {
+  return adminRequest<void>(
+    `/admin/no-event/streams/${id}`,
+    { method: "DELETE" },
+    { includeCsrf: true },
+  );
+}
+
+export function getAdminNoEventRegexRules() {
+  return adminRequest<AdminNoEventRegexRule[]>("/admin/no-event/regex-rules");
+}
+
+export function proposeAdminNoEventRegex(sample: string) {
+  return adminRequest<AdminNoEventRegexRule>(
+    "/admin/no-event/regex-rules",
+    { method: "POST", body: JSON.stringify({ sample }) },
+    { includeCsrf: true },
+  );
+}
+
+export function confirmAdminNoEventRegex(id: string) {
+  return adminRequest<AdminNoEventRegexRule>(
+    `/admin/no-event/regex-rules/${id}/confirm`,
+    { method: "POST" },
+    { includeCsrf: true },
+  );
+}
+
+export function deleteAdminNoEventRegex(id: string) {
+  return adminRequest<void>(
+    `/admin/no-event/regex-rules/${id}`,
+    { method: "DELETE" },
     { includeCsrf: true },
   );
 }

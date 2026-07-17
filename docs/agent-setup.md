@@ -49,6 +49,10 @@ Create `apps/server/.env` from `apps/server/.env.example` and replace the placeh
   Public HTTPS origin exposed by your reverse proxy. Used to decide secure browser cookie behavior.
 - `APP_BROWSER_COOKIE_SECURE`
   Keep `true` for HTTPS deployments behind a reverse proxy.
+- `APP_PI_EXECUTABLE` and `APP_PI_MODEL`
+  Defaults are `pi` and `gpt-5.6-terra`. Pi is invoked with low thinking and no tools to propose no-event regexes.
+- `EURIPUS_PI_AGENT_DIR`
+  Optional Compose host path for the server's dedicated Pi configuration. It defaults to `.runtime/pi-agent`; provision that directory with Pi authentication for the configured model, or provide the provider API key through `apps/server/.env`.
 - `VPN_TYPE`
   Optional. Set to `wireguard` in `apps/server/.env.mullvad` when using the Mullvad Compose override.
 - `WIREGUARD_PRIVATE_KEY`
@@ -65,13 +69,14 @@ Create `apps/server/.env` from `apps/server/.env.example` and replace the placeh
 2. Replace `APP_JWT_SECRET` with a strong random secret.
 3. Replace `APP_ENCRYPTION_KEY_B64` with a new base64-encoded 32-byte key.
 4. Confirm `APP_DATABASE_URL` points at the Compose PostgreSQL service or your external PostgreSQL instance.
-5. Start the database first if you want to validate connectivity in stages.
+5. Provision the dedicated Pi configuration directory or provider API key if regex generation will be used. Do not mount an operator's general-purpose Pi home into the server.
+6. Start the database first if you want to validate connectivity in stages.
    `docker compose up -d postgres`
-6. Start the full backend stack.
+7. Start the full backend stack.
    `docker compose up --build -d server`
-7. Check health by requesting the API health endpoint.
+8. Check health by requesting the API health endpoint.
    `curl -i http://127.0.0.1:8080/health`
-8. Review logs if needed.
+9. Review logs if needed.
    `docker compose logs -f server`
 
 ## Validation Checklist

@@ -5,6 +5,7 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use reqwest::Client;
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 use url::Url;
 
 use crate::xmltv::{self, XmltvFeed};
@@ -33,6 +34,8 @@ pub struct XtreamChannel {
     pub has_catchup: bool,
     pub archive_duration_hours: Option<i32>,
     pub stream_extension: Option<String>,
+    pub hls_stream_origin: Option<String>,
+    pub hls_stream_path: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -110,6 +113,7 @@ struct XtreamChannelPayload {
     tv_archive: Option<serde_json::Value>,
     tv_archive_duration: Option<serde_json::Value>,
     container_extension: Option<String>,
+    direct_source: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -406,27 +410,50 @@ pub async fn fetch_live_streams(
 
     Ok(payload
         .into_iter()
-        .map(|channel| XtreamChannel {
-            remote_stream_id: channel.stream_id,
-            name: channel.name,
-            logo_url: channel.stream_icon,
-            category_id: channel
-                .category_id
-                .map(|value| json_value_to_string(&value)),
-            epg_channel_id: channel.epg_channel_id.filter(|value| !value.is_empty()),
-            has_catchup: channel
-                .tv_archive
-                .as_ref()
-                .map(xtream_truthy)
-                .unwrap_or(false),
-            archive_duration_hours: channel
-                .tv_archive_duration
-                .as_ref()
-                .map(json_value_to_string)
-                .and_then(|value| value.parse::<i32>().ok()),
-            stream_extension: channel.container_extension,
+        .map(|channel| {
+            let (hls_stream_origin, hls_stream_path) = channel
+                .direct_source
+                .as_deref()
+                .and_then(canonical_hls_stream_identity)
+                .map(|(origin, path)| (Some(origin), Some(path)))
+                .unwrap_or((None, None));
+            XtreamChannel {
+                remote_stream_id: channel.stream_id,
+                name: channel.name,
+                logo_url: channel.stream_icon,
+                category_id: channel
+                    .category_id
+                    .map(|value| json_value_to_string(&value)),
+                epg_channel_id: channel.epg_channel_id.filter(|value| !value.is_empty()),
+                has_catchup: channel
+                    .tv_archive
+                    .as_ref()
+                    .map(xtream_truthy)
+                    .unwrap_or(false),
+                archive_duration_hours: channel
+                    .tv_archive_duration
+                    .as_ref()
+                    .map(json_value_to_string)
+                    .and_then(|value| value.parse::<i32>().ok()),
+                stream_extension: channel.container_extension,
+                hls_stream_origin,
+                hls_stream_path,
+            }
         })
         .collect())
+}
+
+pub fn canonical_hls_stream_identity(value: &str) -> Option<(String, String)> {
+    let url = Url::parse(value.trim()).ok()?;
+    if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
+        return None;
+    }
+    let path = url.path();
+    if path.is_empty() || path == "/" {
+        return None;
+    }
+    let path_fingerprint = format!("sha256:{:x}", Sha256::digest(path.as_bytes()));
+    Some((url.origin().ascii_serialization(), path_fingerprint))
 }
 
 pub async fn probe_hls_playlist_url(client: &Client, url: &str) -> Result<bool> {
@@ -706,6 +733,21 @@ mod tests {
         assert_eq!(parse_duration_minutes("01:42:30"), Some(102));
         assert_eq!(parse_duration_minutes("42:30"), Some(42));
         assert_eq!(parse_duration_minutes("unknown"), None);
+    }
+
+    #[test]
+    fn canonicalizes_hls_identity_without_query_or_fragment() {
+        assert_eq!(
+            canonical_hls_stream_identity(
+                "https://cdn.example.com/no-event/idle.m3u8?token=secret#x"
+            ),
+            Some((
+                "https://cdn.example.com".to_string(),
+                "sha256:f859a2cc2e26ebcc6d69014956aa9f71cd97383c42824d8fc3675569e2818121"
+                    .to_string(),
+            ))
+        );
+        assert_eq!(canonical_hls_stream_identity("file:///tmp/a.m3u8"), None);
     }
 
     #[test]

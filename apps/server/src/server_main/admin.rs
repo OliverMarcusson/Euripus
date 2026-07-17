@@ -3,11 +3,35 @@ use super::*;
 
 const ADMIN_SESSION_COOKIE_NAME: &str = "euripus.admin";
 const ADMIN_CSRF_COOKIE_NAME: &str = "euripus.admin.csrf";
+static PI_REGEX_SEMAPHORE: OnceLock<Semaphore> = OnceLock::new();
 
 pub(super) fn browser_router() -> Router<AppState> {
     Router::new()
         .route("/admin/auth/login", post(login))
         .route("/admin/auth/logout", post(logout))
+        .route("/admin/users", get(list_users))
+        .route("/admin/users/{id}/admin", put(set_user_admin))
+        .route("/admin/no-event/streams", get(list_no_event_streams))
+        .route(
+            "/admin/no-event/streams/channel/{id}",
+            post(mark_channel_no_event),
+        )
+        .route(
+            "/admin/no-event/streams/{id}",
+            delete(delete_no_event_stream),
+        )
+        .route(
+            "/admin/no-event/regex-rules",
+            get(list_no_event_regex_rules).post(propose_no_event_regex),
+        )
+        .route(
+            "/admin/no-event/regex-rules/{id}/confirm",
+            post(confirm_no_event_regex),
+        )
+        .route(
+            "/admin/no-event/regex-rules/{id}",
+            delete(delete_no_event_regex),
+        )
         .route(
             "/admin/quality-channel-prefixes",
             get(list_quality_channel_prefixes).put(save_quality_channel_prefixes),
@@ -66,6 +90,83 @@ struct AdminPatternGroupResponse {
 #[serde(rename_all = "camelCase")]
 struct AdminLoginPayload {
     password: String,
+}
+
+#[derive(Debug, Serialize, FromRow)]
+#[serde(rename_all = "camelCase")]
+struct AdminUserResponse {
+    id: Uuid,
+    username: String,
+    provider_locked: bool,
+    is_admin: bool,
+    created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SetUserAdminPayload {
+    is_admin: bool,
+}
+
+#[derive(Debug, Serialize, FromRow)]
+#[serde(rename_all = "camelCase")]
+struct AdminNoEventStreamResponse {
+    id: Uuid,
+    hls_stream_origin: String,
+    hls_stream_path: String,
+    observed_channel_id: Option<Uuid>,
+    observed_channel_name: String,
+    enabled: bool,
+    created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize, FromRow)]
+#[serde(rename_all = "camelCase")]
+struct AdminNoEventRegexRuleRow {
+    id: Uuid,
+    sample: String,
+    pattern: String,
+    explanation: String,
+    status: String,
+    created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AdminNoEventRegexRuleResponse {
+    id: Uuid,
+    sample: String,
+    pattern: String,
+    explanation: String,
+    status: String,
+    match_count: usize,
+    matching_channel_names: Vec<String>,
+    created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Deserialize)]
+struct NoEventRegexProposalPayload {
+    sample: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct PiRegexProposal {
+    regex: String,
+    explanation: String,
+}
+
+#[derive(Debug, FromRow)]
+struct NoEventChannelRow {
+    id: Uuid,
+    user_id: Uuid,
+    name: String,
+    remote_stream_id: i32,
+    hls_stream_origin: Option<String>,
+    hls_stream_path: Option<String>,
+    base_url: String,
+    provider_username: String,
+    password_encrypted: String,
+    output_format: String,
 }
 
 #[derive(Debug, Serialize, FromRow)]
@@ -234,8 +335,9 @@ struct ValidatedPatternGroupInput {
 async fn list_quality_channel_prefixes(
     State(state): State<AppState>,
     jar: CookieJar,
+    headers: HeaderMap,
 ) -> ApiResult<AdminQualityPrefixSettingsResponse> {
-    require_admin(&state, &jar)?;
+    require_admin(&state, &jar, &headers).await?;
     let rows = sqlx::query_as::<_, AdminQualityPrefixResponse>(
         r#"
         WITH channel_prefixes AS (
@@ -284,8 +386,8 @@ async fn save_quality_channel_prefixes(
     headers: HeaderMap,
     Json(payload): Json<SaveQualityPrefixesPayload>,
 ) -> ApiResult<AdminQualityPrefixSettingsResponse> {
-    require_admin(&state, &jar)?;
-    validate_admin_csrf(&jar, &headers)?;
+    let admin_auth = require_admin(&state, &jar, &headers).await?;
+    validate_admin_write(&admin_auth, &jar, &headers)?;
     let mut prefixes = payload
         .prefixes
         .into_iter()
@@ -320,7 +422,7 @@ async fn save_quality_channel_prefixes(
         .bind(payload.include_categories_without_country_prefix)
         .execute(&mut *transaction).await?;
     transaction.commit().await?;
-    list_quality_channel_prefixes(State(state), jar).await
+    list_quality_channel_prefixes(State(state), jar, headers).await
 }
 
 async fn login(
@@ -369,11 +471,397 @@ async fn logout(
     ))
 }
 
+async fn list_users(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    headers: HeaderMap,
+) -> ApiResult<Vec<AdminUserResponse>> {
+    require_admin(&state, &jar, &headers).await?;
+    let users = sqlx::query_as::<_, AdminUserResponse>(
+        "SELECT id, username, provider_locked, is_admin, created_at FROM users ORDER BY username",
+    )
+    .fetch_all(&state.pool)
+    .await?;
+    Ok(Json(users))
+}
+
+async fn set_user_admin(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+    Json(payload): Json<SetUserAdminPayload>,
+) -> ApiResult<AdminUserResponse> {
+    let admin_auth = require_admin(&state, &jar, &headers).await?;
+    validate_admin_write(&admin_auth, &jar, &headers)?;
+    if !payload.is_admin && state.config.admin_password.is_none() {
+        let admin_count =
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM users WHERE is_admin = TRUE")
+                .fetch_one(&state.pool)
+                .await?;
+        let target_is_admin =
+            sqlx::query_scalar::<_, bool>("SELECT is_admin FROM users WHERE id = $1")
+                .bind(id)
+                .fetch_optional(&state.pool)
+                .await?
+                .ok_or_else(|| AppError::NotFound("User not found".to_string()))?;
+        if target_is_admin && admin_count <= 1 {
+            return Err(AppError::BadRequest(
+                "The final administrator cannot be removed without an admin password fallback."
+                    .to_string(),
+            ));
+        }
+    }
+    let user = sqlx::query_as::<_, AdminUserResponse>(
+        "UPDATE users SET is_admin = $2 WHERE id = $1 RETURNING id, username, provider_locked, is_admin, created_at",
+    )
+    .bind(id)
+    .bind(payload.is_admin)
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or_else(|| AppError::NotFound("User not found".to_string()))?;
+    Ok(Json(user))
+}
+
+async fn list_no_event_streams(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    headers: HeaderMap,
+) -> ApiResult<Vec<AdminNoEventStreamResponse>> {
+    require_admin(&state, &jar, &headers).await?;
+    Ok(Json(sqlx::query_as::<_, AdminNoEventStreamResponse>(
+        "SELECT id, hls_stream_origin, hls_stream_path, observed_channel_id, observed_channel_name, enabled, created_at FROM admin_no_event_hls_streams ORDER BY created_at DESC",
+    ).fetch_all(&state.pool).await?))
+}
+
+async fn mark_channel_no_event(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+) -> ApiResult<AdminNoEventStreamResponse> {
+    let admin_auth = require_admin(&state, &jar, &headers).await?;
+    validate_admin_write(&admin_auth, &jar, &headers)?;
+    let channel = sqlx::query_as::<_, NoEventChannelRow>(
+        r#"
+        SELECT c.id, c.user_id, c.name, c.remote_stream_id, c.hls_stream_origin, c.hls_stream_path,
+               p.base_url, p.username AS provider_username, p.password_encrypted, p.output_format
+        FROM channels c JOIN provider_profiles p ON p.id = c.profile_id
+        WHERE c.id = $1
+    "#,
+    )
+    .bind(id)
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or_else(|| AppError::NotFound("Channel not found".to_string()))?;
+    if matches!(admin_auth, AdminAuth::User(user_id) if user_id != channel.user_id) {
+        return Err(AppError::NotFound("Channel not found".to_string()));
+    }
+    let identity = channel
+        .hls_stream_origin
+        .clone()
+        .zip(channel.hls_stream_path.clone());
+    let (origin, path) = match identity {
+        Some(identity) => identity,
+        None => discover_channel_hls_identity(&state, &channel).await?,
+    };
+    sqlx::query("UPDATE channels SET hls_stream_origin = $2, hls_stream_path = $3 WHERE id = $1")
+        .bind(channel.id)
+        .bind(&origin)
+        .bind(&path)
+        .execute(&state.pool)
+        .await?;
+    let created_by = match admin_auth {
+        AdminAuth::User(user_id) => Some(user_id),
+        AdminAuth::Cookie => None,
+    };
+    let stream = sqlx::query_as::<_, AdminNoEventStreamResponse>(r#"
+        INSERT INTO admin_no_event_hls_streams
+          (hls_stream_origin, hls_stream_path, observed_channel_id, observed_channel_name, created_by)
+        VALUES ($1, $2, $3, $4, $5)
+        ON CONFLICT (hls_stream_origin, hls_stream_path) DO UPDATE SET
+          enabled = TRUE, observed_channel_id = EXCLUDED.observed_channel_id,
+          observed_channel_name = EXCLUDED.observed_channel_name, updated_at = NOW()
+        RETURNING id, hls_stream_origin, hls_stream_path, observed_channel_id,
+                  observed_channel_name, enabled, created_at
+    "#).bind(&origin).bind(&path).bind(channel.id).bind(&channel.name).bind(created_by)
+      .fetch_one(&state.pool).await?;
+    state.channel_visibility_cache.clear();
+    spawn_admin_reindex(state.clone());
+    Ok(Json(stream))
+}
+
+async fn delete_no_event_stream(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+) -> Result<StatusCode, AppError> {
+    let admin_auth = require_admin(&state, &jar, &headers).await?;
+    validate_admin_write(&admin_auth, &jar, &headers)?;
+    let deleted = sqlx::query("DELETE FROM admin_no_event_hls_streams WHERE id = $1")
+        .bind(id)
+        .execute(&state.pool)
+        .await?;
+    if deleted.rows_affected() == 0 {
+        return Err(AppError::NotFound("No-event stream not found".to_string()));
+    }
+    state.channel_visibility_cache.clear();
+    spawn_admin_reindex(state);
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn discover_channel_hls_identity(
+    state: &AppState,
+    channel: &NoEventChannelRow,
+) -> Result<(String, String), AppError> {
+    let credentials = XtreamCredentials {
+        base_url: channel.base_url.clone(),
+        username: channel.provider_username.clone(),
+        password: decrypt_secret(&state.config.encryption_key, &channel.password_encrypted)
+            .map_err(AppError::Internal)?,
+        output_format: channel.output_format.clone(),
+    };
+    let initial =
+        xtreme::build_live_stream_url(&credentials, channel.remote_stream_id, Some("m3u8"))?;
+    let mut url = Url::parse(&initial).map_err(|error| AppError::Internal(anyhow!(error)))?;
+    for _ in 0..3 {
+        let response = state
+            .provider_http_client
+            .get(url.clone())
+            .timeout(Duration::from_secs(10))
+            .send()
+            .await
+            .map_err(|error| {
+                AppError::BadRequest(format!("Unable to inspect the HLS stream: {error}"))
+            })?
+            .error_for_status()
+            .map_err(|error| {
+                AppError::BadRequest(format!("Unable to inspect the HLS stream: {error}"))
+            })?;
+        url = response.url().clone();
+        let body = response.bytes().await.map_err(|error| {
+            AppError::BadRequest(format!("Unable to read the HLS playlist: {error}"))
+        })?;
+        if body.len() > 1024 * 1024 {
+            return Err(AppError::BadRequest(
+                "The HLS playlist was too large to inspect.".to_string(),
+            ));
+        }
+        let manifest = String::from_utf8_lossy(&body);
+        let child = manifest
+            .lines()
+            .map(str::trim)
+            .find(|line| !line.is_empty() && !line.starts_with('#'));
+        let Some(child) = child else {
+            break;
+        };
+        if !child.to_ascii_lowercase().contains(".m3u8") {
+            break;
+        }
+        url = url
+            .join(child)
+            .map_err(|error| AppError::BadRequest(format!("Invalid HLS playlist path: {error}")))?;
+    }
+    xtreme::canonical_hls_stream_identity(url.as_str()).ok_or_else(|| {
+        AppError::BadRequest("No stable HLS stream path could be determined.".to_string())
+    })
+}
+
+async fn list_no_event_regex_rules(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    headers: HeaderMap,
+) -> ApiResult<Vec<AdminNoEventRegexRuleResponse>> {
+    require_admin(&state, &jar, &headers).await?;
+    let rows = sqlx::query_as::<_, AdminNoEventRegexRuleRow>(
+        "SELECT id, sample, pattern, explanation, status, created_at FROM admin_no_event_regex_rules ORDER BY created_at DESC",
+    ).fetch_all(&state.pool).await?;
+    let mut responses = Vec::with_capacity(rows.len());
+    for row in rows {
+        responses.push(regex_rule_response(&state.pool, row).await?);
+    }
+    Ok(Json(responses))
+}
+
+async fn propose_no_event_regex(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    headers: HeaderMap,
+    Json(payload): Json<NoEventRegexProposalPayload>,
+) -> ApiResult<AdminNoEventRegexRuleResponse> {
+    let admin_auth = require_admin(&state, &jar, &headers).await?;
+    validate_admin_write(&admin_auth, &jar, &headers)?;
+    let sample = payload.sample.trim();
+    if sample.is_empty() || sample.chars().count() > 200 {
+        return Err(AppError::BadRequest(
+            "Provide a channel name between 1 and 200 characters.".to_string(),
+        ));
+    }
+    let proposal = run_pi_regex_proposal(&state, sample).await?;
+    validate_regex_proposal(sample, &proposal)?;
+    let created_by = match admin_auth {
+        AdminAuth::User(user_id) => Some(user_id),
+        AdminAuth::Cookie => None,
+    };
+    let row = sqlx::query_as::<_, AdminNoEventRegexRuleRow>(
+        r#"
+        INSERT INTO admin_no_event_regex_rules (sample, pattern, explanation, created_by)
+        VALUES ($1, $2, $3, $4)
+        RETURNING id, sample, pattern, explanation, status, created_at
+    "#,
+    )
+    .bind(sample)
+    .bind(proposal.regex)
+    .bind(proposal.explanation)
+    .bind(created_by)
+    .fetch_one(&state.pool)
+    .await?;
+    Ok(Json(regex_rule_response(&state.pool, row).await?))
+}
+
+async fn confirm_no_event_regex(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+) -> ApiResult<AdminNoEventRegexRuleResponse> {
+    let admin_auth = require_admin(&state, &jar, &headers).await?;
+    validate_admin_write(&admin_auth, &jar, &headers)?;
+    let row = sqlx::query_as::<_, AdminNoEventRegexRuleRow>(
+        r#"
+        UPDATE admin_no_event_regex_rules SET status = 'confirmed', updated_at = NOW()
+        WHERE id = $1 AND status IN ('pending', 'disabled')
+        RETURNING id, sample, pattern, explanation, status, created_at
+    "#,
+    )
+    .bind(id)
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or_else(|| AppError::NotFound("Pending regex proposal not found".to_string()))?;
+    state.channel_visibility_cache.clear();
+    spawn_admin_reindex(state.clone());
+    Ok(Json(regex_rule_response(&state.pool, row).await?))
+}
+
+async fn delete_no_event_regex(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+) -> Result<StatusCode, AppError> {
+    let admin_auth = require_admin(&state, &jar, &headers).await?;
+    validate_admin_write(&admin_auth, &jar, &headers)?;
+    let deleted = sqlx::query("DELETE FROM admin_no_event_regex_rules WHERE id = $1")
+        .bind(id)
+        .execute(&state.pool)
+        .await?;
+    if deleted.rows_affected() == 0 {
+        return Err(AppError::NotFound("Regex rule not found".to_string()));
+    }
+    state.channel_visibility_cache.clear();
+    spawn_admin_reindex(state);
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn regex_rule_response(
+    pool: &PgPool,
+    row: AdminNoEventRegexRuleRow,
+) -> Result<AdminNoEventRegexRuleResponse, AppError> {
+    let regex = Regex::new(&row.pattern).map_err(|error| AppError::Internal(anyhow!(error)))?;
+    let names = sqlx::query_scalar::<_, String>("SELECT DISTINCT name FROM channels ORDER BY name")
+        .fetch_all(pool)
+        .await?;
+    let matching = names
+        .into_iter()
+        .filter(|name| regex.is_match(name))
+        .collect::<Vec<_>>();
+    Ok(AdminNoEventRegexRuleResponse {
+        id: row.id,
+        sample: row.sample,
+        pattern: row.pattern,
+        explanation: row.explanation,
+        status: row.status,
+        match_count: matching.len(),
+        matching_channel_names: matching.into_iter().take(25).collect(),
+        created_at: row.created_at,
+    })
+}
+
+fn validate_regex_proposal(sample: &str, proposal: &PiRegexProposal) -> Result<(), AppError> {
+    if proposal.regex.is_empty()
+        || proposal.regex.len() > 500
+        || proposal.explanation.trim().is_empty()
+        || proposal.explanation.len() > 1000
+    {
+        return Err(AppError::BadRequest(
+            "Pi returned an invalid regex proposal.".to_string(),
+        ));
+    }
+    let regex = Regex::new(&proposal.regex)
+        .map_err(|error| AppError::BadRequest(format!("Pi returned an invalid regex: {error}")))?;
+    if !regex.is_match(sample) {
+        return Err(AppError::BadRequest(
+            "Pi's regex did not match the supplied channel name.".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+async fn run_pi_regex_proposal(
+    state: &AppState,
+    sample: &str,
+) -> Result<PiRegexProposal, AppError> {
+    let _permit = PI_REGEX_SEMAPHORE
+        .get_or_init(|| Semaphore::new(1))
+        .acquire()
+        .await
+        .map_err(|_| AppError::ServiceUnavailable("Pi is unavailable.".to_string()))?;
+    let prompt = format!(
+        "Create a safe Rust-regex pattern for a family of no-event IPTV channel names based on this exact example: {}\nGeneralize only obvious variable numeric portions. Anchor the pattern. Return only one JSON object with string fields regex and explanation, with no markdown.",
+        serde_json::to_string(sample).unwrap_or_default()
+    );
+    let mut command = tokio::process::Command::new(&state.config.pi_executable);
+    command.args([
+        "-p",
+        "--no-session",
+        "--no-tools",
+        "--no-extensions",
+        "--no-skills",
+        "--no-prompt-templates",
+        "--no-context-files",
+        "--no-approve",
+        "--model",
+        &state.config.pi_model,
+        "--thinking",
+        "low",
+        &prompt,
+    ]);
+    command.kill_on_drop(true);
+    let output = tokio::time::timeout(Duration::from_secs(45), command.output())
+        .await
+        .map_err(|_| AppError::BadRequest("Pi timed out while generating the regex.".to_string()))?
+        .map_err(|error| AppError::BadRequest(format!("Unable to start Pi: {error}")))?;
+    if !output.status.success() {
+        return Err(AppError::BadRequest(
+            "Pi could not generate a regex proposal.".to_string(),
+        ));
+    }
+    if output.stdout.len() > 16 * 1024 {
+        return Err(AppError::BadRequest(
+            "Pi returned too much output.".to_string(),
+        ));
+    }
+    serde_json::from_slice(&output.stdout)
+        .map_err(|_| AppError::BadRequest("Pi returned malformed proposal JSON.".to_string()))
+}
+
 async fn list_restricted_accounts(
     State(state): State<AppState>,
     jar: CookieJar,
+    headers: HeaderMap,
 ) -> ApiResult<Vec<ManagedAccountResponse>> {
-    require_admin(&state, &jar)?;
+    require_admin(&state, &jar, &headers).await?;
     let accounts = sqlx::query_as::<_, ManagedAccountResponse>(
         r#"
         SELECT u.id, u.username, u.created_at,
@@ -400,8 +888,8 @@ async fn create_restricted_account(
     headers: HeaderMap,
     Json(payload): Json<ManagedAccountPayload>,
 ) -> ApiResult<ManagedAccountResponse> {
-    require_admin(&state, &jar)?;
-    validate_admin_csrf(&jar, &headers)?;
+    let admin_auth = require_admin(&state, &jar, &headers).await?;
+    validate_admin_write(&admin_auth, &jar, &headers)?;
     let username = normalize_managed_username(&payload.username)?;
     if payload.password.is_empty() {
         return Err(AppError::BadRequest(
@@ -429,8 +917,8 @@ async fn update_restricted_account(
     Path(id): Path<Uuid>,
     Json(payload): Json<ManagedAccountPayload>,
 ) -> ApiResult<ManagedAccountResponse> {
-    require_admin(&state, &jar)?;
-    validate_admin_csrf(&jar, &headers)?;
+    let admin_auth = require_admin(&state, &jar, &headers).await?;
+    validate_admin_write(&admin_auth, &jar, &headers)?;
     let username = normalize_managed_username(&payload.username)?;
     let exists = sqlx::query_scalar::<_, bool>(
         "SELECT EXISTS(SELECT 1 FROM users WHERE id = $1 AND provider_locked = TRUE)",
@@ -475,8 +963,8 @@ async fn delete_restricted_account(
     headers: HeaderMap,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, AppError> {
-    require_admin(&state, &jar)?;
-    validate_admin_csrf(&jar, &headers)?;
+    let admin_auth = require_admin(&state, &jar, &headers).await?;
+    validate_admin_write(&admin_auth, &jar, &headers)?;
     let deleted = sqlx::query("DELETE FROM users WHERE id = $1 AND provider_locked = TRUE")
         .bind(id)
         .execute(&state.pool)
@@ -588,8 +1076,9 @@ async fn load_managed_account(pool: &PgPool, id: Uuid) -> ApiResult<ManagedAccou
 async fn list_pattern_groups(
     State(state): State<AppState>,
     jar: CookieJar,
+    headers: HeaderMap,
 ) -> ApiResult<Vec<AdminPatternGroupResponse>> {
-    require_admin(&state, &jar)?;
+    require_admin(&state, &jar, &headers).await?;
     let groups = rules::load_pattern_groups(&state.pool).await?;
     Ok(Json(
         groups.into_iter().map(map_pattern_group_response).collect(),
@@ -602,8 +1091,8 @@ async fn create_pattern_group(
     headers: HeaderMap,
     Json(payload): Json<AdminPatternGroupPayload>,
 ) -> ApiResult<AdminPatternGroupResponse> {
-    require_admin(&state, &jar)?;
-    validate_admin_csrf(&jar, &headers)?;
+    let admin_auth = require_admin(&state, &jar, &headers).await?;
+    validate_admin_write(&admin_auth, &jar, &headers)?;
     let group = save_pattern_group(&state.pool, None, payload).await?;
     spawn_admin_reindex(state.clone());
     Ok(Json(group))
@@ -615,8 +1104,8 @@ async fn import_pattern_groups(
     headers: HeaderMap,
     Json(payload): Json<AdminPatternGroupImportPayload>,
 ) -> ApiResult<Vec<AdminPatternGroupResponse>> {
-    require_admin(&state, &jar)?;
-    validate_admin_csrf(&jar, &headers)?;
+    let admin_auth = require_admin(&state, &jar, &headers).await?;
+    validate_admin_write(&admin_auth, &jar, &headers)?;
     let known_country_codes = load_known_country_codes(&state.pool).await?;
     let groups = validate_import_pattern_groups(payload.groups, &known_country_codes)?;
     let saved = save_pattern_groups_batch(&state.pool, groups).await?;
@@ -631,8 +1120,8 @@ async fn update_pattern_group(
     Path(id): Path<Uuid>,
     Json(payload): Json<AdminPatternGroupPayload>,
 ) -> ApiResult<AdminPatternGroupResponse> {
-    require_admin(&state, &jar)?;
-    validate_admin_csrf(&jar, &headers)?;
+    let admin_auth = require_admin(&state, &jar, &headers).await?;
+    validate_admin_write(&admin_auth, &jar, &headers)?;
     let group = save_pattern_group(&state.pool, Some(id), payload).await?;
     spawn_admin_reindex(state.clone());
     Ok(Json(group))
@@ -644,8 +1133,8 @@ async fn delete_pattern_group(
     headers: HeaderMap,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, AppError> {
-    require_admin(&state, &jar)?;
-    validate_admin_csrf(&jar, &headers)?;
+    let admin_auth = require_admin(&state, &jar, &headers).await?;
+    validate_admin_write(&admin_auth, &jar, &headers)?;
     sqlx::query("DELETE FROM admin_search_pattern_groups WHERE id = $1")
         .bind(id)
         .execute(&state.pool)
@@ -659,8 +1148,8 @@ async fn delete_all_pattern_groups(
     jar: CookieJar,
     headers: HeaderMap,
 ) -> Result<StatusCode, AppError> {
-    require_admin(&state, &jar)?;
-    validate_admin_csrf(&jar, &headers)?;
+    let admin_auth = require_admin(&state, &jar, &headers).await?;
+    validate_admin_write(&admin_auth, &jar, &headers)?;
     sqlx::query("DELETE FROM admin_search_pattern_groups")
         .execute(&state.pool)
         .await?;
@@ -674,8 +1163,8 @@ async fn test_patterns(
     headers: HeaderMap,
     Json(payload): Json<AdminSearchTestPayload>,
 ) -> ApiResult<AdminSearchTestResponse> {
-    require_admin(&state, &jar)?;
-    validate_admin_csrf(&jar, &headers)?;
+    let admin_auth = require_admin(&state, &jar, &headers).await?;
+    validate_admin_write(&admin_auth, &jar, &headers)?;
     let groups = rules::load_compiled_rules(&state.pool).await?;
     let evaluated = rules::evaluate_patterns(
         &groups,
@@ -701,8 +1190,8 @@ async fn test_search_query(
     headers: HeaderMap,
     Json(payload): Json<AdminSearchQueryTestPayload>,
 ) -> ApiResult<AdminSearchQueryTestResponse> {
-    require_admin(&state, &jar)?;
-    validate_admin_csrf(&jar, &headers)?;
+    let admin_auth = require_admin(&state, &jar, &headers).await?;
+    validate_admin_write(&admin_auth, &jar, &headers)?;
 
     let parsed = lexicon::parse_search_query(&payload.query);
 
@@ -1255,16 +1744,30 @@ fn import_error(index: usize, field: &str, message: &str) -> AdminPatternGroupIm
     }
 }
 
-fn require_admin(state: &AppState, jar: &CookieJar) -> Result<(), AppError> {
+#[derive(Debug, Clone, Copy)]
+enum AdminAuth {
+    User(Uuid),
+    Cookie,
+}
+
+async fn require_admin(
+    state: &AppState,
+    jar: &CookieJar,
+    headers: &HeaderMap,
+) -> Result<AdminAuth, AppError> {
+    if let Ok(auth) = require_auth(state, headers).await {
+        if auth.is_admin {
+            return Ok(AdminAuth::User(auth.user_id));
+        }
+    }
+
     if state.config.admin_password.is_none() {
         return Err(AppError::Unauthorized);
     }
-
     let token = jar
         .get(ADMIN_SESSION_COOKIE_NAME)
         .map(|cookie| cookie.value())
         .ok_or(AppError::Unauthorized)?;
-
     let claims = decode::<AdminAccessClaims>(
         token,
         &DecodingKey::from_secret(state.config.jwt_secret.as_bytes()),
@@ -1272,12 +1775,21 @@ fn require_admin(state: &AppState, jar: &CookieJar) -> Result<(), AppError> {
     )
     .map_err(|_| AppError::Unauthorized)?
     .claims;
-
     if claims.role != "admin" {
         return Err(AppError::Unauthorized);
     }
+    Ok(AdminAuth::Cookie)
+}
 
-    Ok(())
+fn validate_admin_write(
+    auth: &AdminAuth,
+    jar: &CookieJar,
+    headers: &HeaderMap,
+) -> Result<(), AppError> {
+    match auth {
+        AdminAuth::User(_) => Ok(()),
+        AdminAuth::Cookie => validate_admin_csrf(jar, headers),
+    }
 }
 
 fn validate_admin_csrf(jar: &CookieJar, headers: &HeaderMap) -> Result<(), AppError> {
@@ -1422,6 +1934,31 @@ fn spawn_admin_reindex(state: AppState) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn validates_matching_pi_regex_proposals() {
+        validate_regex_proposal(
+            ":Viaplay SE 17",
+            &PiRegexProposal {
+                regex: r"(?i)^:viaplay se \d+$".to_string(),
+                explanation: "Matches numbered Viaplay SE placeholders.".to_string(),
+            },
+        )
+        .expect("valid proposal");
+    }
+
+    #[test]
+    fn rejects_pi_regex_proposals_that_do_not_match_the_sample() {
+        let error = validate_regex_proposal(
+            ":Viaplay SE 17",
+            &PiRegexProposal {
+                regex: r"^other$".to_string(),
+                explanation: "Wrong family.".to_string(),
+            },
+        )
+        .expect_err("proposal should be rejected");
+        assert!(matches!(error, AppError::BadRequest(_)));
+    }
 
     #[test]
     fn validate_import_pattern_groups_accepts_valid_batches_with_defaults() {

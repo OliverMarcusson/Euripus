@@ -406,6 +406,14 @@ async fn bulk_upsert_channels(
             .iter()
             .map(|channel| channel.epg_channel_id.clone())
             .collect::<Vec<_>>();
+        let hls_stream_origins = chunk
+            .iter()
+            .map(|channel| channel.hls_stream_origin.clone())
+            .collect::<Vec<_>>();
+        let hls_stream_paths = chunk
+            .iter()
+            .map(|channel| channel.hls_stream_path.clone())
+            .collect::<Vec<_>>();
 
         sqlx::query(
             r#"
@@ -419,7 +427,9 @@ async fn bulk_upsert_channels(
                 $7::bool[],
                 $8::int4[],
                 $9::text[],
-                $10::text[]
+                $10::text[],
+                $11::text[],
+                $12::text[]
               ) AS input(
                 remote_stream_id,
                 name,
@@ -428,7 +438,9 @@ async fn bulk_upsert_channels(
                 has_catchup,
                 archive_duration_hours,
                 stream_extension,
-                epg_channel_id
+                epg_channel_id,
+                hls_stream_origin,
+                hls_stream_path
               )
             )
             INSERT INTO channels (
@@ -442,6 +454,8 @@ async fn bulk_upsert_channels(
               has_catchup,
               archive_duration_hours,
               stream_extension,
+              hls_stream_origin,
+              hls_stream_path,
               updated_at
             )
             SELECT
@@ -455,6 +469,8 @@ async fn bulk_upsert_channels(
               input.has_catchup,
               input.archive_duration_hours,
               input.stream_extension,
+              input.hls_stream_origin,
+              input.hls_stream_path,
               NOW()
             FROM input
             LEFT JOIN channel_categories cc
@@ -470,6 +486,8 @@ async fn bulk_upsert_channels(
               has_catchup = EXCLUDED.has_catchup,
               archive_duration_hours = EXCLUDED.archive_duration_hours,
               stream_extension = EXCLUDED.stream_extension,
+              hls_stream_origin = EXCLUDED.hls_stream_origin,
+              hls_stream_path = EXCLUDED.hls_stream_path,
               updated_at = NOW()
             WHERE channels.category_id IS DISTINCT FROM EXCLUDED.category_id
                OR channels.epg_channel_id IS DISTINCT FROM EXCLUDED.epg_channel_id
@@ -478,6 +496,8 @@ async fn bulk_upsert_channels(
                OR channels.has_catchup IS DISTINCT FROM EXCLUDED.has_catchup
                OR channels.archive_duration_hours IS DISTINCT FROM EXCLUDED.archive_duration_hours
                OR channels.stream_extension IS DISTINCT FROM EXCLUDED.stream_extension
+               OR channels.hls_stream_origin IS DISTINCT FROM EXCLUDED.hls_stream_origin
+               OR channels.hls_stream_path IS DISTINCT FROM EXCLUDED.hls_stream_path
             "#,
         )
         .bind(user_id)
@@ -490,6 +510,8 @@ async fn bulk_upsert_channels(
         .bind(&archive_duration_hours)
         .bind(&stream_extensions)
         .bind(&epg_channel_ids)
+        .bind(&hls_stream_origins)
+        .bind(&hls_stream_paths)
         .execute(&mut **transaction)
         .await?;
     }
@@ -558,7 +580,9 @@ async fn load_persisted_channels_for_sync(
           c.epg_channel_id,
           c.has_catchup,
           c.archive_duration_hours,
-          c.stream_extension
+          c.stream_extension,
+          c.hls_stream_origin,
+          c.hls_stream_path
         FROM channels c
         LEFT JOIN channel_categories cc ON cc.id = c.category_id
         WHERE c.user_id = $1 AND c.profile_id = $2
@@ -642,6 +666,8 @@ fn determine_channel_sync_delta(
                         || existing.has_catchup != incoming.has_catchup
                         || existing.archive_duration_hours != incoming.archive_duration_hours
                         || existing.stream_extension != incoming.stream_extension
+                        || existing.hls_stream_origin != incoming.hls_stream_origin
+                        || existing.hls_stream_path != incoming.hls_stream_path
                         || incoming.category_id.as_ref().is_some_and(|category_id| {
                             changed_category_remote_ids.contains(category_id)
                         })
@@ -1088,6 +1114,8 @@ mod tests {
             has_catchup: false,
             archive_duration_hours: None,
             stream_extension: Some("m3u8".to_string()),
+            hls_stream_origin: None,
+            hls_stream_path: None,
         }
     }
 
@@ -1105,6 +1133,8 @@ mod tests {
             has_catchup: false,
             archive_duration_hours: None,
             stream_extension: Some("m3u8".to_string()),
+            hls_stream_origin: None,
+            hls_stream_path: None,
         }
     }
 

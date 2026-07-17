@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   ChevronDown,
   ChevronUp,
@@ -26,6 +27,7 @@ import {
   pauseRemotePlayback,
   resumeRemotePlayback,
   stopRemotePlayback,
+  markAdminChannelNoEvent,
 } from "@/lib/api";
 import {
   resolveRemoteTargetDevice,
@@ -36,6 +38,8 @@ import type { PlaybackFailure } from "@/lib/hls";
 import { receiverPlaybackBadgeLabel } from "@/lib/receiver-playback";
 import { usePlayerStore } from "@/store/player-store";
 import { useRemoteControllerStore } from "@/store/remote-controller-store";
+import { useAuthStore } from "@/store/auth-store";
+import { useChannelSettingsStore } from "@/store/channel-settings-store";
 import {
   cn,
   formatEventChannelTitle,
@@ -50,6 +54,16 @@ export function PlayerView() {
   const setPlayback = usePlayerStore((state) => state.setPlayback);
   const setSource = usePlayerStore((state) => state.setSource);
   const remoteTargetSelection = useRemoteControllerStore((state) => state.target);
+  const isAdmin = useAuthStore((state) => state.user?.isAdmin ?? false);
+  const adminToolsEnabled = useChannelSettingsStore((state) => state.adminToolsEnabled);
+  const queryClient = useQueryClient();
+  const markNoEventMutation = useMutation({
+    mutationFn: markAdminChannelNoEvent,
+    onSuccess: async () => {
+      setSource(null);
+      await queryClient.invalidateQueries();
+    },
+  });
   const remoteTargetQuery = useRemoteControllerTargetQuery({
     enabled: !!remoteTargetSelection,
     refetchInterval: remoteTargetSelection ? 5_000 : false,
@@ -393,9 +407,21 @@ export function PlayerView() {
             </div>
 
             <div className="flex flex-col gap-2">
-              <h2 className="text-[15px] font-bold tracking-tight text-foreground/95 md:text-xl">
-                {displaySourceTitle}
-              </h2>
+              <div className="flex items-start justify-between gap-2">
+                <h2 className="text-[15px] font-bold tracking-tight text-foreground/95 md:text-xl">
+                  {displaySourceTitle}
+                </h2>
+                {isAdmin && adminToolsEnabled && currentRequest?.kind === "channel" ? (
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    disabled={markNoEventMutation.isPending}
+                    onClick={() => markNoEventMutation.mutate(currentRequest.id)}
+                  >
+                    No event
+                  </Button>
+                ) : null}
+              </div>
               <div className="flex flex-wrap items-center gap-2 md:hidden">
                 <Badge
                   variant={source.live ? "live" : "outline"}

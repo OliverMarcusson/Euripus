@@ -2,7 +2,7 @@ use std::{
     collections::{HashMap, HashSet, VecDeque},
     net::{IpAddr, SocketAddr},
     str::FromStr,
-    sync::Arc,
+    sync::{Arc, OnceLock},
     time::{Duration, Instant},
 };
 
@@ -48,11 +48,12 @@ use meilisearch_sdk::{
     task_info::TaskInfo,
 };
 use rand::RngCore;
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::{FromRow, PgPool, Postgres, QueryBuilder, Transaction, postgres::PgPoolOptions};
 use tokio::signal;
-use tokio::sync::{RwLock, broadcast};
+use tokio::sync::{RwLock, Semaphore, broadcast};
 use tokio::task::{JoinHandle, JoinSet};
 use tokio_retry::{Retry, strategy::ExponentialBackoff};
 use tokio_stream::{StreamExt as TokioStreamExt, wrappers::BroadcastStream};
@@ -255,6 +256,7 @@ struct AuthContext {
     user_id: Uuid,
     session_id: Uuid,
     provider_locked: bool,
+    is_admin: bool,
 }
 
 #[derive(Clone)]
@@ -309,6 +311,8 @@ struct PersistedChannelSyncRow {
     has_catchup: bool,
     archive_duration_hours: Option<i32>,
     stream_extension: Option<String>,
+    hls_stream_origin: Option<String>,
+    hls_stream_path: Option<String>,
 }
 
 #[derive(Debug, Clone, FromRow)]
@@ -433,6 +437,8 @@ struct ChannelVisibilityRow {
     id: Uuid,
     name: String,
     category_name: Option<String>,
+    hls_stream_origin: Option<String>,
+    hls_stream_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -825,7 +831,9 @@ async fn load_channel_visibility_map(
         SELECT
           c.id,
           c.name,
-          cc.name AS category_name
+          cc.name AS category_name,
+          c.hls_stream_origin,
+          c.hls_stream_path
         FROM channels c
         LEFT JOIN channel_categories cc ON cc.id = c.category_id
         WHERE c.user_id = $1
@@ -883,19 +891,49 @@ async fn load_channel_visibility_map(
         .into_iter()
         .map(|row| (row.channel_id, row.titles))
         .collect::<HashMap<_, _>>();
+    let no_event_streams = sqlx::query_as::<_, (String, String)>(
+        "SELECT hls_stream_origin, hls_stream_path FROM admin_no_event_hls_streams WHERE enabled = TRUE",
+    )
+    .fetch_all(&state.pool)
+    .await?
+    .into_iter()
+    .collect::<HashSet<_>>();
+    let no_event_patterns = sqlx::query_scalar::<_, String>(
+        "SELECT pattern FROM admin_no_event_regex_rules WHERE status = 'confirmed'",
+    )
+    .fetch_all(&state.pool)
+    .await?
+    .into_iter()
+    .filter_map(|pattern| Regex::new(&pattern).ok())
+    .collect::<Vec<_>>();
 
     let visibility: Arc<HashMap<Uuid, ChannelVisibility>> = Arc::new(
         rows.into_iter()
             .map(|row| {
                 let event_titles = titles_by_channel.get(&row.id).cloned().unwrap_or_default();
-                (
-                    row.id,
+                let manually_hidden = row
+                    .hls_stream_origin
+                    .as_ref()
+                    .zip(row.hls_stream_path.as_ref())
+                    .is_some_and(|(origin, path)| {
+                        no_event_streams.contains(&(origin.clone(), path.clone()))
+                    })
+                    || no_event_patterns
+                        .iter()
+                        .any(|pattern| pattern.is_match(&row.name));
+                let visibility = if manually_hidden {
+                    ChannelVisibility {
+                        is_hidden: true,
+                        is_placeholder: true,
+                    }
+                } else {
                     classify_channel_visibility(
                         &row.name,
                         row.category_name.as_deref(),
                         &event_titles,
-                    ),
-                )
+                    )
+                };
+                (row.id, visibility)
             })
             .collect(),
     );
@@ -1128,16 +1166,18 @@ async fn auth_context_from_access_token(
     let cached_expiry = state.session_cache.get(&cache_key).map(|expiry| *expiry);
     if let Some(expiry) = cached_expiry {
         if expiry > now {
-            let provider_locked =
-                sqlx::query_scalar::<_, bool>("SELECT provider_locked FROM users WHERE id = $1")
-                    .bind(user_id)
-                    .fetch_optional(&state.pool)
-                    .await?
-                    .ok_or(AppError::Unauthorized)?;
+            let (provider_locked, is_admin) = sqlx::query_as::<_, (bool, bool)>(
+                "SELECT provider_locked, is_admin FROM users WHERE id = $1",
+            )
+            .bind(user_id)
+            .fetch_optional(&state.pool)
+            .await?
+            .ok_or(AppError::Unauthorized)?;
             return Ok(AuthContext {
                 user_id,
                 session_id,
                 provider_locked,
+                is_admin,
             });
         }
         state.session_cache.remove(&cache_key);
@@ -1157,12 +1197,13 @@ async fn auth_context_from_access_token(
     if valid_session == 0 {
         return Err(AppError::Unauthorized);
     }
-    let provider_locked =
-        sqlx::query_scalar::<_, bool>("SELECT provider_locked FROM users WHERE id = $1")
-            .bind(user_id)
-            .fetch_optional(&state.pool)
-            .await?
-            .ok_or(AppError::Unauthorized)?;
+    let (provider_locked, is_admin) = sqlx::query_as::<_, (bool, bool)>(
+        "SELECT provider_locked, is_admin FROM users WHERE id = $1",
+    )
+    .bind(user_id)
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or(AppError::Unauthorized)?;
 
     state
         .session_cache
@@ -1172,6 +1213,7 @@ async fn auth_context_from_access_token(
         user_id,
         session_id,
         provider_locked,
+        is_admin,
     })
 }
 
