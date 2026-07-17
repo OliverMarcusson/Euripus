@@ -28,6 +28,7 @@ import {
   resumeRemotePlayback,
   stopRemotePlayback,
   markAdminChannelNoEvent,
+  updateOnDemandProgress,
 } from "@/lib/api";
 import {
   resolveRemoteTargetDevice,
@@ -215,6 +216,15 @@ export function PlayerView() {
       source?.url,
     ],
   );
+
+  const handlePlaybackProgress = useCallback((positionSeconds: number, durationSeconds: number | null) => {
+    if (!currentRequest || (currentRequest.kind !== "onDemand" && currentRequest.kind !== "episode")) return;
+    void updateOnDemandProgress(
+      currentRequest.kind === "episode" ? "episode" : "movie",
+      currentRequest.id,
+      { positionSeconds, durationSeconds },
+    ).then(() => queryClient.invalidateQueries({ queryKey: ["on-demand", "history"] })).catch(() => undefined);
+  }, [currentRequest, queryClient]);
 
   const handlePlaybackHealthy = useCallback(() => {
     recoveryAttemptsRef.current = 0;
@@ -470,6 +480,8 @@ export function PlayerView() {
                   className="contents"
                   onPlaybackFailure={scheduleRecovery}
                   onPlaybackHealthy={handlePlaybackHealthy}
+                  onPlaybackProgress={handlePlaybackProgress}
+                  initialTimeSeconds={currentRequest && "startAtSeconds" in currentRequest ? currentRequest.startAtSeconds : undefined}
                   source={source}
                   uiMode="local"
                   videoClassName="euripus-plyr-media aspect-video w-full bg-black object-contain max-md:min-h-[220px]"

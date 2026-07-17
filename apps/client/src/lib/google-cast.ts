@@ -4,8 +4,15 @@ import { create } from "zustand";
 const CAST_SENDER_SDK_URL =
   "https://www.gstatic.com/cv/js/sender/v1/cast_sender.js?loadCastFramework=1";
 
+type CastMediaSession = {
+  pause: (request: unknown, onSuccess: () => void, onError: (error: unknown) => void) => void;
+  play: (request: unknown, onSuccess: () => void, onError: (error: unknown) => void) => void;
+  stop: (request: unknown, onSuccess: () => void, onError: (error: unknown) => void) => void;
+};
+
 type CastSession = {
   getCastDevice: () => { friendlyName?: string };
+  getMediaSession: () => CastMediaSession | null;
   loadMedia: (request: unknown) => Promise<unknown>;
 };
 
@@ -54,6 +61,9 @@ type CastWindow = Window & {
           autoplay?: boolean;
           currentTime?: number;
         };
+        PauseRequest: new () => unknown;
+        PlayRequest: new () => unknown;
+        StopRequest: new () => unknown;
         StreamType: { BUFFERED: string; LIVE: string };
       };
     };
@@ -63,6 +73,7 @@ type CastWindow = Window & {
 type GoogleCastState = {
   available: boolean;
   connected: boolean;
+  hasMedia: boolean;
   deviceName: string | null;
   initialized: boolean;
   initializing: boolean;
@@ -71,6 +82,7 @@ type GoogleCastState = {
 const initialState: GoogleCastState = {
   available: false,
   connected: false,
+  hasMedia: false,
   deviceName: null,
   initialized: false,
   initializing: false,
@@ -89,6 +101,7 @@ function syncSessionState() {
   const session = castContext?.getCurrentSession() ?? null;
   useGoogleCastStore.setState({
     connected: !!session,
+    hasMedia: !!session?.getMediaSession(),
     deviceName: session?.getCastDevice().friendlyName ?? null,
   });
 }
@@ -178,7 +191,7 @@ export async function requestGoogleCastSession() {
 
 export function endGoogleCastSession() {
   castContext?.endCurrentSession(true);
-  useGoogleCastStore.setState({ connected: false, deviceName: null });
+  useGoogleCastStore.setState({ connected: false, hasMedia: false, deviceName: null });
 }
 
 function contentTypeFor(source: PlaybackSource) {
@@ -194,7 +207,7 @@ function contentTypeFor(source: PlaybackSource) {
   }
 }
 
-export async function loadGoogleCastMedia(source: PlaybackSource) {
+export async function loadGoogleCastMedia(source: PlaybackSource, startAtSeconds = 0) {
   const targetWindow = castWindow();
   const chromeCast = targetWindow.chrome?.cast;
   const session = castContext?.getCurrentSession();
@@ -218,6 +231,38 @@ export async function loadGoogleCastMedia(source: PlaybackSource) {
 
   const request = new chromeCast.media.LoadRequest(mediaInfo);
   request.autoplay = true;
-  request.currentTime = 0;
+  request.currentTime = Math.max(0, startAtSeconds);
   await session.loadMedia(request);
+  useGoogleCastStore.setState({ hasMedia: true });
+}
+
+function runGoogleCastMediaCommand(requestType: "pause" | "play" | "stop") {
+  const targetWindow = castWindow();
+  const chromeCast = targetWindow.chrome?.cast;
+  const media = castContext?.getCurrentSession()?.getMediaSession();
+  if (!chromeCast || !media) {
+    return Promise.reject(new Error("Nothing is currently playing on Google Cast."));
+  }
+  const request = requestType === "pause"
+    ? new chromeCast.media.PauseRequest()
+    : requestType === "play"
+      ? new chromeCast.media.PlayRequest()
+      : new chromeCast.media.StopRequest();
+  return new Promise<void>((resolve, reject) => {
+    media[requestType](request, resolve, reject);
+  }).then(() => {
+    if (requestType === "stop") useGoogleCastStore.setState({ hasMedia: false });
+  });
+}
+
+export function pauseGoogleCastPlayback() {
+  return runGoogleCastMediaCommand("pause");
+}
+
+export function resumeGoogleCastPlayback() {
+  return runGoogleCastMediaCommand("play");
+}
+
+export function stopGoogleCastPlayback() {
+  return runGoogleCastMediaCommand("stop");
 }

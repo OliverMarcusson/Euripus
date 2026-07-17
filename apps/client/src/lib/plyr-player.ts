@@ -188,14 +188,18 @@ export function bindPlaybackSource(
     playbackSessionId,
     uiMode = "local",
     livePlaybackPreference = "stable",
+    initialTimeSeconds = 0,
     onPlaybackFailure,
     onPlaybackHealthy,
+    onPlaybackProgress,
   }: {
     playbackSessionId?: string;
     uiMode?: PlayerUiMode;
     livePlaybackPreference?: LivePlaybackPreference;
+    initialTimeSeconds?: number;
     onPlaybackFailure?: (failure: PlaybackFailure) => void | Promise<void>;
     onPlaybackHealthy?: () => void;
+    onPlaybackProgress?: (positionSeconds: number, durationSeconds: number | null) => void;
   } = {},
 ): BoundPlaybackSession {
   resetMediaElement(video);
@@ -209,6 +213,20 @@ export function bindPlaybackSource(
   let stallRecoveryTimeout: number | undefined;
   let healthyPlaybackStart: number | undefined;
   let healthyPlaybackReported = false;
+  let lastProgressReport = -10;
+
+  const reportProgress = (force = false) => {
+    if (source.live || !onPlaybackProgress || !Number.isFinite(video.currentTime)) return;
+    if (!force && Math.abs(video.currentTime - lastProgressReport) < 10) return;
+    lastProgressReport = video.currentTime;
+    onPlaybackProgress(video.currentTime, Number.isFinite(video.duration) ? video.duration : null);
+  };
+
+  const applyInitialTime = () => {
+    if (!source.live && initialTimeSeconds > 0 && Number.isFinite(video.duration)) {
+      video.currentTime = Math.min(initialTimeSeconds, Math.max(0, video.duration - 1));
+    }
+  };
 
   const clearStallRecovery = () => {
     if (stallRecoveryTimeout != null) {
@@ -292,6 +310,7 @@ export function bindPlaybackSource(
 
   const handlePlaybackProgress = () => {
     clearStallRecovery();
+    reportProgress();
     if (healthyPlaybackStart == null) {
       healthyPlaybackStart = video.currentTime;
     }
@@ -331,9 +350,11 @@ export function bindPlaybackSource(
 
   const handlePlaybackPause = () => {
     clearStallRecovery();
+    reportProgress(true);
   };
 
   const handlePlaybackEnded = () => {
+    reportProgress(true);
     if (source.live) {
       logPlaybackDiagnostic("warn", "live-video-ended-unexpectedly", {
         playbackSessionId,
@@ -346,6 +367,7 @@ export function bindPlaybackSource(
     }
   };
 
+  video.addEventListener("loadedmetadata", applyInitialTime);
   video.addEventListener("playing", handlePlaybackProgress);
   video.addEventListener("progress", handlePlaybackProgress);
   video.addEventListener("timeupdate", handlePlaybackProgress);
@@ -368,6 +390,7 @@ export function bindPlaybackSource(
   const session: BoundPlaybackSession = {
     plyr: null,
     destroy() {
+      reportProgress(true);
       destroyed = true;
       logPlaybackDiagnostic("info", "playback-session-destroyed", {
         playbackSessionId,
@@ -381,6 +404,7 @@ export function bindPlaybackSource(
       clearStallRecovery();
       unsubscribeFromQualities?.();
       hlsSession?.destroy();
+      video.removeEventListener("loadedmetadata", applyInitialTime);
       video.removeEventListener("playing", handlePlaybackProgress);
       video.removeEventListener("progress", handlePlaybackProgress);
       video.removeEventListener("timeupdate", handlePlaybackProgress);

@@ -297,6 +297,21 @@ export type OnDemandEpisode = {
   containerExtension: string | null;
 };
 
+export type OnDemandHistoryEntry = OnDemandTitle & {
+  episodeId: string | null;
+  episodeName: string | null;
+  seasonNumber: number | null;
+  episodeNumber: number | null;
+  positionSeconds: number;
+  durationSeconds: number | null;
+  lastPlayedAt: string;
+};
+
+export type OnDemandProgressPayload = {
+  positionSeconds: number;
+  durationSeconds: number | null;
+};
+
 export type OnDemandPage = {
   items: OnDemandTitle[];
   totalCount: number;

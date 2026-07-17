@@ -33,8 +33,10 @@ import type {
   LoginPayload,
   OnDemandCategory,
   OnDemandEpisode,
+  OnDemandHistoryEntry,
   OnDemandMediaType,
   OnDemandPage,
+  OnDemandProgressPayload,
   OnDemandTitle,
   PlaybackSource,
   Program,
@@ -842,6 +844,21 @@ export function getRecents() {
 function startPlayback(path: string, target?: "cast") {
   const query = target ? `?target=${target}` : "";
   return request<PlaybackSource>(`${path}${query}`, { method: "POST" });
+}
+
+export function getOnDemandHistory() {
+  return request<OnDemandHistoryEntry[]>("/on-demand/history");
+}
+
+export function updateOnDemandProgress(
+  kind: "movie" | "episode",
+  id: string,
+  payload: OnDemandProgressPayload,
+) {
+  return request<void>(`/on-demand/history/${kind}/${id}`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
 }
 
 export function startOnDemandPlayback(id: string, target?: "cast") {

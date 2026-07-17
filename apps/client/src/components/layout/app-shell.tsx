@@ -10,8 +10,11 @@ import {
   Film,
   LogOut,
   MonitorUp,
+  Pause,
+  Play,
   Search,
   Settings,
+  Square,
   Trophy,
   Tv,
   TvMinimal,
@@ -33,7 +36,10 @@ import { Separator } from "@/components/ui/separator";
 import {
   clearRemoteControllerTarget,
   logout,
+  pauseRemotePlayback,
+  resumeRemotePlayback,
   selectRemoteControllerTarget,
+  stopRemotePlayback,
 } from "@/lib/api";
 import {
   resolveRemoteTargetDevice,
@@ -43,7 +49,10 @@ import {
 import { castPlaybackRequest } from "@/lib/cast-playback";
 import {
   endGoogleCastSession,
+  pauseGoogleCastPlayback,
   requestGoogleCastSession,
+  resumeGoogleCastPlayback,
+  stopGoogleCastPlayback,
   useGoogleCastStore,
 } from "@/lib/google-cast";
 import { formatReceiverPlaybackSummary } from "@/lib/receiver-playback";
@@ -221,6 +230,7 @@ function RemoteTargetMenu({
 function RemoteTargetStatusBanner() {
   const remoteTarget = useRemoteControllerStore((state) => state.target);
   const castConnected = useGoogleCastStore((state) => state.connected);
+  const castHasMedia = useGoogleCastStore((state) => state.hasMedia);
   const castDeviceName = useGoogleCastStore((state) => state.deviceName);
   const targetQuery = useRemoteControllerTargetQuery({
     enabled: !!remoteTarget,
@@ -230,6 +240,20 @@ function RemoteTargetStatusBanner() {
     remoteTarget,
     targetQuery.data?.device,
   );
+  const controlMutation = useMutation({
+    mutationFn: async (command: "play" | "pause" | "stop") => {
+      if (castConnected) {
+        if (command === "play") return resumeGoogleCastPlayback();
+        if (command === "pause") return pauseGoogleCastPlayback();
+        return stopGoogleCastPlayback();
+      }
+      if (command === "play") return resumeRemotePlayback();
+      if (command === "pause") return pauseRemotePlayback();
+      return stopRemotePlayback();
+    },
+    onError: (error) => toast.error(error instanceof Error ? error.message : "Playback control failed."),
+  });
+  const controlsDisabled = controlMutation.isPending || (castConnected ? !castHasMedia : !resolvedTarget?.currentPlayback);
 
   if (!remoteTarget && !castConnected) {
     return null;
@@ -237,19 +261,20 @@ function RemoteTargetStatusBanner() {
 
   return (
     <div className="shrink-0 border-b border-border/40 bg-primary/5 px-4 py-2 text-sm text-foreground/80 md:px-8">
-      <div className="mx-auto w-full max-w-[1240px] text-center">
-        {castConnected ? (
-          <>
+      <div className="mx-auto flex w-full max-w-[1240px] flex-wrap items-center justify-center gap-2">
+        <span>
+          {castConnected ? <>
             Casting to <span className="font-semibold">{castDeviceName ?? "Google Cast"}</span>
-          </>
-        ) : (
-          <>
+          </> : <>
             Controlling <span className="font-semibold">{remoteTarget?.name}</span>
-            {resolvedTarget?.currentPlayback
-              ? ` - ${formatReceiverPlaybackSummary(resolvedTarget)}`
-              : ""}
-          </>
-        )}
+            {resolvedTarget?.currentPlayback ? ` - ${formatReceiverPlaybackSummary(resolvedTarget)}` : ""}
+          </>}
+        </span>
+        <div className="flex items-center gap-1" aria-label="Playback controls">
+          <Button size="icon" variant="ghost" className="size-7" aria-label="Play" disabled={controlsDisabled} onClick={() => controlMutation.mutate("play")}><Play className="size-4" /></Button>
+          <Button size="icon" variant="ghost" className="size-7" aria-label="Pause" disabled={controlsDisabled} onClick={() => controlMutation.mutate("pause")}><Pause className="size-4" /></Button>
+          <Button size="icon" variant="ghost" className="size-7" aria-label="Stop" disabled={controlsDisabled} onClick={() => controlMutation.mutate("stop")}><Square className="size-4" /></Button>
+        </div>
       </div>
     </div>
   );
