@@ -17,6 +17,8 @@ type PlyrSurfaceProps = {
   className?: string;
   onPlaybackFailure?: (failure: PlaybackFailure) => void | Promise<void>;
   onPlaybackHealthy?: () => void;
+  onPlaybackProgress?: (positionSeconds: number, durationSeconds: number | null) => void;
+  initialTimeSeconds?: number;
   source: PlaybackSource;
   uiMode: "local" | "receiver";
   videoClassName?: string;
@@ -28,6 +30,8 @@ export function PlyrSurface({
   className,
   onPlaybackFailure,
   onPlaybackHealthy,
+  onPlaybackProgress,
+  initialTimeSeconds,
   source,
   uiMode,
   videoClassName,
@@ -39,11 +43,13 @@ export function PlyrSurface({
   );
   const onPlaybackFailureRef = useRef<typeof onPlaybackFailure>(onPlaybackFailure);
   const onPlaybackHealthyRef = useRef<typeof onPlaybackHealthy>(onPlaybackHealthy);
+  const onPlaybackProgressRef = useRef<typeof onPlaybackProgress>(onPlaybackProgress);
 
   useEffect(() => {
     onPlaybackFailureRef.current = onPlaybackFailure;
     onPlaybackHealthyRef.current = onPlaybackHealthy;
-  }, [onPlaybackFailure, onPlaybackHealthy]);
+    onPlaybackProgressRef.current = onPlaybackProgress;
+  }, [onPlaybackFailure, onPlaybackHealthy, onPlaybackProgress]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -78,6 +84,8 @@ export function PlyrSurface({
       playbackSessionId,
       uiMode,
       livePlaybackPreference,
+      initialTimeSeconds,
+      onPlaybackProgress: (position, duration) => onPlaybackProgressRef.current?.(position, duration),
       onPlaybackFailure: (failure) => onPlaybackFailureRef.current?.(failure),
       onPlaybackHealthy: () => onPlaybackHealthyRef.current?.(),
     });
@@ -92,6 +100,7 @@ export function PlyrSurface({
   }, [
     ariaLabel,
     livePlaybackPreference,
+    initialTimeSeconds,
     source,
     uiMode,
     videoClassName,

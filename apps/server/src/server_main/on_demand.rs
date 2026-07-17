@@ -53,6 +53,41 @@ pub(super) struct OnDemandEpisodeResponse {
     pub(super) container_extension: Option<String>,
 }
 
+#[derive(Debug, Serialize, FromRow)]
+#[serde(rename_all = "camelCase")]
+struct OnDemandHistoryResponse {
+    id: Uuid,
+    media_type: String,
+    name: String,
+    category_id: Option<Uuid>,
+    category_name: Option<String>,
+    poster_url: Option<String>,
+    backdrop_url: Option<String>,
+    plot: Option<String>,
+    genre: Option<String>,
+    cast_names: Option<String>,
+    director: Option<String>,
+    release_date: Option<String>,
+    rating: Option<f64>,
+    duration_minutes: Option<i32>,
+    container_extension: Option<String>,
+    is_favorite: bool,
+    episode_id: Option<Uuid>,
+    episode_name: Option<String>,
+    season_number: Option<i32>,
+    episode_number: Option<i32>,
+    position_seconds: f64,
+    duration_seconds: Option<f64>,
+    last_played_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OnDemandProgressPayload {
+    position_seconds: f64,
+    duration_seconds: Option<f64>,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct OnDemandPageResponse {
@@ -79,6 +114,8 @@ pub(super) fn shared_router() -> Router<AppState> {
         .route("/on-demand/titles", get(list_titles))
         .route("/on-demand/titles/{id}", get(get_title))
         .route("/on-demand/series/{id}/episodes", get(list_series_episodes))
+        .route("/on-demand/history", get(list_history))
+        .route("/on-demand/history/{kind}/{id}", put(update_history))
         .route(
             "/on-demand/favorites/categories/{id}",
             post(add_category_favorite).delete(remove_category_favorite),
@@ -87,6 +124,97 @@ pub(super) fn shared_router() -> Router<AppState> {
             "/on-demand/favorites/titles/{id}",
             post(add_title_favorite).delete(remove_title_favorite),
         )
+}
+
+async fn list_history(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> ApiResult<Vec<OnDemandHistoryResponse>> {
+    let auth = require_auth(&state, &headers).await?;
+    let rows = sqlx::query_as::<_, OnDemandHistoryResponse>(
+        r#"
+        SELECT t.id, t.media_type, t.name, t.category_id, c.name AS category_name,
+          t.poster_url, t.backdrop_url, t.plot, t.genre, t.cast_names, t.director,
+          t.release_date, t.rating, t.duration_minutes, t.container_extension,
+          EXISTS (SELECT 1 FROM favorite_on_demand_titles f
+            WHERE f.user_id = $1 AND f.title_id = t.id) AS is_favorite,
+          e.id AS episode_id, e.name AS episode_name, e.season_number, e.episode_number,
+          h.position_seconds, h.duration_seconds, h.last_played_at
+        FROM on_demand_playback_history h
+        JOIN on_demand_titles t ON t.id = h.title_id
+        LEFT JOIN on_demand_categories c ON c.id = t.category_id
+        LEFT JOIN on_demand_episodes e ON e.id = h.episode_id
+        WHERE h.user_id = $1
+          AND t.profile_id = (SELECT active_provider_id FROM users WHERE id = $1)
+        ORDER BY h.last_played_at DESC
+        LIMIT 100
+        "#,
+    )
+    .bind(auth.user_id)
+    .fetch_all(&state.pool)
+    .await?;
+    Ok(Json(rows))
+}
+
+async fn update_history(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((kind, id)): Path<(String, Uuid)>,
+    Json(payload): Json<OnDemandProgressPayload>,
+) -> Result<StatusCode, AppError> {
+    let auth = require_auth(&state, &headers).await?;
+    if !payload.position_seconds.is_finite()
+        || payload.position_seconds < 0.0
+        || payload
+            .duration_seconds
+            .is_some_and(|value| !value.is_finite() || value < 0.0)
+    {
+        return Err(AppError::BadRequest(
+            "Playback progress must be a positive number.".to_string(),
+        ));
+    }
+    let (title_id, episode_id) =
+        match kind.as_str() {
+            "movie" => {
+                let title_id = sqlx::query_scalar::<_, Uuid>(
+                "SELECT id FROM on_demand_titles WHERE id=$1 AND user_id=$2 AND media_type='movie'",
+            ).bind(id).bind(auth.user_id).fetch_optional(&state.pool).await?
+                .ok_or_else(|| AppError::NotFound("On-demand movie not found".to_string()))?;
+                (title_id, None)
+            }
+            "episode" => {
+                let title_id = sqlx::query_scalar::<_, Uuid>(
+                    "SELECT series_id FROM on_demand_episodes WHERE id=$1 AND user_id=$2",
+                )
+                .bind(id)
+                .bind(auth.user_id)
+                .fetch_optional(&state.pool)
+                .await?
+                .ok_or_else(|| AppError::NotFound("On-demand episode not found".to_string()))?;
+                (title_id, Some(id))
+            }
+            _ => {
+                return Err(AppError::BadRequest(
+                    "History kind must be 'movie' or 'episode'.".to_string(),
+                ));
+            }
+        };
+    sqlx::query(
+        r#"INSERT INTO on_demand_playback_history
+          (user_id, title_id, episode_id, position_seconds, duration_seconds, last_played_at)
+          VALUES ($1, $2, $3, $4, $5, NOW())
+          ON CONFLICT (user_id, title_id) DO UPDATE SET
+            episode_id=EXCLUDED.episode_id, position_seconds=EXCLUDED.position_seconds,
+            duration_seconds=EXCLUDED.duration_seconds, last_played_at=NOW()"#,
+    )
+    .bind(auth.user_id)
+    .bind(title_id)
+    .bind(episode_id)
+    .bind(payload.position_seconds)
+    .bind(payload.duration_seconds)
+    .execute(&state.pool)
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 fn normalize_media_type(raw: Option<&str>) -> Result<&str, AppError> {

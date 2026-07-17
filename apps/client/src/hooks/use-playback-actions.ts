@@ -9,6 +9,8 @@ import {
   startRemoteEpisodePlayback,
   startRemoteOnDemandPlayback,
   startRemoteProgramPlayback,
+  seekRemotePlayback,
+  updateOnDemandProgress,
 } from "@/lib/api";
 import { castPlaybackRequest } from "@/lib/cast-playback";
 import { useGoogleCastStore } from "@/lib/google-cast";
@@ -67,6 +69,12 @@ export function useChannelPlaybackMutation() {
   });
 }
 
+export type OnDemandPlaybackSelection = {
+  id: string;
+  startAtSeconds?: number;
+  resetProgress?: boolean;
+};
+
 export function useOnDemandPlaybackMutation(kind: "onDemand" | "episode") {
   const queryClient = useQueryClient();
   const target = useRemoteControllerStore((state) => state.target);
@@ -75,24 +83,33 @@ export function useOnDemandPlaybackMutation(kind: "onDemand" | "episode") {
   const setPlayback = usePlayerStore((state) => state.setPlayback);
   const setSource = usePlayerStore((state) => state.setSource);
 
-  return useMutation<PlaybackResult, Error, string>({
-    mutationFn: async (id) => {
+  return useMutation<PlaybackResult, Error, OnDemandPlaybackSelection>({
+    mutationFn: async ({ id, startAtSeconds, resetProgress }) => {
+      if (resetProgress) {
+        await updateOnDemandProgress(kind === "episode" ? "episode" : "movie", id, {
+          positionSeconds: 0,
+          durationSeconds: null,
+        });
+      }
       if (castConnected) {
-        await castPlaybackRequest({ kind, id });
+        await castPlaybackRequest({ kind, id, startAtSeconds });
         return { cast: true };
       }
-      return target
-        ? (kind === "episode" ? startRemoteEpisodePlayback(id) : startRemoteOnDemandPlayback(id))
-        : (kind === "episode" ? startEpisodePlayback(id) : startOnDemandPlayback(id));
+      if (target) {
+        const result = kind === "episode" ? await startRemoteEpisodePlayback(id) : await startRemoteOnDemandPlayback(id);
+        if ((startAtSeconds ?? 0) > 0) await seekRemotePlayback(startAtSeconds!);
+        return result;
+      }
+      return kind === "episode" ? startEpisodePlayback(id) : startOnDemandPlayback(id);
     },
     onMutate: () => { if (!target && !castConnected) setLoading(true); },
-    onSuccess: (result, id) => {
+    onSuccess: (result, { id, startAtSeconds }) => {
       if (isCastPlaybackResult(result)) {
         setSource(null);
       } else if (isRemotePlaybackCommand(result)) {
         void queryClient.invalidateQueries({ queryKey: ["remote"] });
       } else {
-        setPlayback(result, { kind, id });
+        setPlayback(result, { kind, id, startAtSeconds });
       }
     },
     onSettled: () => { if (!target && !castConnected) setLoading(false); },

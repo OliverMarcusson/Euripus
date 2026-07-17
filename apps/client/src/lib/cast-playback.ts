@@ -23,6 +23,8 @@ export function resolveCastPlaybackSource(request: PlaybackRequest) {
 
 export async function castPlaybackRequest(request: PlaybackRequest) {
   const source: PlaybackSource = await resolveCastPlaybackSource(request);
-  await loadGoogleCastMedia(source);
+  const startAtSeconds = "startAtSeconds" in request ? request.startAtSeconds : undefined;
+  if (startAtSeconds) await loadGoogleCastMedia(source, startAtSeconds);
+  else await loadGoogleCastMedia(source);
   return source;
 }
