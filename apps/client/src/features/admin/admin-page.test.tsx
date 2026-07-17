@@ -31,6 +31,14 @@ vi.mock("@/lib/api", () => ({
   getAdminQualityChannelPrefixes: vi.fn(),
   saveAdminQualityChannelPrefixes: vi.fn(),
   getAdminRestrictedAccounts: vi.fn(),
+  getAdminUsers: vi.fn().mockResolvedValue([]),
+  getAdminNoEventStreams: vi.fn().mockResolvedValue([]),
+  getAdminNoEventRegexRules: vi.fn().mockResolvedValue([]),
+  setAdminUserRole: vi.fn(),
+  proposeAdminNoEventRegex: vi.fn(),
+  confirmAdminNoEventRegex: vi.fn(),
+  deleteAdminNoEventRegex: vi.fn(),
+  deleteAdminNoEventStream: vi.fn(),
   importAdminPatternGroups: vi.fn(),
   testAdminSearchPatterns: vi.fn(),
   testAdminSearchQuery: vi.fn(),
@@ -188,7 +196,7 @@ describe("AdminPage JSON import", () => {
     fireEvent.change((await screen.findAllByRole("combobox"))[2], {
       target: { value: "provider" },
     });
-    const [valueInput, patternsInput, countryCodesInput] = screen.getAllByRole("textbox").slice(4);
+    const [valueInput, patternsInput, countryCodesInput] = screen.getAllByRole("textbox").slice(5);
     fireEvent.change(valueInput, {
       target: { value: "viaplay" },
     });

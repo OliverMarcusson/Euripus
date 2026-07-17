@@ -48,6 +48,7 @@ vi.mock("@/components/player/plyr-surface", () => ({
 
 vi.mock("@/lib/api", () => ({
   getRemoteControllerTarget: vi.fn().mockResolvedValue(null),
+  markAdminChannelNoEvent: vi.fn(),
   startChannelPlayback: vi.fn(),
   startProgramPlayback: vi.fn(),
   pauseRemotePlayback: vi.fn(),

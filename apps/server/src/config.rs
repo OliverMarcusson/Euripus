@@ -29,6 +29,8 @@ pub struct Config {
     pub google_client_secret: Option<String>,
     pub google_calendar_redirect_url: Option<Url>,
     pub admin_password: Option<String>,
+    pub pi_executable: String,
+    pub pi_model: String,
 }
 
 impl Config {
@@ -93,6 +95,8 @@ impl Config {
                     .context("failed to build Google Calendar redirect URL")?,
             };
         let admin_password = read_optional_env("APP_ADMIN_PASSWORD")?;
+        let pi_executable = read_env_or_default("APP_PI_EXECUTABLE", "pi")?;
+        let pi_model = read_env_or_default("APP_PI_MODEL", "gpt-5.6-terra")?;
         let decoded_key = STANDARD
             .decode(read_env("APP_ENCRYPTION_KEY_B64")?)
             .context("APP_ENCRYPTION_KEY_B64 must be valid base64")?;
@@ -124,6 +128,8 @@ impl Config {
             google_client_secret,
             google_calendar_redirect_url,
             admin_password,
+            pi_executable,
+            pi_model,
         })
     }
 }

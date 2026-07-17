@@ -163,6 +163,10 @@ async fn get_channel(
     Path(id): Path<Uuid>,
 ) -> ApiResult<ChannelResponse> {
     let auth = require_auth(&state, &headers).await?;
+    let visibility = load_channel_visibility_map(&state, auth.user_id, None).await?;
+    if visibility.get(&id).is_some_and(|value| value.is_hidden) {
+        return Err(AppError::NotFound("Channel not found".to_string()));
+    }
     let mut channel = sqlx::query_as::<_, ChannelResponse>(
         r#"
         SELECT
@@ -1749,6 +1753,8 @@ mod tests {
                 google_client_secret: None,
                 google_calendar_redirect_url: None,
                 admin_password: None,
+                pi_executable: "pi".to_string(),
+                pi_model: "gpt-5.6-terra".to_string(),
             }),
             provider_http_client: reqwest::Client::new(),
             relay_http_client: reqwest::Client::new(),

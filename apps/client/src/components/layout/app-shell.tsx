@@ -43,6 +43,7 @@ import { cn } from "@/lib/utils";
 import { useAuthStore } from "@/store/auth-store";
 import { usePlayerStore } from "@/store/player-store";
 import { useRemoteControllerStore } from "@/store/remote-controller-store";
+import { useChannelSettingsStore } from "@/store/channel-settings-store";
 
 const navigation = [
   { to: "/guide", label: "Guide", icon: TvMinimal },
@@ -189,6 +190,7 @@ export function AppShell() {
   });
   const user = useAuthStore((state) => state.user);
   const clearSession = useAuthStore((state) => state.clearSession);
+  const adminToolsEnabled = useChannelSettingsStore((state) => state.adminToolsEnabled);
   const hasPlayerSource = usePlayerStore((state) => !!state.source);
   const clearTarget = useRemoteControllerStore((state) => state.clearTarget);
   const initials = (user?.username ?? "Guest")
@@ -235,6 +237,9 @@ export function AppShell() {
               <DropdownMenuItem asChild>
                 <Link to="/settings">Open settings</Link>
               </DropdownMenuItem>
+              {user?.isAdmin && adminToolsEnabled ? (
+                <DropdownMenuItem asChild><Link to="/admin">Open admin panel</Link></DropdownMenuItem>
+              ) : null}
               <DropdownMenuItem onClick={handleLogout}>
                 <LogOut data-icon="inline-start" />
                 Sign out
@@ -338,6 +343,9 @@ export function AppShell() {
                 <DropdownMenuItem asChild className="cursor-pointer rounded-lg">
                   <Link to="/settings">Open settings</Link>
                 </DropdownMenuItem>
+                {user?.isAdmin && adminToolsEnabled ? (
+                  <DropdownMenuItem asChild className="cursor-pointer rounded-lg"><Link to="/admin">Open admin panel</Link></DropdownMenuItem>
+                ) : null}
                 <DropdownMenuItem
                   onClick={handleLogout}
                   className="cursor-pointer rounded-lg text-destructive focus:text-destructive"

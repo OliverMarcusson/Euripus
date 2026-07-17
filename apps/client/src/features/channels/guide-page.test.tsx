@@ -19,6 +19,7 @@ vi.mock("@/lib/api", () => ({
   getGuide: vi.fn(),
   getGuideCategory: vi.fn(),
   getGuidePreferences: vi.fn(),
+  markAdminChannelNoEvent: vi.fn(),
   removeCategoryFavorite: vi.fn(),
   removeFavorite: vi.fn(),
   saveGuidePreferences: vi.fn(),

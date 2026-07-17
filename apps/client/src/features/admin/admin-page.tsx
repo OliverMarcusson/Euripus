@@ -9,6 +9,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronDown } from "lucide-react";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { PageHeader } from "@/components/layout/page-header";
+import { useAuthStore } from "@/store/auth-store";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -17,6 +18,14 @@ import { Label } from "@/components/ui/label";
 import {
   adminLogin,
   adminLogout,
+  confirmAdminNoEventRegex,
+  deleteAdminNoEventRegex,
+  deleteAdminNoEventStream,
+  getAdminNoEventRegexRules,
+  getAdminNoEventStreams,
+  getAdminUsers,
+  proposeAdminNoEventRegex,
+  setAdminUserRole,
   createAdminRestrictedAccount,
   deleteAdminRestrictedAccount,
   createAdminPatternGroup,
@@ -76,6 +85,7 @@ const DEFAULT_MANAGED_ACCOUNT: AdminRestrictedAccountInput = {
 
 export function AdminPage() {
   const queryClient = useQueryClient();
+  const signedInAdmin = useAuthStore((state) => state.user?.isAdmin ?? false);
   const [password, setPassword] = useState("");
   const [selectedQualityPrefixes, setSelectedQualityPrefixes] = useState<string[]>([]);
   const [includeCategoriesWithoutCountryPrefix, setIncludeCategoriesWithoutCountryPrefix] = useState(false);
@@ -94,6 +104,7 @@ export function AdminPage() {
   );
   const [managedAccount, setManagedAccount] = useState<AdminRestrictedAccountInput>(DEFAULT_MANAGED_ACCOUNT);
   const [editingManagedAccountId, setEditingManagedAccountId] = useState<string | null>(null);
+  const [noEventSample, setNoEventSample] = useState("");
 
   const groupsQuery = useQuery({
     queryKey: ["admin", "pattern-groups"],
@@ -110,6 +121,9 @@ export function AdminPage() {
     queryFn: getAdminRestrictedAccounts,
     retry: false,
   });
+  const usersQuery = useQuery({ queryKey: ["admin", "users"], queryFn: getAdminUsers, retry: false });
+  const noEventStreamsQuery = useQuery({ queryKey: ["admin", "no-event-streams"], queryFn: getAdminNoEventStreams, retry: false });
+  const noEventRegexQuery = useQuery({ queryKey: ["admin", "no-event-regex"], queryFn: getAdminNoEventRegexRules, retry: false });
 
   useEffect(() => {
     if (qualityPrefixesQuery.data) {
@@ -143,6 +157,32 @@ export function AdminPage() {
       await queryClient.invalidateQueries({ queryKey: ["admin"] });
     },
   });
+  const setAdminMutation = useMutation({
+    mutationFn: ({ id, isAdmin }: { id: string; isAdmin: boolean }) => setAdminUserRole(id, isAdmin),
+    onSuccess: async (updatedUser) => {
+      if (useAuthStore.getState().user?.id === updatedUser.id) {
+        useAuthStore.setState({ user: updatedUser });
+      }
+      await queryClient.invalidateQueries({ queryKey: ["admin", "users"] });
+    },
+  });
+  const proposeRegexMutation = useMutation({
+    mutationFn: proposeAdminNoEventRegex,
+    onSuccess: async () => { setNoEventSample(""); await queryClient.invalidateQueries({ queryKey: ["admin", "no-event-regex"] }); },
+  });
+  const confirmRegexMutation = useMutation({
+    mutationFn: confirmAdminNoEventRegex,
+    onSuccess: async () => { await queryClient.invalidateQueries({ queryKey: ["admin"] }); },
+  });
+  const deleteRegexMutation = useMutation({
+    mutationFn: deleteAdminNoEventRegex,
+    onSuccess: async () => { await queryClient.invalidateQueries({ queryKey: ["admin", "no-event-regex"] }); },
+  });
+  const deleteStreamMutation = useMutation({
+    mutationFn: deleteAdminNoEventStream,
+    onSuccess: async () => { await queryClient.invalidateQueries({ queryKey: ["admin", "no-event-streams"] }); },
+  });
+
   const createManagedAccountMutation = useMutation({
     mutationFn: createAdminRestrictedAccount,
     onSuccess: async () => {
@@ -281,17 +321,70 @@ export function AdminPage() {
         meta={
           <>
             <Badge variant="outline">{(groupsQuery.data ?? []).length} groups</Badge>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => logoutMutation.mutate()}
-              disabled={logoutMutation.isPending}
-            >
-              Sign out
-            </Button>
+            {signedInAdmin ? (
+              <Button variant="outline" size="sm" onClick={() => { window.location.href = "/settings"; }}>
+                Back to Euripus
+              </Button>
+            ) : (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => logoutMutation.mutate()}
+                disabled={logoutMutation.isPending}
+              >
+                Sign out
+              </Button>
+            )}
           </>
         }
       />
+
+      <Card>
+        <CardHeader><CardTitle>Administrators</CardTitle></CardHeader>
+        <CardContent className="flex flex-col gap-3">
+          <p className="text-sm text-muted-foreground">Administrators can open this panel with their normal Euripus session and use channel moderation tools.</p>
+          {(usersQuery.data ?? []).map((account) => (
+            <label key={account.id} className="flex items-center justify-between gap-4 rounded-lg border p-3">
+              <span><strong>{account.username}</strong><span className="block text-xs text-muted-foreground">{account.providerLocked ? "Restricted provider" : "Standard user"}</span></span>
+              <input type="checkbox" aria-label={`Administrator ${account.username}`} checked={account.isAdmin} disabled={setAdminMutation.isPending} onChange={(event) => setAdminMutation.mutate({ id: account.id, isAdmin: event.target.checked })} />
+            </label>
+          ))}
+          {setAdminMutation.error instanceof Error ? <p className="text-sm text-destructive">{setAdminMutation.error.message}</p> : null}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader><CardTitle>No-event HLS streams</CardTitle></CardHeader>
+        <CardContent className="flex flex-col gap-3">
+          <p className="text-sm text-muted-foreground">Channels that resolve to one of these exact HLS origin/path fingerprints are filtered. Mark a stream from its channel controls.</p>
+          {(noEventStreamsQuery.data ?? []).map((stream) => (
+            <div key={stream.id} className="flex items-center justify-between gap-3 rounded-lg border p-3">
+              <div className="min-w-0"><p className="font-medium">{stream.observedChannelName}</p><code className="block truncate text-xs text-muted-foreground">{stream.hlsStreamOrigin}{stream.hlsStreamPath}</code></div>
+              <Button variant="destructive" size="sm" disabled={deleteStreamMutation.isPending} onClick={() => deleteStreamMutation.mutate(stream.id)}>Remove</Button>
+            </div>
+          ))}
+          {!noEventStreamsQuery.isPending && !(noEventStreamsQuery.data?.length) ? <p className="text-sm text-muted-foreground">No HLS streams have been marked.</p> : null}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader><CardTitle>No-event channel-name filters</CardTitle></CardHeader>
+        <CardContent className="flex flex-col gap-4">
+          <p className="text-sm text-muted-foreground">Pi proposes a regex from an observed channel name. Review its preview before confirming it.</p>
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <Input value={noEventSample} onChange={(event) => setNoEventSample(event.target.value)} placeholder=":Viaplay SE 17" />
+            <Button disabled={proposeRegexMutation.isPending || !noEventSample.trim()} onClick={() => proposeRegexMutation.mutate(noEventSample)}>{proposeRegexMutation.isPending ? "Generating..." : "Generate proposal"}</Button>
+          </div>
+          {proposeRegexMutation.error instanceof Error ? <p className="text-sm text-destructive">{proposeRegexMutation.error.message}</p> : null}
+          {(noEventRegexQuery.data ?? []).map((rule) => (
+            <div key={rule.id} className="flex flex-col gap-3 rounded-lg border p-4">
+              <div><Badge variant="outline">{rule.status}</Badge><code className="mt-2 block break-all text-sm">{rule.pattern}</code><p className="mt-1 text-sm text-muted-foreground">{rule.explanation}</p></div>
+              <p className="text-xs text-muted-foreground">Matches {rule.matchCount} channel{rule.matchCount === 1 ? "" : "s"}{rule.matchingChannelNames.length ? `: ${rule.matchingChannelNames.join(", ")}` : ""}</p>
+              <div className="flex gap-2">{rule.status === "pending" ? <Button size="sm" disabled={confirmRegexMutation.isPending} onClick={() => confirmRegexMutation.mutate(rule.id)}>Confirm filter</Button> : null}<Button variant="destructive" size="sm" disabled={deleteRegexMutation.isPending} onClick={() => deleteRegexMutation.mutate(rule.id)}>Delete</Button></div>
+            </div>
+          ))}
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader><CardTitle>Quality channels</CardTitle></CardHeader>

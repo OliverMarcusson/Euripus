@@ -264,6 +264,7 @@ async fn resolve_channel_playback_source_for_target(
     .await?
     .ok_or_else(|| AppError::NotFound("Channel not found".to_string()))?;
 
+    ensure_channel_is_visible(state, user_id, record.profile_id, record.id).await?;
     let credentials = playback_credentials(state, &record)?;
     let browser_hls_preflight_required = target_requires_browser_hls_preflight(
         target,
@@ -384,6 +385,7 @@ async fn resolve_program_playback_source_for_target(
             "This program is not mapped to a playable channel.",
         ));
     };
+    ensure_channel_is_visible(state, user_id, row.profile_id, channel_id).await?;
     touch_recent(&state.pool, user_id, channel_id).await?;
 
     match behavior {
@@ -475,6 +477,22 @@ async fn resolve_program_playback_source_for_target(
             Ok(unsupported_playback(&row.title, reason))
         }
     }
+}
+
+async fn ensure_channel_is_visible(
+    state: &AppState,
+    user_id: Uuid,
+    profile_id: Uuid,
+    channel_id: Uuid,
+) -> Result<(), AppError> {
+    let visibility = load_channel_visibility_map(state, user_id, Some(profile_id)).await?;
+    if visibility
+        .get(&channel_id)
+        .is_some_and(|value| value.is_hidden)
+    {
+        return Err(AppError::NotFound("Channel not found".to_string()));
+    }
+    Ok(())
 }
 
 fn playback_credentials(
@@ -607,6 +625,8 @@ mod tests {
                 google_client_secret: None,
                 google_calendar_redirect_url: None,
                 admin_password: None,
+                pi_executable: "pi".to_string(),
+                pi_model: "gpt-5.6-terra".to_string(),
             }),
             provider_http_client: reqwest::Client::new(),
             relay_http_client: reqwest::Client::new(),

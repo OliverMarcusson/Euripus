@@ -197,6 +197,8 @@ mod tests {
                 google_client_secret: None,
                 google_calendar_redirect_url: None,
                 admin_password: None,
+                pi_executable: "pi".to_string(),
+                pi_model: "gpt-5.6-terra".to_string(),
             }),
             provider_http_client: reqwest::Client::new(),
             relay_http_client: reqwest::Client::new(),

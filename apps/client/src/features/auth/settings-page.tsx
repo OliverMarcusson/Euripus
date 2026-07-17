@@ -82,11 +82,13 @@ function SettingsSwitch({
 }
 
 function SettingSwitchRow({
+  title = "PPV event dates",
   label,
   id,
   checked,
   onToggle,
 }: {
+  title?: string;
   label: string;
   id: string;
   checked: boolean;
@@ -94,7 +96,7 @@ function SettingSwitchRow({
 }) {
   return (
     <div className="grid gap-4 py-6 md:grid-cols-[minmax(0,240px)_minmax(0,520px)] md:items-center md:justify-between">
-      <h2 className="text-sm font-medium">PPV event dates</h2>
+      <h2 className="text-sm font-medium">{title}</h2>
       <div className="flex items-center justify-between gap-4">
         <label htmlFor={id} className="text-sm text-muted-foreground">
           {label}
@@ -156,6 +158,12 @@ export function SettingsPage() {
   );
   const setQualityChannelsOnly = useChannelSettingsStore(
     (state) => state.setQualityChannelsOnly,
+  );
+  const adminToolsEnabled = useChannelSettingsStore(
+    (state) => state.adminToolsEnabled,
+  );
+  const setAdminToolsEnabled = useChannelSettingsStore(
+    (state) => state.setAdminToolsEnabled,
   );
   const recents = recentsQuery.data ?? [];
   const remoteDevices = remoteDevicesQuery.data ?? [];
@@ -358,6 +366,16 @@ export function SettingsPage() {
               checked={filterPpvByDate}
               onToggle={() => setFilterPpvByDate(!filterPpvByDate)}
             />
+
+            {user?.isAdmin ? (
+              <SettingSwitchRow
+                title="Admin tools"
+                label="Show channel moderation controls"
+                id="admin-tools-toggle"
+                checked={adminToolsEnabled}
+                onToggle={() => setAdminToolsEnabled(!adminToolsEnabled)}
+              />
+            ) : null}
 
             <div className="grid gap-4 py-6 md:grid-cols-[minmax(0,240px)_minmax(0,520px)] md:items-center md:justify-between">
               <h2 className="text-sm font-medium">Quality channels</h2>

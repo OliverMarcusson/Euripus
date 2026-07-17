@@ -33,6 +33,8 @@ services:
       - apps/server/.env
     environment:
       APP_MEILISEARCH_URL: http://meilisearch:7700
+    volumes:
+      - ${EURIPUS_PI_AGENT_DIR:-./.runtime/pi-agent}:/root/.pi/agent
     depends_on:
       meilisearch:
         condition: service_started

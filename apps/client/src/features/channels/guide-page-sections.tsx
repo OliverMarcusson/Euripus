@@ -1,4 +1,4 @@
-import { useInfiniteQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import type { Channel, GuideCategorySummary } from "@euripus/shared";
 import {
   Check,
@@ -33,7 +33,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Toggle } from "@/components/ui/toggle";
-import { getGuideCategory } from "@/lib/api";
+import { getGuideCategory, markAdminChannelNoEvent } from "@/lib/api";
 import { STANDARD_QUERY_STALE_TIME_MS } from "@/lib/query-cache";
 import {
   cn,
@@ -44,6 +44,7 @@ import {
   shouldShowChannelForPpvDateFilter,
 } from "@/lib/utils";
 import { useChannelSettingsStore } from "@/store/channel-settings-store";
+import { useAuthStore } from "@/store/auth-store";
 
 const GUIDE_PAGE_SIZE = 40;
 const FILTERED_GUIDE_PAGE_SIZE = 100;
@@ -276,6 +277,15 @@ export function GuideCategorySection({
   const filterPpvByDate = useChannelSettingsStore(
     (state) => state.filterPpvByDate,
   );
+  const adminToolsEnabled = useChannelSettingsStore((state) => state.adminToolsEnabled);
+  const isAdmin = useAuthStore((state) => state.user?.isAdmin ?? false);
+  const queryClient = useQueryClient();
+  const markNoEventMutation = useMutation({
+    mutationFn: markAdminChannelNoEvent,
+    onSuccess: async () => {
+      await queryClient.invalidateQueries();
+    },
+  });
   const qualityChannelsOnly = useChannelSettingsStore((state) => state.qualityChannelsOnly);
   const categoryQuery = useInfiniteQuery({
     queryKey: ["guide", "category", category.id, { withEpgOnly: showOnlyChannelsWithEpg, qualityChannelsOnly }],
@@ -495,6 +505,16 @@ export function GuideCategorySection({
                               {channel.isPpvFavorite ? "Remove PPV" : "Save PPV"}
                             </Button>
                           ) : null}
+                          {isAdmin && adminToolsEnabled ? (
+                            <Button
+                              variant="destructive"
+                              size="sm"
+                              disabled={markNoEventMutation.isPending}
+                              onClick={() => markNoEventMutation.mutate(channel.id)}
+                            >
+                              No event
+                            </Button>
+                          ) : null}
                           <Button
                             size="sm"
                             className="min-w-24 shadow-sm"
@@ -531,6 +551,16 @@ export function GuideCategorySection({
                           >
                             <Clapperboard data-icon="inline-start" className={channel.isPpvFavorite ? "fill-current opacity-70" : "opacity-70"} />
                             {channel.isPpvFavorite ? "Remove PPV" : "Save PPV"}
+                          </Button>
+                        ) : null}
+                        {isAdmin && adminToolsEnabled ? (
+                          <Button
+                            variant="destructive"
+                            className="flex-1"
+                            disabled={markNoEventMutation.isPending}
+                            onClick={() => markNoEventMutation.mutate(channel.id)}
+                          >
+                            No event
                           </Button>
                         ) : null}
                         <Button
