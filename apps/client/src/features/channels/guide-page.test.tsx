@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { GuidePage } from "@/features/channels/guide-page";
 import { getGuide, getGuideCategory, getGuidePreferences, saveGuidePreferences } from "@/lib/api";
+import { useChannelSettingsStore } from "@/store/channel-settings-store";
 
 vi.mock("@tanstack/react-router", async () => {
   const actual = await vi.importActual<typeof import("@tanstack/react-router")>("@tanstack/react-router");
@@ -33,6 +34,7 @@ const mockedSaveGuidePreferences = vi.mocked(saveGuidePreferences);
 describe("GuidePage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    useChannelSettingsStore.setState({ filterPpvByDate: false });
     mockedGetGuidePreferences.mockResolvedValue({ includedCategoryIds: [] });
     mockedSaveGuidePreferences.mockResolvedValue({ includedCategoryIds: [] });
     mockedGetGuide.mockResolvedValue({
@@ -209,6 +211,79 @@ describe("GuidePage", () => {
     expect(screen.getByText("Matchday Live")).toBeInTheDocument();
   });
 
+  it("automatically exhausts category pages when the PPV date filter is enabled", async () => {
+    useChannelSettingsStore.setState({ filterPpvByDate: true });
+    mockedGetGuideCategory
+      .mockResolvedValueOnce({
+        category: {
+          id: "sports",
+          name: "US| ESPN+ PPV",
+          channelCount: 2,
+          liveNowCount: 0,
+          isFavorite: false,
+        },
+        entries: [
+          {
+            channel: {
+              id: "old-ppv",
+              name: "Old event (2020-01-01 12:00:00)",
+              logoUrl: null,
+              categoryName: "US| ESPN+ PPV",
+              remoteStreamId: 1,
+              epgChannelId: null,
+              hasEpg: false,
+              hasCatchup: false,
+              archiveDurationHours: null,
+              streamExtension: "m3u8",
+              isFavorite: false,
+              isPpv: false,
+            },
+            program: null,
+          },
+        ],
+        totalCount: 2,
+        nextOffset: 40,
+      })
+      .mockResolvedValueOnce({
+        category: {
+          id: "sports",
+          name: "US| ESPN+ PPV",
+          channelCount: 2,
+          liveNowCount: 0,
+          isFavorite: false,
+        },
+        entries: [
+          {
+            channel: {
+              id: "undated-ppv",
+              name: "ESPN+ event channel",
+              logoUrl: null,
+              categoryName: "US| ESPN+ PPV",
+              remoteStreamId: 2,
+              epgChannelId: null,
+              hasEpg: false,
+              hasCatchup: false,
+              archiveDurationHours: null,
+              streamExtension: "m3u8",
+              isFavorite: false,
+              isPpv: false,
+            },
+            program: null,
+          },
+        ],
+        totalCount: 2,
+        nextOffset: null,
+      });
+
+    renderGuidePage();
+    fireEvent.click((await screen.findAllByRole("button", { name: /show channels/i }))[0]);
+
+    expect(await screen.findByText("ESPN+ event channel")).toBeInTheDocument();
+    await waitFor(() => expect(mockedGetGuideCategory).toHaveBeenCalledTimes(2));
+    expect(screen.queryByRole("button", { name: /load more/i })).not.toBeInTheDocument();
+    expect(screen.getByText("1 matching")).toBeInTheDocument();
+  });
+
   it("shows channels even when a category entry has no program metadata", async () => {
     mockedGetGuideCategory.mockResolvedValue({
       category: {
@@ -245,6 +320,46 @@ describe("GuidePage", () => {
 
     expect(await screen.findByText("Arena 3")).toBeInTheDocument();
     expect(screen.getByText("No program data")).toBeInTheDocument();
+  });
+
+  it("filters dated PPV channels outside the current window", async () => {
+    useChannelSettingsStore.setState({ filterPpvByDate: true });
+    mockedGetGuideCategory.mockResolvedValue({
+      category: {
+        id: "ppv",
+        name: "US| ESPN+ PPV",
+        channelCount: 1,
+        liveNowCount: 0,
+        isFavorite: false,
+      },
+      entries: [
+        {
+          channel: {
+            id: "old-ppv",
+            name: "Old event (2020-01-01 12:00:00)",
+            logoUrl: null,
+            categoryName: "US| ESPN+ PPV",
+            remoteStreamId: 9,
+            epgChannelId: null,
+            hasEpg: false,
+            hasCatchup: false,
+            archiveDurationHours: null,
+            streamExtension: "m3u8",
+            isFavorite: false,
+            isPpv: false,
+          },
+          program: null,
+        },
+      ],
+      totalCount: 1,
+      nextOffset: null,
+    });
+
+    renderGuidePage();
+    fireEvent.click((await screen.findAllByRole("button", { name: /show channels/i }))[0]);
+
+    expect(await screen.findByText("No channels available in this category")).toBeInTheDocument();
+    expect(screen.queryByText(/old event/i)).not.toBeInTheDocument();
   });
 
   it("shows only saved included categories", async () => {

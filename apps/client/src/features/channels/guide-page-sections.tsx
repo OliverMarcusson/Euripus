@@ -11,7 +11,7 @@ import {
   SlidersHorizontal,
   X,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { KeyboardEvent } from "react";
 import { ChannelAvatar } from "@/components/ui/channel-avatar";
 import { Badge } from "@/components/ui/badge";
@@ -41,9 +41,12 @@ import {
   formatEventChannelTitle,
   formatTimeRange,
   getTimeProgress,
+  shouldShowChannelForPpvDateFilter,
 } from "@/lib/utils";
+import { useChannelSettingsStore } from "@/store/channel-settings-store";
 
 const GUIDE_PAGE_SIZE = 40;
+const FILTERED_GUIDE_PAGE_SIZE = 100;
 
 type GuideCategoryFilterCardProps = {
   categories: GuideCategorySummary[];
@@ -270,13 +273,16 @@ export function GuideCategorySection({
   onTogglePpvFavorite,
   onPlay,
 }: GuideCategorySectionProps) {
+  const filterPpvByDate = useChannelSettingsStore(
+    (state) => state.filterPpvByDate,
+  );
   const categoryQuery = useInfiniteQuery({
     queryKey: ["guide", "category", category.id, { withEpgOnly: showOnlyChannelsWithEpg }],
     queryFn: ({ pageParam }) =>
       getGuideCategory(
         category.id,
         pageParam,
-        GUIDE_PAGE_SIZE,
+        filterPpvByDate ? FILTERED_GUIDE_PAGE_SIZE : GUIDE_PAGE_SIZE,
         showOnlyChannelsWithEpg,
       ),
     initialPageParam: 0,
@@ -284,11 +290,47 @@ export function GuideCategorySection({
     enabled: open,
     staleTime: STANDARD_QUERY_STALE_TIME_MS,
   });
-  const entries =
-    categoryQuery.data?.pages.flatMap((page) => page.entries) ?? [];
+  const entries = useMemo(
+    () => (categoryQuery.data?.pages.flatMap((page) => page.entries) ?? [])
+      .filter(({ channel }) => shouldShowChannelForPpvDateFilter(channel, {
+        enabled: filterPpvByDate,
+      })),
+    [categoryQuery.data, filterPpvByDate],
+  );
   const hasEntries = entries.length > 0;
-  const isInitialLoading = open && categoryQuery.isLoading && !hasEntries;
+  const isLoadingFilteredPages = filterPpvByDate
+    && (categoryQuery.hasNextPage || categoryQuery.isFetchingNextPage);
+  const isInitialLoading = open
+    && (categoryQuery.isLoading || isLoadingFilteredPages)
+    && !hasEntries;
+  const displayedChannelCount = filterPpvByDate && categoryQuery.data
+    ? entries.length
+    : category.channelCount;
+  const channelCountLabel = filterPpvByDate && categoryQuery.data
+    ? `${displayedChannelCount}${isLoadingFilteredPages ? "+" : ""} matching`
+    : `${displayedChannelCount} channels`;
   const Icon = open ? ChevronDown : ChevronRight;
+
+  useEffect(() => {
+    if (
+      !open
+      || !filterPpvByDate
+      || !categoryQuery.hasNextPage
+      || categoryQuery.isFetchingNextPage
+      || categoryQuery.isError
+    ) {
+      return;
+    }
+
+    void categoryQuery.fetchNextPage();
+  }, [
+    categoryQuery.fetchNextPage,
+    categoryQuery.hasNextPage,
+    categoryQuery.isError,
+    categoryQuery.isFetchingNextPage,
+    filterPpvByDate,
+    open,
+  ]);
 
   return (
     <Collapsible open={open} onOpenChange={onToggle}>
@@ -300,9 +342,7 @@ export function GuideCategorySection({
                 {category.name}
               </h2>
               <div className="flex flex-wrap items-center gap-2">
-                <Badge variant="outline">
-                  {category.channelCount} channels
-                </Badge>
+                <Badge variant="outline">{channelCountLabel}</Badge>
                 <Badge variant={category.liveNowCount ? "live" : "outline"}>
                   {category.liveNowCount} live now
                 </Badge>
@@ -543,7 +583,7 @@ export function GuideCategorySection({
               })
             : null}
 
-          {categoryQuery.hasNextPage ? (
+          {categoryQuery.hasNextPage && !filterPpvByDate ? (
             <>
               <Separator />
               <div className="p-5">
@@ -561,6 +601,7 @@ export function GuideCategorySection({
           ) : null}
 
           {!isInitialLoading
+          && !isLoadingFilteredPages
           && open
           && !hasEntries
           && !categoryQuery.isError ? (

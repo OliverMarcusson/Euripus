@@ -44,6 +44,7 @@ import type { ThemePreference } from "@/store/theme-store";
 import { useThemeStore } from "@/store/theme-store";
 import { useAuthStore } from "@/store/auth-store";
 import { usePlaybackSettingsStore } from "@/store/playback-settings-store";
+import { useChannelSettingsStore } from "@/store/channel-settings-store";
 
 const themeOptions: Array<{
   value: ThemePreference;
@@ -100,6 +101,12 @@ export function SettingsPage() {
   );
   const setLivePlaybackPreference = usePlaybackSettingsStore(
     (state) => state.setLivePlaybackPreference,
+  );
+  const filterPpvByDate = useChannelSettingsStore(
+    (state) => state.filterPpvByDate,
+  );
+  const setFilterPpvByDate = useChannelSettingsStore(
+    (state) => state.setFilterPpvByDate,
   );
   const recents = recentsQuery.data ?? [];
   const providers = providersQuery.data ?? [];
@@ -197,6 +204,44 @@ export function SettingsPage() {
                   ? "Uses a larger buffer to reduce interruptions."
                   : "Uses a smaller buffer and briefly speeds up when needed to catch up with live."}
               </p>
+            </div>
+
+            <Separator />
+
+            <div className="flex flex-col gap-3">
+              <div>
+                <h2 className="text-base font-medium tracking-tight">
+                  PPV event dates
+                </h2>
+                <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
+                  In discovery views, times with a recognized timezone are
+                  converted to this device&apos;s local timezone and shown for
+                  today or tomorrow between 00:00 and 06:59. Without a timezone,
+                  the printed date must be today. Undated channels remain visible.
+                </p>
+              </div>
+              <div className="flex items-center justify-between gap-3 rounded-2xl border border-border/40 bg-black/10 px-4 py-3 shadow-inner">
+                <label
+                  htmlFor="ppv-date-filter-toggle"
+                  className="text-sm font-medium"
+                >
+                  Filter PPV channels by date
+                </label>
+                <button
+                  id="ppv-date-filter-toggle"
+                  type="button"
+                  role="switch"
+                  aria-checked={filterPpvByDate}
+                  onClick={() => setFilterPpvByDate(!filterPpvByDate)}
+                  className="relative inline-flex h-8 w-14 shrink-0 items-center rounded-full border border-white/10 bg-muted/50 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background data-[state=checked]:bg-primary"
+                  data-state={filterPpvByDate ? "checked" : "unchecked"}
+                >
+                  <span
+                    className="relative z-10 mx-1 block size-6 rounded-full bg-white shadow-sm transition-transform data-[state=checked]:translate-x-6"
+                    data-state={filterPpvByDate ? "checked" : "unchecked"}
+                  />
+                </button>
+              </div>
             </div>
 
             <Separator />

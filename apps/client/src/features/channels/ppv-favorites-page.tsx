@@ -36,7 +36,9 @@ import {
   formatEventChannelTitle,
   getEventChannelPlaybackState,
   getProgramPlaybackState,
+  shouldShowChannelForPpvDateFilter,
 } from "@/lib/utils";
+import { useChannelSettingsStore } from "@/store/channel-settings-store";
 
 function isLiveFavorite(entry: FavoriteChannelEntry, now: Date) {
   if (entry.program) {
@@ -78,6 +80,9 @@ export function PpvFavoritesPage() {
   const [aiSubmittedQuery, setAiSubmittedQuery] = useState("");
   const [aiFavoriteOverrides, setAiFavoriteOverrides] = useState<Record<string, boolean>>(
     {},
+  );
+  const filterPpvByDate = useChannelSettingsStore(
+    (state) => state.filterPpvByDate,
   );
   const favoritesQuery = useQuery({
     queryKey: ["favorites", "ppv"],
@@ -175,20 +180,24 @@ export function PpvFavoritesPage() {
     });
   }
 
-  const aiResults = (aiSearchMutation.data?.items ?? []).map((result) => {
-    const override = aiFavoriteOverrides[result.channel.id];
-    if (override === undefined) {
-      return result;
-    }
+  const aiResults = (aiSearchMutation.data?.items ?? [])
+    .filter((result) => shouldShowChannelForPpvDateFilter(result.channel, {
+      enabled: filterPpvByDate,
+    }))
+    .map((result) => {
+      const override = aiFavoriteOverrides[result.channel.id];
+      if (override === undefined) {
+        return result;
+      }
 
-    return {
-      ...result,
-      channel: {
-        ...result.channel,
-        isPpvFavorite: override,
-      },
-    };
-  });
+      return {
+        ...result,
+        channel: {
+          ...result.channel,
+          isPpvFavorite: override,
+        },
+      };
+    });
 
   return (
     <div className="flex flex-col gap-5 sm:gap-6">
