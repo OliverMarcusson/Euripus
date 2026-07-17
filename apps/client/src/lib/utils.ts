@@ -1,4 +1,4 @@
-import type { Program } from "@euripus/shared";
+import type { Channel, Program } from "@euripus/shared";
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
 
@@ -32,17 +32,33 @@ const MONTH_TOKEN_TO_NUMBER = new Map<string, number>([
 const MONTH_TOKEN_PATTERN =
   "Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t|tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?";
 const TIME_ZONE_TOKEN_PATTERN =
-  "(?:ET|EST|EDT|CT|CST|CDT|MT|MST|MDT|PT|PST|PDT|CET|CEST|EET|EEST|BST|GMT|UTC|(?:UTC|GMT)[+-]\\d{1,2}(?::?\\d{2})?)";
+  "(?:(?:UTC|GMT)[+-]\\d{1,2}(?::?\\d{2})?|[+-]\\d{1,2}(?::?\\d{2})?|ET|EST|EDT|CT|CST|CDT|MT|MST|MDT|PT|PST|PDT|NDT|CET|CEST|EET|EEST|BST|GMT|UTC)";
 const TIME_OF_DAY_TOKEN_PATTERN =
   String.raw`(?<time>\d{1,2}:\d{2})(?:\s*(?<meridiem>AM|PM))?`;
+const OPTIONAL_TIME_ZONE_PATTERN =
+  String.raw`(?:\s*(?:\((?<timeZoneParen>${TIME_ZONE_TOKEN_PATTERN})\)|(?<timeZone>${TIME_ZONE_TOKEN_PATTERN})))?`;
+const ISO_EVENT_PATTERN = new RegExp(
+  String.raw`(?<year>\d{4})-(?<numericMonth>\d{2})-(?<day>\d{2})(?<separator>\s*(?:\|\s*)?)${TIME_OF_DAY_TOKEN_PATTERN}${OPTIONAL_TIME_ZONE_PATTERN}`,
+  "i",
+);
+const DAY_MONTH_YEAR_EVENT_PATTERN = new RegExp(
+  String.raw`(?<day>\d{1,2})-(?<numericMonth>\d{1,2})-(?<year>\d{4})(?<separator>\s*(?:\|\s*)?)${TIME_OF_DAY_TOKEN_PATTERN}${OPTIONAL_TIME_ZONE_PATTERN}`,
+  "i",
+);
 const MONTH_FIRST_EVENT_PATTERN = new RegExp(
-  String.raw`(?<marker>@\s*)?(?<month>${MONTH_TOKEN_PATTERN})\s+(?<day>\d{1,2})\s+${TIME_OF_DAY_TOKEN_PATTERN}(?:\s+(?<timeZone>${TIME_ZONE_TOKEN_PATTERN}))?`,
+  String.raw`(?<marker>@\s*)?(?<month>${MONTH_TOKEN_PATTERN})\s+(?<day>\d{1,2})(?:st|nd|rd|th)?\s+${TIME_OF_DAY_TOKEN_PATTERN}${OPTIONAL_TIME_ZONE_PATTERN}`,
   "i",
 );
 const WEEKDAY_DAY_MONTH_EVENT_PATTERN = new RegExp(
-  String.raw`(?<weekday>Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+(?<day>\d{1,2})\s+(?<month>${MONTH_TOKEN_PATTERN})\s+${TIME_OF_DAY_TOKEN_PATTERN}(?:\s+(?<timeZone>${TIME_ZONE_TOKEN_PATTERN}))?`,
+  String.raw`(?<weekday>Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+(?<day>\d{1,2})(?:st|nd|rd|th)?\s+(?<month>${MONTH_TOKEN_PATTERN})\s+${TIME_OF_DAY_TOKEN_PATTERN}${OPTIONAL_TIME_ZONE_PATTERN}`,
   "i",
 );
+const WEEKDAY_MONTH_DAY_EVENT_PATTERN = new RegExp(
+  String.raw`(?<weekday>Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+(?<month>${MONTH_TOKEN_PATTERN})\s+(?<day>\d{1,2})(?:st|nd|rd|th)?\s+${TIME_OF_DAY_TOKEN_PATTERN}${OPTIONAL_TIME_ZONE_PATTERN}`,
+  "i",
+);
+const ISO_DATE_PATTERN = /\b(?<year>\d{4})-(?<numericMonth>\d{2})-(?<day>\d{2})\b/;
+const DAY_MONTH_YEAR_DATE_PATTERN = /\b(?<day>\d{1,2})-(?<numericMonth>\d{1,2})-(?<year>\d{4})\b/;
 
 const IANA_TIME_ZONES_BY_TOKEN: Record<string, string> = {
   ET: "America/New_York",
@@ -67,6 +83,7 @@ const FIXED_OFFSET_MINUTES_BY_TOKEN: Record<string, number> = {
   EET: 2 * 60,
   EEST: 3 * 60,
   BST: 1 * 60,
+  NDT: -(2 * 60 + 30),
 };
 
 type EventChannelTitleFormatOptions = {
@@ -82,15 +99,26 @@ type EventChannelPlaybackOptions = {
 };
 
 type EventTimestampMatch = {
-  kind: "month-first" | "weekday-day-month";
+  kind: "month-first" | "weekday-day-month" | "iso" | "day-month-year";
   match: RegExpExecArray;
   marker?: string;
+  separator?: string;
+  year: number | null;
   month: number;
   day: number;
   dayText: string;
   hour: number;
   minute: number;
   meridiem: "AM" | "PM" | null;
+  timeZoneToken: string | null;
+};
+
+type EventDateParts = {
+  year: number | null;
+  month: number;
+  day: number;
+  hour: number | null;
+  minute: number | null;
   timeZoneToken: string | null;
 };
 
@@ -263,6 +291,56 @@ export function canPlayProgram(program: Program, now = Date.now()) {
   return state === "live" || state === "catchup";
 }
 
+export function isPpvChannel(channel: Pick<Channel, "isPpv" | "categoryName">) {
+  return Boolean(channel.isPpv || /\bppv\b/i.test(channel.categoryName ?? ""));
+}
+
+export function shouldShowChannelForPpvDateFilter(
+  channel: Pick<Channel, "name" | "isPpv" | "categoryName">,
+  options: { enabled: boolean; now?: Date; targetTimeZone?: string },
+) {
+  if (!options.enabled || !isPpvChannel(channel)) {
+    return true;
+  }
+
+  const now = options.now ?? new Date();
+  const event = detectEventDateParts(channel.name);
+  if (!event) {
+    return true;
+  }
+
+  if (!event.timeZoneToken) {
+    const year = event.year ?? inferClosestLocalYear(event.month, event.day, now);
+    return sameCalendarDate(
+      { year, month: event.month, day: event.day },
+      getNumericDateTimeParts(now, options.targetTimeZone),
+    );
+  }
+
+  const sourceTimeZone = resolveSourceTimeZone(event.timeZoneToken);
+  if (!sourceTimeZone || event.hour === null || event.minute === null) {
+    return true;
+  }
+
+  const eventMatch = event.timestampMatch;
+  if (!eventMatch) {
+    return true;
+  }
+  const eventDate = inferEventDate(eventMatch, sourceTimeZone, now);
+  if (!eventDate) {
+    return true;
+  }
+
+  const localEvent = getNumericDateTimeParts(eventDate, options.targetTimeZone);
+  const localToday = getNumericDateTimeParts(now, options.targetTimeZone);
+  if (sameCalendarDate(localEvent, localToday)) {
+    return true;
+  }
+
+  const tomorrow = addCalendarDays(localToday, 1);
+  return sameCalendarDate(localEvent, tomorrow) && localEvent.hour <= 6;
+}
+
 function resolveEventChannelTimestamp(
   title: string,
   options: { referenceStartAt?: string | null; now?: Date },
@@ -289,49 +367,87 @@ function resolveEventChannelTimestamp(
 }
 
 function detectEventTimestamp(title: string): EventTimestampMatch | null {
-  const monthFirstMatch = MONTH_FIRST_EVENT_PATTERN.exec(title);
-  if (monthFirstMatch?.groups) {
-    const month = monthTokenToNumber(monthFirstMatch.groups.month);
-    const day = Number.parseInt(monthFirstMatch.groups.day, 10);
+  const patterns: Array<{
+    kind: EventTimestampMatch["kind"];
+    pattern: RegExp;
+  }> = [
+    { kind: "weekday-day-month", pattern: WEEKDAY_DAY_MONTH_EVENT_PATTERN },
+    { kind: "weekday-day-month", pattern: WEEKDAY_MONTH_DAY_EVENT_PATTERN },
+    { kind: "month-first", pattern: MONTH_FIRST_EVENT_PATTERN },
+    { kind: "iso", pattern: ISO_EVENT_PATTERN },
+    { kind: "day-month-year", pattern: DAY_MONTH_YEAR_EVENT_PATTERN },
+  ];
+
+  for (const { kind, pattern } of patterns) {
+    const match = pattern.exec(title);
+    if (!match?.groups) {
+      continue;
+    }
+
+    const month = match.groups.numericMonth
+      ? Number.parseInt(match.groups.numericMonth, 10)
+      : monthTokenToNumber(match.groups.month);
+    const day = Number.parseInt(match.groups.day, 10);
+    const year = match.groups.year
+      ? Number.parseInt(match.groups.year, 10)
+      : null;
     const [hour, minute] = parseTimeToken(
-      monthFirstMatch.groups.time,
-      monthFirstMatch.groups.meridiem,
+      match.groups.time,
+      match.groups.meridiem,
     );
-    if (month && Number.isFinite(day) && hour !== null && minute !== null) {
+    if (
+      month
+      && month >= 1
+      && month <= 12
+      && Number.isFinite(day)
+      && hour !== null
+      && minute !== null
+    ) {
       return {
-        kind: "month-first",
-        match: monthFirstMatch,
-        marker: monthFirstMatch.groups.marker,
+        kind,
+        match,
+        marker: match.groups.marker,
+        separator: match.groups.separator,
+        year,
         month,
         day,
-        dayText: monthFirstMatch.groups.day,
+        dayText: match.groups.day,
         hour,
         minute,
-        meridiem: normalizeMeridiem(monthFirstMatch.groups.meridiem),
-        timeZoneToken: monthFirstMatch.groups.timeZone ?? null,
+        meridiem: normalizeMeridiem(match.groups.meridiem),
+        timeZoneToken:
+          match.groups.timeZoneParen ?? match.groups.timeZone ?? null,
       };
     }
   }
 
-  const weekdayDayMonthMatch = WEEKDAY_DAY_MONTH_EVENT_PATTERN.exec(title);
-  if (weekdayDayMonthMatch?.groups) {
-    const month = monthTokenToNumber(weekdayDayMonthMatch.groups.month);
-    const day = Number.parseInt(weekdayDayMonthMatch.groups.day, 10);
-    const [hour, minute] = parseTimeToken(
-      weekdayDayMonthMatch.groups.time,
-      weekdayDayMonthMatch.groups.meridiem,
-    );
-    if (month && Number.isFinite(day) && hour !== null && minute !== null) {
+  return null;
+}
+
+function detectEventDateParts(title: string): EventDateParts & {
+  timestampMatch?: EventTimestampMatch;
+} | null {
+  const timestampMatch = detectEventTimestamp(title);
+  if (timestampMatch) {
+    return { ...timestampMatch, timestampMatch };
+  }
+
+  for (const pattern of [ISO_DATE_PATTERN, DAY_MONTH_YEAR_DATE_PATTERN]) {
+    const match = pattern.exec(title);
+    if (!match?.groups) {
+      continue;
+    }
+    const year = Number.parseInt(match.groups.year, 10);
+    const month = Number.parseInt(match.groups.numericMonth, 10);
+    const day = Number.parseInt(match.groups.day, 10);
+    if (isValidDateParts(year, month, day)) {
       return {
-        kind: "weekday-day-month",
-        match: weekdayDayMonthMatch,
+        year,
         month,
         day,
-        dayText: weekdayDayMonthMatch.groups.day,
-        hour,
-        minute,
-        meridiem: normalizeMeridiem(weekdayDayMonthMatch.groups.meridiem),
-        timeZoneToken: weekdayDayMonthMatch.groups.timeZone ?? null,
+        hour: null,
+        minute: null,
+        timeZoneToken: null,
       };
     }
   }
@@ -351,11 +467,14 @@ function parseTimeToken(
   let hour = Number.parseInt(hourToken ?? "", 10);
   const minute = Number.parseInt(minuteToken ?? "", 10);
 
-  if (!Number.isFinite(hour) || !Number.isFinite(minute)) {
+  if (!Number.isFinite(hour) || !Number.isFinite(minute) || minute > 59) {
     return [null, null];
   }
 
   const meridiem = normalizeMeridiem(meridiemToken);
+  if ((meridiem && (hour < 1 || hour > 12)) || (!meridiem && (hour < 0 || hour > 23))) {
+    return [null, null];
+  }
   if (meridiem === "AM") {
     hour = hour % 12;
   } else if (meridiem === "PM") {
@@ -395,7 +514,7 @@ function resolveSourceTimeZone(token: string): SourceTimeZone | null {
     return { kind: "offset", offsetMinutes: fixedOffsetMinutes };
   }
 
-  const offsetMatch = /^(?:UTC|GMT)([+-])(\d{1,2})(?::?(\d{2}))?$/i.exec(normalizedToken);
+  const offsetMatch = /^(?:UTC|GMT)?([+-])(\d{1,2})(?::?(\d{2}))?$/i.exec(normalizedToken);
   if (!offsetMatch) {
     return null;
   }
@@ -418,7 +537,9 @@ function inferEventDate(
   sourceTimeZone: SourceTimeZone,
   now: Date,
 ) {
-  const years = [now.getUTCFullYear() - 1, now.getUTCFullYear(), now.getUTCFullYear() + 1];
+  const years = eventMatch.year === null
+    ? [now.getUTCFullYear() - 1, now.getUTCFullYear(), now.getUTCFullYear() + 1]
+    : [eventMatch.year];
   const candidates = years
     .map((year) => buildEventDateForYear(eventMatch, sourceTimeZone, year))
     .filter((candidate): candidate is Date => candidate !== null)
@@ -459,6 +580,44 @@ function buildEventDateForYear(
     },
     sourceTimeZone.timeZone,
   );
+}
+
+function isValidDateParts(year: number, month: number, day: number) {
+  if (month < 1 || month > 12 || day < 1 || day > 31) {
+    return false;
+  }
+  const candidate = new Date(Date.UTC(year, month - 1, day));
+  return candidate.getUTCFullYear() === year
+    && candidate.getUTCMonth() === month - 1
+    && candidate.getUTCDate() === day;
+}
+
+function inferClosestLocalYear(month: number, day: number, now: Date) {
+  const candidates = [now.getFullYear() - 1, now.getFullYear(), now.getFullYear() + 1]
+    .filter((year) => isValidDateParts(year, month, day));
+  return candidates.sort((left, right) => {
+    const leftDistance = Math.abs(new Date(left, month - 1, day).getTime() - now.getTime());
+    const rightDistance = Math.abs(new Date(right, month - 1, day).getTime() - now.getTime());
+    return leftDistance - rightDistance;
+  })[0] ?? now.getFullYear();
+}
+
+function sameCalendarDate(
+  left: Pick<NumericDateTimeParts, "year" | "month" | "day">,
+  right: Pick<NumericDateTimeParts, "year" | "month" | "day">,
+) {
+  return left.year === right.year && left.month === right.month && left.day === right.day;
+}
+
+function addCalendarDays(parts: NumericDateTimeParts, days: number): NumericDateTimeParts {
+  const date = new Date(Date.UTC(parts.year, parts.month - 1, parts.day + days));
+  return {
+    year: date.getUTCFullYear(),
+    month: date.getUTCMonth() + 1,
+    day: date.getUTCDate(),
+    hour: 0,
+    minute: 0,
+  };
 }
 
 function zonedDateTimeToUtc(parts: NumericDateTimeParts, timeZone: string) {
@@ -572,6 +731,14 @@ function formatEventTimestampReplacement(
 
   if (eventMatch.kind === "month-first") {
     return `${eventMatch.marker ?? ""}${display.monthShort} ${displayDay} ${displayTime}${timeZoneSuffix}`;
+  }
+
+  if (eventMatch.kind === "iso") {
+    return `${display.year.toString().padStart(4, "0")}-${display.month.toString().padStart(2, "0")}-${display.day.toString().padStart(2, "0")}${eventMatch.separator ?? " "}${displayTime}${timeZoneSuffix}`;
+  }
+
+  if (eventMatch.kind === "day-month-year") {
+    return `${display.day.toString().padStart(2, "0")}-${display.month.toString().padStart(2, "0")}-${display.year.toString().padStart(4, "0")}${eventMatch.separator ?? " "}${displayTime}${timeZoneSuffix}`;
   }
 
   return `${display.weekday} ${displayDay} ${display.monthShort} ${displayTime}${timeZoneSuffix}`;

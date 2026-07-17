@@ -60,8 +60,10 @@ import {
   formatEventChannelTitle,
   formatTimeRange,
   getProgramPlaybackState,
+  shouldShowChannelForPpvDateFilter,
   type ProgramPlaybackState,
 } from "@/lib/utils";
+import { useChannelSettingsStore } from "@/store/channel-settings-store";
 
 const SEARCH_PAGE_SIZE = 30;
 const HEAVY_ROW_STYLE = {
@@ -89,6 +91,9 @@ export function SearchPage() {
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const debouncedQuery = useDebounce(query, 250);
   const hasQuery = debouncedQuery.trim().length > 1;
+  const filterPpvByDate = useChannelSettingsStore(
+    (state) => state.filterPpvByDate,
+  );
   const filterOptionsQuery = useQuery({
     queryKey: ["search", "filter-options"],
     queryFn: getSearchFilterOptions,
@@ -118,14 +123,19 @@ export function SearchPage() {
   const playProgramMutation = useProgramPlaybackMutation();
 
   const channels = useMemo(
-    () => channelQuery.data?.pages.flatMap((page) => page.items) ?? [],
-    [channelQuery.data],
+    () => (channelQuery.data?.pages.flatMap((page) => page.items) ?? [])
+      .filter((channel) => shouldShowChannelForPpvDateFilter(channel, {
+        enabled: filterPpvByDate,
+      })),
+    [channelQuery.data, filterPpvByDate],
   );
   const programs = useMemo(
     () => programQuery.data?.pages.flatMap((page) => page.items) ?? [],
     [programQuery.data],
   );
-  const channelTotal = channelQuery.data?.pages[0]?.totalCount ?? 0;
+  const channelTotal = filterPpvByDate
+    ? channels.length
+    : channelQuery.data?.pages[0]?.totalCount ?? 0;
   const programTotal = programQuery.data?.pages[0]?.totalCount ?? 0;
   const channelBackend = channelQuery.data?.pages[0]?.backend;
   const programBackend = programQuery.data?.pages[0]?.backend;

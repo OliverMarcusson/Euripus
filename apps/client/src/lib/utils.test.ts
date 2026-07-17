@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   formatEventChannelTitle,
   getEventChannelPlaybackState,
+  shouldShowChannelForPpvDateFilter,
 } from "@/lib/utils";
 
 describe("formatEventChannelTitle", () => {
@@ -70,8 +71,88 @@ describe("formatEventChannelTitle", () => {
     ).toBe("PSG vs Liverpool @ Apr 9 21:55 : TeliaPlay SE 26");
   });
 
+  it("converts ISO PPV timestamps with parenthesized time zones", () => {
+    expect(
+      formatEventChannelTitle(
+        "Next | Athens Open | 2026-07-17 | 14:30 (GMT) | AT: DAZN PPV 14",
+        {
+          targetTimeZone: "Europe/Stockholm",
+          now: new Date("2026-07-17T08:00:00.000Z"),
+        },
+      ),
+    ).toBe(
+      "Next | Athens Open | 2026-07-17 | 16:30 GMT+2 | AT: DAZN PPV 14",
+    );
+  });
+
   it("leaves unrelated channel titles untouched", () => {
     expect(formatEventChannelTitle("Arena Live")).toBe("Arena Live");
+  });
+});
+
+describe("shouldShowChannelForPpvDateFilter", () => {
+  const baseChannel = {
+    categoryName: "US| ESPN+ PPV",
+    isPpv: false,
+  };
+  const options = {
+    enabled: true,
+    now: new Date("2026-07-17T20:00:00.000Z"),
+    targetTimeZone: "Europe/Stockholm",
+  };
+
+  it("recognizes PPV categories when indexed PPV flags are unavailable", () => {
+    expect(
+      shouldShowChannelForPpvDateFilter(
+        { ...baseChannel, name: "Event (2026-07-17 12:00:00)" },
+        options,
+      ),
+    ).toBe(true);
+  });
+
+  it("converts explicit source time zones before applying the overnight window", () => {
+    expect(
+      shouldShowChannelForPpvDateFilter(
+        { ...baseChannel, name: "NEXT | Event | Sat 18 Jul 03:30 UTC" },
+        options,
+      ),
+    ).toBe(true);
+    expect(
+      shouldShowChannelForPpvDateFilter(
+        { ...baseChannel, name: "NEXT | Event | Sat 18 Jul 05:30 UTC" },
+        options,
+      ),
+    ).toBe(false);
+  });
+
+  it("requires timezone-free dated channels to use today's printed date", () => {
+    expect(
+      shouldShowChannelForPpvDateFilter(
+        { ...baseChannel, name: "Event (2026-07-18 01:00:00)" },
+        options,
+      ),
+    ).toBe(false);
+    expect(
+      shouldShowChannelForPpvDateFilter(
+        { ...baseChannel, name: "Event (2026-07-17 23:00:00)" },
+        options,
+      ),
+    ).toBe(true);
+  });
+
+  it("keeps undated PPV channels and all non-PPV channels", () => {
+    expect(
+      shouldShowChannelForPpvDateFilter(
+        { ...baseChannel, name: "NO EVENT STREAMING NOW" },
+        options,
+      ),
+    ).toBe(true);
+    expect(
+      shouldShowChannelForPpvDateFilter(
+        { categoryName: "News", isPpv: false, name: "Archive 2020-01-01 10:00" },
+        options,
+      ),
+    ).toBe(true);
   });
 });
 

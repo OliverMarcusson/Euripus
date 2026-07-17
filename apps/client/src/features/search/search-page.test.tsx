@@ -8,6 +8,7 @@ import {
   startRemoteChannelPlayback,
 } from "@/lib/api";
 import { useRemoteControllerStore } from "@/store/remote-controller-store";
+import { useChannelSettingsStore } from "@/store/channel-settings-store";
 
 vi.mock("@/hooks/use-debounce", () => ({
   useDebounce: (value: string) => value,
@@ -35,6 +36,7 @@ describe("SearchPage", () => {
     vi.clearAllMocks();
     vi.spyOn(Date, "now").mockReturnValue(new Date("2026-04-04T12:00:00.000Z").getTime());
     useRemoteControllerStore.getState().clearTarget();
+    useChannelSettingsStore.setState({ filterPpvByDate: false });
     mockedGetSearchFilterOptions.mockResolvedValue({
       countries: ["se", "us"],
       providers: [
@@ -143,6 +145,47 @@ describe("SearchPage", () => {
     expect(screen.getAllByText("Info only")).toHaveLength(2);
     expect(screen.getAllByRole("button", { name: /^play$/i })).toHaveLength(2);
     expect(screen.getByText("Upcoming only")).toBeInTheDocument();
+  });
+
+  it("filters out-of-window PPV channel matches", async () => {
+    useChannelSettingsStore.setState({ filterPpvByDate: true });
+    mockedSearchChannels.mockResolvedValue({
+      query: "event",
+      backend: "meilisearch",
+      items: [
+        {
+          id: "old-ppv",
+          name: "Old event (2020-01-01 12:00:00)",
+          logoUrl: null,
+          categoryName: "US| ESPN+ PPV",
+          remoteStreamId: 9,
+          epgChannelId: null,
+          hasEpg: false,
+          hasCatchup: false,
+          archiveDurationHours: null,
+          streamExtension: "m3u8",
+          isFavorite: false,
+          isPpv: false,
+        },
+      ],
+      totalCount: 1,
+      nextOffset: null,
+    });
+    mockedSearchPrograms.mockResolvedValue({
+      query: "event",
+      backend: "postgres",
+      items: [],
+      totalCount: 0,
+      nextOffset: null,
+    });
+
+    renderSearchPage();
+    fireEvent.change(screen.getByPlaceholderText(/^search$/i), {
+      target: { value: "event" },
+    });
+
+    expect(await screen.findByText("No channel matches")).toBeInTheDocument();
+    expect(screen.queryByText(/old event/i)).not.toBeInTheDocument();
   });
 
   it("renders favorite controls for channel matches", async () => {

@@ -18,6 +18,7 @@ import {
 } from "@/lib/api";
 import { useThemeStore } from "@/store/theme-store";
 import { usePlaybackSettingsStore } from "@/store/playback-settings-store";
+import { useChannelSettingsStore } from "@/store/channel-settings-store";
 
 vi.mock("@/lib/api", () => ({
   addFavorite: vi.fn(),
@@ -151,6 +152,7 @@ describe("SettingsPage", () => {
     usePlaybackSettingsStore
       .getState()
       .setLivePlaybackPreference("stable");
+    useChannelSettingsStore.getState().setFilterPpvByDate(false);
   });
 
   it("updates the theme when a toggle is selected", async () => {
@@ -181,6 +183,20 @@ describe("SettingsPage", () => {
     expect(
       screen.getByText(/smaller buffer and briefly speeds up/i),
     ).toBeInTheDocument();
+  });
+
+  it("updates the PPV date filter", () => {
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <SettingsPage />
+      </QueryClientProvider>,
+    );
+
+    fireEvent.click(
+      screen.getByRole("switch", { name: /filter ppv channels by date/i }),
+    );
+
+    expect(useChannelSettingsStore.getState().filterPpvByDate).toBe(true);
   });
 
   it("does not render deprecated remote ui controls", async () => {
