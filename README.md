@@ -65,12 +65,13 @@ That only affects server-originated traffic such as provider validation, sync jo
 
 ## Google Cast
 
-The web client can cast live channels, catch-up programs, movies, and episodes to Chromecast and Google TV devices through the default Google Cast receiver. Cast media URLs are always signed Euripus relay URLs, even when the provider is configured for direct playback, so provider credentials are not sent to the Cast device.
+The web client can launch the Euripus Custom Web Receiver on Chromecast and Google TV devices. The authenticated sender automatically registers and remembers the selected Cast device, then uses the existing Euripus receiver flow for play, pause, seek, stop, and playback state. Media requested for the Cast receiver always uses signed Euripus relay URLs, even when the provider is configured for direct playback.
 
-Casting requires a supported Chromium browser, a Cast device on the sender's local network, and an Euripus public origin that the Cast device can reach. For self-hosted production deployments, configure `APP_PUBLIC_ORIGIN` with the externally reachable HTTPS origin.
+The receiver is hosted at `https://tv.marcusson.dev/receiver?cast=1`. A Google Cast application ID must be registered before sender discovery is enabled. See `docs/GOOGLE_CAST_RECEIVER.md` for registration, test-device setup, configuration, and validation.
 
 ## Operational Docs
 
 - Server setup handoff: `docs/AI_SERVER_SETUP.md`
 - Self-hosted deployment guide: `docs/SELF_HOSTED_DEPLOYMENT.md`
 - Future browser and self-hosting plan: `docs/V2_BROWSER_SELF_HOSTED_PLAN.md`
+- Google Cast receiver registration: `docs/GOOGLE_CAST_RECEIVER.md`

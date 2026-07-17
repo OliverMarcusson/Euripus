@@ -1,19 +1,27 @@
-import type { PlaybackSource } from "@euripus/shared";
 import { create } from "zustand";
+import { EURIPUS_CAST_NAMESPACE } from "@/lib/google-cast-receiver";
 
 const CAST_SENDER_SDK_URL =
   "https://www.gstatic.com/cv/js/sender/v1/cast_sender.js?loadCastFramework=1";
 
-type CastMediaSession = {
-  pause: (request: unknown, onSuccess: () => void, onError: (error: unknown) => void) => void;
-  play: (request: unknown, onSuccess: () => void, onError: (error: unknown) => void) => void;
-  stop: (request: unknown, onSuccess: () => void, onError: (error: unknown) => void) => void;
+// Registered for https://tv.marcusson.dev/receiver?cast=1.
+export const EURIPUS_CAST_RECEIVER_APP_ID = "EEC1D3B6";
+
+const APP_ID_CONFIGURED = true;
+
+type ReceiverStatusMessage = {
+  type: "receiver_status";
+  deviceId: string;
+  paired: boolean;
+  pairingCode: string | null;
 };
 
 type CastSession = {
+  addMessageListener: (
+    namespace: string,
+    listener: (namespace: string, message: unknown) => void,
+  ) => void;
   getCastDevice: () => { friendlyName?: string };
-  getMediaSession: () => CastMediaSession | null;
-  loadMedia: (request: unknown) => Promise<unknown>;
 };
 
 type CastContext = {
@@ -38,71 +46,104 @@ type CastWindow = Window & {
         SESSION_STATE_CHANGED: string;
       };
       CastState: { NO_DEVICES_AVAILABLE: string };
-      SessionState: {
-        SESSION_ENDED: string;
-        SESSION_ENDING: string;
-        SESSION_RESUMED: string;
-        SESSION_STARTED: string;
-        SESSION_STARTING: string;
-      };
     };
   };
   chrome?: {
     cast: {
       AutoJoinPolicy: { ORIGIN_SCOPED: string };
-      media: {
-        DEFAULT_MEDIA_RECEIVER_APP_ID: string;
-        GenericMediaMetadata: new () => { title?: string };
-        MediaInfo: new (contentId: string, contentType: string) => {
-          metadata?: unknown;
-          streamType?: string;
-        };
-        LoadRequest: new (mediaInfo: unknown) => {
-          autoplay?: boolean;
-          currentTime?: number;
-        };
-        PauseRequest: new () => unknown;
-        PlayRequest: new () => unknown;
-        StopRequest: new () => unknown;
-        StreamType: { BUFFERED: string; LIVE: string };
-      };
     };
   };
 };
 
 type GoogleCastState = {
+  appIdConfigured: boolean;
   available: boolean;
   connected: boolean;
-  hasMedia: boolean;
   deviceName: string | null;
   initialized: boolean;
   initializing: boolean;
+  receiverDeviceId: string | null;
+  receiverPaired: boolean;
+  receiverPairingCode: string | null;
 };
 
 const initialState: GoogleCastState = {
+  appIdConfigured: APP_ID_CONFIGURED,
   available: false,
   connected: false,
-  hasMedia: false,
   deviceName: null,
   initialized: false,
   initializing: false,
+  receiverDeviceId: null,
+  receiverPaired: false,
+  receiverPairingCode: null,
 };
 
 export const useGoogleCastStore = create<GoogleCastState>(() => initialState);
 
 let castContext: CastContext | null = null;
 let initialization: Promise<boolean> | null = null;
+const observedSessions = new WeakSet<object>();
 
 function castWindow() {
   return window as CastWindow;
 }
 
+function parseReceiverStatus(message: unknown): ReceiverStatusMessage | null {
+  try {
+    const parsed = typeof message === "string" ? JSON.parse(message) : message;
+    if (
+      typeof parsed === "object" &&
+      parsed !== null &&
+      "type" in parsed &&
+      parsed.type === "receiver_status" &&
+      "deviceId" in parsed &&
+      typeof parsed.deviceId === "string" &&
+      "paired" in parsed &&
+      typeof parsed.paired === "boolean" &&
+      "pairingCode" in parsed &&
+      (typeof parsed.pairingCode === "string" || parsed.pairingCode === null)
+    ) {
+      return parsed as ReceiverStatusMessage;
+    }
+  } catch {
+    // Ignore malformed messages from receiver applications.
+  }
+  return null;
+}
+
+function observeSession(session: CastSession) {
+  if (observedSessions.has(session)) {
+    return;
+  }
+  observedSessions.add(session);
+  session.addMessageListener(EURIPUS_CAST_NAMESPACE, (_namespace, message) => {
+    const status = parseReceiverStatus(message);
+    if (status) {
+      useGoogleCastStore.setState({
+        receiverDeviceId: status.deviceId,
+        receiverPaired: status.paired,
+        receiverPairingCode: status.pairingCode,
+      });
+    }
+  });
+}
+
 function syncSessionState() {
   const session = castContext?.getCurrentSession() ?? null;
+  if (session) {
+    observeSession(session);
+  }
   useGoogleCastStore.setState({
     connected: !!session,
-    hasMedia: !!session?.getMediaSession(),
     deviceName: session?.getCastDevice().friendlyName ?? null,
+    ...(!session
+      ? {
+          receiverDeviceId: null,
+          receiverPaired: false,
+          receiverPairingCode: null,
+        }
+      : {}),
   });
 }
 
@@ -110,13 +151,13 @@ function configureCastFramework() {
   const targetWindow = castWindow();
   const framework = targetWindow.cast?.framework;
   const chromeCast = targetWindow.chrome?.cast;
-  if (!framework || !chromeCast) {
+  if (!framework || !chromeCast || !APP_ID_CONFIGURED) {
     return false;
   }
 
   castContext = framework.CastContext.getInstance();
   castContext.setOptions({
-    receiverApplicationId: chromeCast.media.DEFAULT_MEDIA_RECEIVER_APP_ID,
+    receiverApplicationId: EURIPUS_CAST_RECEIVER_APP_ID,
     autoJoinPolicy: chromeCast.AutoJoinPolicy.ORIGIN_SCOPED,
   });
   useGoogleCastStore.setState({
@@ -142,6 +183,10 @@ function configureCastFramework() {
 export function initializeGoogleCast() {
   if (initialization) {
     return initialization;
+  }
+  if (!APP_ID_CONFIGURED) {
+    useGoogleCastStore.setState({ initialized: true });
+    return Promise.resolve(false);
   }
 
   useGoogleCastStore.setState({ initializing: true });
@@ -182,6 +227,9 @@ export function initializeGoogleCast() {
 
 export async function requestGoogleCastSession() {
   await initializeGoogleCast();
+  if (!APP_ID_CONFIGURED) {
+    throw new Error("Register the Euripus Cast receiver App ID first.");
+  }
   if (!castContext) {
     throw new Error("Google Cast is not available in this browser.");
   }
@@ -191,78 +239,11 @@ export async function requestGoogleCastSession() {
 
 export function endGoogleCastSession() {
   castContext?.endCurrentSession(true);
-  useGoogleCastStore.setState({ connected: false, hasMedia: false, deviceName: null });
-}
-
-function contentTypeFor(source: PlaybackSource) {
-  switch (source.kind) {
-    case "hls":
-      return "application/vnd.apple.mpegurl";
-    case "mpegts":
-      return "video/mp2t";
-    case "progressive":
-      return "video/mp4";
-    default:
-      throw new Error(source.unsupportedReason ?? "This media cannot be cast.");
-  }
-}
-
-export async function loadGoogleCastMedia(source: PlaybackSource, startAtSeconds = 0) {
-  const targetWindow = castWindow();
-  const chromeCast = targetWindow.chrome?.cast;
-  const session = castContext?.getCurrentSession();
-  if (!chromeCast || !session) {
-    throw new Error("Connect to a Google Cast device first.");
-  }
-  if (source.kind === "unsupported" || !source.url) {
-    throw new Error(source.unsupportedReason ?? "This media cannot be cast.");
-  }
-
-  const mediaInfo = new chromeCast.media.MediaInfo(
-    source.url,
-    contentTypeFor(source),
-  );
-  const metadata = new chromeCast.media.GenericMediaMetadata();
-  metadata.title = source.title;
-  mediaInfo.metadata = metadata;
-  mediaInfo.streamType = source.live
-    ? chromeCast.media.StreamType.LIVE
-    : chromeCast.media.StreamType.BUFFERED;
-
-  const request = new chromeCast.media.LoadRequest(mediaInfo);
-  request.autoplay = true;
-  request.currentTime = Math.max(0, startAtSeconds);
-  await session.loadMedia(request);
-  useGoogleCastStore.setState({ hasMedia: true });
-}
-
-function runGoogleCastMediaCommand(requestType: "pause" | "play" | "stop") {
-  const targetWindow = castWindow();
-  const chromeCast = targetWindow.chrome?.cast;
-  const media = castContext?.getCurrentSession()?.getMediaSession();
-  if (!chromeCast || !media) {
-    return Promise.reject(new Error("Nothing is currently playing on Google Cast."));
-  }
-  const request = requestType === "pause"
-    ? new chromeCast.media.PauseRequest()
-    : requestType === "play"
-      ? new chromeCast.media.PlayRequest()
-      : new chromeCast.media.StopRequest();
-  return new Promise<void>((resolve, reject) => {
-    media[requestType](request, resolve, reject);
-  }).then(() => {
-    if (requestType === "stop") useGoogleCastStore.setState({ hasMedia: false });
+  useGoogleCastStore.setState({
+    connected: false,
+    deviceName: null,
+    receiverDeviceId: null,
+    receiverPaired: false,
+    receiverPairingCode: null,
   });
-}
-
-export function pauseGoogleCastPlayback() {
-  return runGoogleCastMediaCommand("pause");
-}
-
-export function resumeGoogleCastPlayback() {
-  return runGoogleCastMediaCommand("play");
-}
-
-export function stopGoogleCastPlayback() {
-  return runGoogleCastMediaCommand("stop");
 }

@@ -20,6 +20,11 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty";
 import { PlyrSurface } from "@/components/player/plyr-surface";
+import {
+  initializeGoogleCastReceiver,
+  isGoogleCastReceiver,
+  publishGoogleCastReceiverStatus,
+} from "@/lib/google-cast-receiver";
 import { formatEventChannelTitle } from "@/lib/utils";
 
 const RECEIVER_STORAGE_KEY = "euripus-receiver-device";
@@ -111,6 +116,7 @@ function describeVideoError(video: HTMLVideoElement | null) {
 
 export function ReceiverPage() {
   const initial = useMemo(loadPersistedState, []);
+  const castReceiver = useMemo(isGoogleCastReceiver, []);
   const [session, setSession] = useState<ReceiverSession | null>(null);
   const [pairingCode, setPairingCode] = useState<string | null>(null);
   const [source, setSource] = useState<PlaybackSource | null>(null);
@@ -147,16 +153,20 @@ export function ReceiverPage() {
   };
 
   useEffect(() => {
+    void initializeGoogleCastReceiver();
+  }, []);
+
+  useEffect(() => {
     let active = true;
 
     async function bootstrap() {
       try {
         const nextSession = await createReceiverSession({
           deviceKey: initial.deviceKey,
-          name: "Browser receiver",
-          platform: "web",
-          formFactorHint: detectFormFactorHint(),
-          appKind: "receiver-web",
+          name: castReceiver ? "Google Cast receiver" : "Browser receiver",
+          platform: castReceiver ? "google-cast" : "web",
+          formFactorHint: castReceiver ? "tv" : detectFormFactorHint(),
+          appKind: castReceiver ? "receiver-google-cast" : "receiver-web",
           publicOrigin:
             typeof window === "undefined" ? null : window.location.origin,
           receiverCredential: initial.receiverCredential,
@@ -166,6 +176,14 @@ export function ReceiverPage() {
         }
         setSession(nextSession);
         setPairingCode(nextSession.pairingCode);
+        if (castReceiver) {
+          publishGoogleCastReceiverStatus({
+            type: "receiver_status",
+            deviceId: nextSession.device.id,
+            paired: nextSession.paired,
+            pairingCode: nextSession.pairingCode,
+          });
+        }
         if (nextSession.receiverCredential) {
           persistState({
             deviceKey: initial.deviceKey,
@@ -183,7 +201,7 @@ export function ReceiverPage() {
     return () => {
       active = false;
     };
-  }, [initial.deviceKey, initial.receiverCredential]);
+  }, [castReceiver, initial.deviceKey, initial.receiverCredential]);
 
   useEffect(() => {
     sourceRef.current = source;
@@ -299,11 +317,19 @@ export function ReceiverPage() {
         });
       }
       setPairingCode(null);
+      if (castReceiver) {
+        publishGoogleCastReceiverStatus({
+          type: "receiver_status",
+          deviceId: session.device.id,
+          paired: true,
+          pairingCode: null,
+        });
+      }
     });
     return () => {
       events.close();
     };
-  }, [initial.deviceKey, session?.sessionToken]);
+  }, [castReceiver, initial.deviceKey, session?.device.id, session?.sessionToken]);
 
   useEffect(() => {
     if (!session?.sessionToken) {
@@ -555,20 +581,25 @@ export function ReceiverPage() {
               </p>
               <div className="flex flex-col items-center gap-2">
                 <h1 className="text-4xl font-semibold tracking-tight text-balance text-white">
-                  Pair this screen
+                  {castReceiver ? "Connecting to Euripus" : "Pair this screen"}
                 </h1>
                 <p className="max-w-2xl text-lg text-white/72 text-balance">
-                  Open Euripus on your phone, enter the code below, and choose whether to remember
-                  this screen.
+                  {castReceiver
+                    ? "This Cast device will be registered automatically."
+                    : "Open Euripus on your phone, enter the code below, and choose whether to remember this screen."}
                 </p>
               </div>
             </div>
 
-            <div className="inline-flex max-w-full items-center justify-center overflow-hidden rounded-lg border border-white/10 bg-white/[0.04] px-10 py-7 shadow-[0_0_0_1px_rgba(255,255,255,0.02),0_24px_80px_rgba(76,29,149,0.18)] backdrop-blur-sm">
-              <span className="block whitespace-nowrap text-center text-7xl font-semibold text-white sm:text-8xl">
-                {formatPairingCode(pairingCode)}
-              </span>
-            </div>
+            {castReceiver ? (
+              <div className="size-12 animate-spin rounded-full border-4 border-white/20 border-t-primary" />
+            ) : (
+              <div className="inline-flex max-w-full items-center justify-center overflow-hidden rounded-lg border border-white/10 bg-white/[0.04] px-10 py-7 shadow-[0_0_0_1px_rgba(255,255,255,0.02),0_24px_80px_rgba(76,29,149,0.18)] backdrop-blur-sm">
+                <span className="block whitespace-nowrap text-center text-7xl font-semibold text-white sm:text-8xl">
+                  {formatPairingCode(pairingCode)}
+                </span>
+              </div>
+            )}
 
             {error ? <p className="text-sm text-destructive">{error}</p> : null}
           </section>
