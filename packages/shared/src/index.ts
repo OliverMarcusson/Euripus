@@ -52,6 +52,7 @@ export type SaveEpgSourceInput = {
 export type ProviderProfile = {
   id: string;
   providerType: "xtreme";
+  isActive: boolean;
   baseUrl: string;
   username: string;
   outputFormat: "m3u8" | "ts";
@@ -556,12 +557,7 @@ export type RemotePlaybackCommand = {
 };
 
 export type RemotePlaybackCommandAck = {
-  status:
-    | "delivered"
-    | "executing"
-    | "succeeded"
-    | "failed"
-    | "acknowledged";
+  status: "delivered" | "executing" | "succeeded" | "failed" | "acknowledged";
   errorMessage?: string | null;
 };
 

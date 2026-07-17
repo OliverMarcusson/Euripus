@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ProviderProfile } from "@euripus/shared";
 import { SettingsPage } from "@/features/auth/settings-page";
 import {
+  activateProvider,
   deleteProvider,
   getProviders,
   getRecents,
@@ -25,16 +26,15 @@ vi.mock("@/lib/api", () => ({
   connectGoogleCalendar: vi.fn(),
   disconnectGoogleCalendar: vi.fn(),
   getGoogleCalendars: vi.fn().mockResolvedValue([]),
-  getGoogleCalendarStatus: vi
-    .fn()
-    .mockResolvedValue({
-      configured: false,
-      connected: false,
-      needsReauthorization: false,
-      selectedCalendarId: null,
-      selectedCalendarName: null,
-    }),
+  getGoogleCalendarStatus: vi.fn().mockResolvedValue({
+    configured: false,
+    connected: false,
+    needsReauthorization: false,
+    selectedCalendarId: null,
+    selectedCalendarName: null,
+  }),
   selectGoogleCalendar: vi.fn(),
+  activateProvider: vi.fn(),
   deleteProvider: vi.fn(),
   getProviders: vi.fn(),
   getRecents: vi.fn(),
@@ -51,6 +51,7 @@ vi.mock("@/lib/api", () => ({
   validateProvider: vi.fn(),
 }));
 
+const mockedActivateProvider = vi.mocked(activateProvider);
 const mockedDeleteProvider = vi.mocked(deleteProvider);
 const mockedGetRecents = vi.mocked(getRecents);
 const mockedGetProviders = vi.mocked(getProviders);
@@ -70,6 +71,22 @@ describe("SettingsPage", () => {
     mockedDeleteProvider.mockResolvedValue();
     mockedGetRecents.mockResolvedValue([]);
     mockedGetProviders.mockResolvedValue([]);
+    mockedActivateProvider.mockImplementation(async (providerId) => ({
+      id: providerId,
+      providerType: "xtreme",
+      isActive: true,
+      baseUrl: "https://provider.example.com",
+      username: "demo",
+      outputFormat: "m3u8",
+      playbackMode: "direct",
+      status: "valid",
+      lastValidatedAt: null,
+      lastSyncAt: null,
+      lastSyncError: null,
+      createdAt: "2026-04-04T10:00:00.000Z",
+      updatedAt: "2026-04-04T10:00:00.000Z",
+      epgSources: [],
+    }));
     mockedGetRemoteReceivers.mockResolvedValue([]);
     mockedPairReceiver.mockResolvedValue({
       id: "receiver-1",
@@ -112,6 +129,7 @@ describe("SettingsPage", () => {
     mockedSaveProvider.mockImplementation(async (payload) => ({
       id: "provider-1",
       providerType: "xtreme",
+      isActive: true,
       baseUrl: payload.baseUrl,
       username: payload.username,
       outputFormat: payload.outputFormat,
@@ -242,6 +260,7 @@ describe("SettingsPage", () => {
       {
         id: "provider-1",
         providerType: "xtreme",
+        isActive: true,
         baseUrl: "https://provider.example.com",
         username: "demo",
         outputFormat: "m3u8",
@@ -301,6 +320,7 @@ describe("SettingsPage", () => {
       {
         id: "provider-1",
         providerType: "xtreme",
+        isActive: true,
         baseUrl: "https://provider.example.com",
         username: "demo",
         outputFormat: "m3u8",
@@ -349,6 +369,7 @@ describe("SettingsPage", () => {
       {
         id: "provider-1",
         providerType: "xtreme",
+        isActive: true,
         baseUrl: "https://provider.example.com",
         username: "demo",
         outputFormat: "m3u8",
@@ -389,6 +410,7 @@ describe("SettingsPage", () => {
       {
         id: "provider-1",
         providerType: "xtreme",
+        isActive: true,
         baseUrl: "https://provider.example.com",
         username: "demo",
         outputFormat: "m3u8",
@@ -433,6 +455,7 @@ describe("SettingsPage", () => {
       {
         id: "provider-1",
         providerType: "xtreme",
+        isActive: true,
         baseUrl: "https://alpha.example.com",
         username: "alpha",
         outputFormat: "m3u8",
@@ -448,6 +471,7 @@ describe("SettingsPage", () => {
       {
         id: "provider-2",
         providerType: "xtreme",
+        isActive: false,
         baseUrl: "https://beta.example.com",
         username: "beta",
         outputFormat: "ts",
@@ -480,6 +504,12 @@ describe("SettingsPage", () => {
       await screen.findByDisplayValue("https://beta.example.com"),
     ).toBeInTheDocument();
     expect(screen.getByDisplayValue("beta")).toBeInTheDocument();
+    await waitFor(() =>
+      expect(mockedActivateProvider).toHaveBeenCalledWith(
+        "provider-2",
+        expect.anything(),
+      ),
+    );
   });
 
   it("deletes the selected provider and falls back to another saved provider", async () => {
@@ -487,6 +517,7 @@ describe("SettingsPage", () => {
     const alphaProvider: ProviderProfile = {
       id: "provider-1",
       providerType: "xtreme",
+      isActive: true,
       baseUrl: "https://alpha.example.com",
       username: "alpha",
       outputFormat: "m3u8",
@@ -502,6 +533,7 @@ describe("SettingsPage", () => {
     const betaProvider: ProviderProfile = {
       id: "provider-2",
       providerType: "xtreme",
+      isActive: false,
       baseUrl: "https://beta.example.com",
       username: "beta",
       outputFormat: "ts",
@@ -542,6 +574,7 @@ describe("SettingsPage", () => {
     const existingProvider = {
       id: "provider-1",
       providerType: "xtreme" as const,
+      isActive: true,
       baseUrl: "https://provider.example.com",
       username: "demo",
       outputFormat: "m3u8" as const,

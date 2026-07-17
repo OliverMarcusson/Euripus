@@ -313,6 +313,7 @@ pub(in crate::server_main) async fn search_programs_postgres(
               FROM programs p
               LEFT JOIN channels c ON c.id = p.channel_id
               WHERE p.user_id = $1
+                AND p.profile_id = (SELECT active_provider_id FROM users WHERE id = $1)
                 AND (
                   p.channel_id IS NULL
                   OR p.channel_id = ANY($4)
@@ -417,6 +418,7 @@ pub(in crate::server_main) async fn search_programs_postgres(
               LEFT JOIN channels c ON c.id = p.channel_id
               WHERE sd.user_id = $1
                 AND sd.entity_type = 'program'
+                AND p.profile_id = (SELECT active_provider_id FROM users WHERE id = $1)
                 AND (
                   p.channel_id IS NULL
                   OR p.channel_id = ANY($5)

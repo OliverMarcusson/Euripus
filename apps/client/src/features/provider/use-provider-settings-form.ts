@@ -9,6 +9,7 @@ import { useEffect, useRef, useState } from "react"
 import { useForm, useWatch } from "react-hook-form"
 import { z } from "zod"
 import {
+  activateProvider,
   deleteProvider,
   getProviders,
   getSyncStatus,
@@ -122,6 +123,7 @@ export function useProviderSettingsForm() {
   const selectedProvider = isCreatingProvider
     ? null
     : providers.find((provider) => provider.id === selectedProviderId) ??
+      providers.find((provider) => provider.isActive) ??
       providers[0] ??
       null
 
@@ -168,7 +170,9 @@ export function useProviderSettingsForm() {
     }
 
     const nextSelectedProvider =
-      providers.find((provider) => provider.id === selectedProviderId) ?? providers[0]
+      providers.find((provider) => provider.id === selectedProviderId) ??
+      providers.find((provider) => provider.isActive) ??
+      providers[0]
 
     if (!nextSelectedProvider) {
       return
@@ -214,6 +218,27 @@ export function useProviderSettingsForm() {
       await queryClient.invalidateQueries({
         queryKey: ["sync-status", provider.id],
       })
+    },
+  })
+  const activateMutation = useMutation({
+    mutationFn: activateProvider,
+    onMutate: async (providerId) => {
+      await queryClient.cancelQueries({ queryKey: ["providers"] })
+      queryClient.setQueryData<ProviderProfile[]>(["providers"], (current) =>
+        (current ?? []).map((provider) => ({
+          ...provider,
+          isActive: provider.id === providerId,
+        })),
+      )
+    },
+    onSettled: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["providers"] }),
+        queryClient.invalidateQueries({ queryKey: ["channels"] }),
+        queryClient.invalidateQueries({ queryKey: ["guide"] }),
+        queryClient.invalidateQueries({ queryKey: ["on-demand"] }),
+        queryClient.invalidateQueries({ queryKey: ["search"] }),
+      ])
     },
   })
   const deleteMutation = useMutation({
@@ -301,6 +326,10 @@ export function useProviderSettingsForm() {
     setIsCreatingProvider(false)
     setSelectedProviderId(providerId)
     resetTransientState()
+    const selected = providers.find((provider) => provider.id === providerId)
+    if (selected && !selected.isActive) {
+      activateMutation.mutate(providerId)
+    }
   }
 
   function startCreatingProvider() {
@@ -358,6 +387,7 @@ export function useProviderSettingsForm() {
   }
 
   return {
+    activateMutation,
     displayedEpgSourceCount,
     feedbackMessage:
       feedbackMessage ??

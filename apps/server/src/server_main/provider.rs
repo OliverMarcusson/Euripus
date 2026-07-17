@@ -6,6 +6,7 @@ pub(super) fn shared_router() -> Router<AppState> {
         .route("/providers/validate", post(validate_provider))
         .route("/providers/xtreme", post(save_provider))
         .route("/providers/{id}", delete(delete_provider))
+        .route("/providers/{id}/activate", put(activate_provider))
         .route("/providers/{id}/sync", post(trigger_sync))
         .route("/providers/{id}/sync-status", get(get_sync_status))
 }
@@ -15,6 +16,7 @@ pub(super) fn shared_router() -> Router<AppState> {
 struct ProviderProfileResponse {
     id: Uuid,
     provider_type: String,
+    is_active: bool,
     base_url: String,
     username: String,
     output_format: String,
@@ -108,10 +110,12 @@ async fn load_epg_sources(
 fn provider_profile_response_from_record(
     provider: ProviderProfileRecord,
     epg_sources: Vec<EpgSourceResponse>,
+    active_provider_id: Option<Uuid>,
 ) -> ProviderProfileResponse {
     ProviderProfileResponse {
         id: provider.id,
         provider_type: provider.provider_type,
+        is_active: active_provider_id == Some(provider.id),
         base_url: provider.base_url,
         username: provider.username,
         output_format: provider.output_format,
@@ -159,9 +163,15 @@ async fn load_provider_profile_response(
     };
 
     let epg_sources = load_epg_sources(pool, provider.id).await?;
+    let active_provider_id =
+        sqlx::query_scalar::<_, Option<Uuid>>("SELECT active_provider_id FROM users WHERE id = $1")
+            .bind(user_id)
+            .fetch_one(pool)
+            .await?;
     Ok(Some(provider_profile_response_from_record(
         provider,
         epg_sources,
+        active_provider_id,
     )))
 }
 
@@ -183,10 +193,19 @@ async fn load_provider_profile_responses(
     .fetch_all(pool)
     .await?;
 
+    let active_provider_id =
+        sqlx::query_scalar::<_, Option<Uuid>>("SELECT active_provider_id FROM users WHERE id = $1")
+            .bind(user_id)
+            .fetch_one(pool)
+            .await?;
     let mut responses = Vec::with_capacity(providers.len());
     for provider in providers {
         let epg_sources = load_epg_sources(pool, provider.id).await?;
-        responses.push(provider_profile_response_from_record(provider, epg_sources));
+        responses.push(provider_profile_response_from_record(
+            provider,
+            epg_sources,
+            active_provider_id,
+        ));
     }
 
     Ok(responses)
@@ -442,6 +461,15 @@ async fn save_provider(
         profile_id
     };
 
+    sqlx::query(
+        "UPDATE users SET active_provider_id = COALESCE(active_provider_id, $2) WHERE id = $1",
+    )
+    .bind(auth.user_id)
+    .bind(profile_id)
+    .execute(&state.pool)
+    .await?;
+    invalidate_channel_visibility_cache(&state, auth.user_id, None);
+
     store_epg_sources(&state.pool, profile_id, &epg_sources).await?;
     let provider = load_provider_profile_response(&state.pool, auth.user_id, profile_id)
         .await?
@@ -466,12 +494,28 @@ async fn delete_provider(
 
     sync::ensure_no_active_sync(&state.pool, profile.id).await?;
 
+    let mut transaction = state.pool.begin().await?;
     sqlx::query("DELETE FROM provider_profiles WHERE user_id = $1 AND id = $2")
         .bind(auth.user_id)
         .bind(profile.id)
-        .execute(&state.pool)
+        .execute(&mut *transaction)
         .await?;
+    sqlx::query(
+        r#"
+        UPDATE users
+        SET active_provider_id = COALESCE(
+          active_provider_id,
+          (SELECT id FROM provider_profiles WHERE user_id = $1 ORDER BY updated_at DESC, created_at DESC, id ASC LIMIT 1)
+        )
+        WHERE id = $1
+        "#,
+    )
+    .bind(auth.user_id)
+    .execute(&mut *transaction)
+    .await?;
+    transaction.commit().await?;
 
+    invalidate_channel_visibility_cache(&state, auth.user_id, None);
     invalidate_channel_visibility_cache(&state, auth.user_id, Some(profile.id));
     if let Err(error) =
         search::indexing::rebuild_postgres_search_documents(&state, auth.user_id).await
@@ -503,6 +547,34 @@ async fn delete_provider(
     }
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+async fn activate_provider(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+) -> ApiResult<ProviderProfileResponse> {
+    let auth = require_auth(&state, &headers).await?;
+    ensure_provider_mutable(&auth)?;
+    require_target_provider_profile(&state.pool, auth.user_id, id).await?;
+
+    sqlx::query("UPDATE users SET active_provider_id = $2 WHERE id = $1")
+        .bind(auth.user_id)
+        .bind(id)
+        .execute(&state.pool)
+        .await?;
+    invalidate_channel_visibility_cache(&state, auth.user_id, None);
+
+    search::indexing::rebuild_postgres_search_documents(&state, auth.user_id).await?;
+    if let Some(meili) = state.meili.as_ref() {
+        search::indexing::rebuild_meili_indexes(&state, meili, auth.user_id, None).await?;
+        search::indexing::refresh_meili_readiness(&state).await?;
+    }
+
+    let provider = load_provider_profile_response(&state.pool, auth.user_id, id)
+        .await?
+        .ok_or_else(|| AppError::NotFound("Provider profile not found.".to_string()))?;
+    Ok(Json(provider))
 }
 
 async fn trigger_sync(

@@ -829,7 +829,10 @@ async fn load_channel_visibility_map(
         FROM channels c
         LEFT JOIN channel_categories cc ON cc.id = c.category_id
         WHERE c.user_id = $1
-          AND ($2::uuid IS NULL OR c.profile_id = $2)
+          AND c.profile_id = COALESCE(
+            $2::uuid,
+            (SELECT active_provider_id FROM users WHERE id = $1)
+          )
         "#,
     )
     .bind(user_id)
@@ -857,7 +860,10 @@ async fn load_channel_visibility_map(
           FROM programs p
           WHERE p.user_id = $1
             AND p.channel_id IS NOT NULL
-            AND ($2::uuid IS NULL OR p.profile_id = $2)
+            AND p.profile_id = COALESCE(
+              $2::uuid,
+              (SELECT active_provider_id FROM users WHERE id = $1)
+            )
             AND p.end_at > NOW() - ($3 * INTERVAL '1 hour')
             AND p.start_at < NOW() + ($4 * INTERVAL '1 day')
         )

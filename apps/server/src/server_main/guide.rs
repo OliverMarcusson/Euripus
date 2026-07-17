@@ -196,6 +196,7 @@ async fn get_channel(
         FROM channels c
         LEFT JOIN channel_categories cc ON cc.id = c.category_id
         WHERE c.user_id = $1 AND c.id = $2
+          AND c.profile_id = (SELECT active_provider_id FROM users WHERE id = $1)
         "#,
     )
     .bind(auth.user_id)
