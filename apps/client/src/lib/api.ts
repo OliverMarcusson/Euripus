@@ -841,11 +841,6 @@ export function getRecents() {
   return request<RecentChannel[]>("/recents");
 }
 
-function startPlayback(path: string, target?: "cast") {
-  const query = target ? `?target=${target}` : "";
-  return request<PlaybackSource>(`${path}${query}`, { method: "POST" });
-}
-
 export function getOnDemandHistory() {
   return request<OnDemandHistoryEntry[]>("/on-demand/history");
 }
@@ -861,20 +856,26 @@ export function updateOnDemandProgress(
   });
 }
 
-export function startOnDemandPlayback(id: string, target?: "cast") {
-  return startPlayback(`/playback/on-demand/${id}`, target);
+export function startOnDemandPlayback(id: string) {
+  return request<PlaybackSource>(`/playback/on-demand/${id}`, {
+    method: "POST",
+  });
 }
 
-export function startEpisodePlayback(id: string, target?: "cast") {
-  return startPlayback(`/playback/episode/${id}`, target);
+export function startEpisodePlayback(id: string) {
+  return request<PlaybackSource>(`/playback/episode/${id}`, { method: "POST" });
 }
 
-export function startChannelPlayback(channelId: string, target?: "cast") {
-  return startPlayback(`/playback/channel/${channelId}`, target);
+export function startChannelPlayback(channelId: string) {
+  return request<PlaybackSource>(`/playback/channel/${channelId}`, {
+    method: "POST",
+  });
 }
 
-export function startProgramPlayback(programId: string, target?: "cast") {
-  return startPlayback(`/playback/program/${programId}`, target);
+export function startProgramPlayback(programId: string) {
+  return request<PlaybackSource>(`/playback/program/${programId}`, {
+    method: "POST",
+  });
 }
 
 export function getRemoteReceivers() {

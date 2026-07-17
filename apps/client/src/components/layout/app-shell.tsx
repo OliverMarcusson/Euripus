@@ -36,6 +36,7 @@ import { Separator } from "@/components/ui/separator";
 import {
   clearRemoteControllerTarget,
   logout,
+  pairReceiver,
   pauseRemotePlayback,
   resumeRemotePlayback,
   selectRemoteControllerTarget,
@@ -46,13 +47,9 @@ import {
   useRemoteControllerTargetQuery,
   useRemoteReceiversQuery,
 } from "@/hooks/use-remote-control-state";
-import { castPlaybackRequest } from "@/lib/cast-playback";
 import {
   endGoogleCastSession,
-  pauseGoogleCastPlayback,
   requestGoogleCastSession,
-  resumeGoogleCastPlayback,
-  stopGoogleCastPlayback,
   useGoogleCastStore,
 } from "@/lib/google-cast";
 import { formatReceiverPlaybackSummary } from "@/lib/receiver-playback";
@@ -82,15 +79,17 @@ function RemoteTargetMenu({
   const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
   const remoteTarget = useRemoteControllerStore((state) => state.target);
+  const castAppIdConfigured = useGoogleCastStore((state) => state.appIdConfigured);
   const castAvailable = useGoogleCastStore((state) => state.available);
   const castConnected = useGoogleCastStore((state) => state.connected);
   const castDeviceName = useGoogleCastStore((state) => state.deviceName);
+  const castReceiverDeviceId = useGoogleCastStore((state) => state.receiverDeviceId);
+  const castReceiverPaired = useGoogleCastStore((state) => state.receiverPaired);
   const setTargetSelection = useRemoteControllerStore(
     (state) => state.setTargetSelection,
   );
   const clearTarget = useRemoteControllerStore((state) => state.clearTarget);
   const setPlayerSource = usePlayerStore((state) => state.setSource);
-  const currentPlaybackRequest = usePlayerStore((state) => state.currentRequest);
   const shouldPollTarget = userAuthenticated && (open || !!remoteTarget);
   const targetQuery = useRemoteControllerTargetQuery({
     enabled: userAuthenticated,
@@ -102,7 +101,7 @@ function RemoteTargetMenu({
   });
   const selectTargetMutation = useMutation({
     mutationFn: async (deviceId: string) => {
-      if (castConnected) {
+      if (castConnected && deviceId !== castReceiverDeviceId) {
         endGoogleCastSession();
       }
       return selectRemoteControllerTarget(deviceId);
@@ -133,9 +132,6 @@ function RemoteTargetMenu({
       }
       clearTarget();
       queryClient.setQueryData(["remote", "controller", "target"], null);
-      if (currentPlaybackRequest) {
-        await castPlaybackRequest(currentPlaybackRequest);
-      }
     },
     onSuccess: () => {
       setPlayerSource(null);
@@ -187,15 +183,20 @@ function RemoteTargetMenu({
         <DropdownMenuItem
           onClick={() => connectCastMutation.mutate()}
           disabled={
-            castConnected || !castAvailable || connectCastMutation.isPending
+            castConnected ||
+            !castAppIdConfigured ||
+            !castAvailable ||
+            connectCastMutation.isPending
           }
         >
           <Cast data-icon="inline-start" />
           {connectCastMutation.isPending
-            ? "Connecting..."
-            : castAvailable
-              ? "Google Cast..."
-              : "No Cast devices found"}
+            ? "Opening receiver..."
+            : !castAppIdConfigured
+              ? "Cast App ID required"
+              : castAvailable
+                ? "Open Euripus receiver..."
+                : "No Cast devices found"}
         </DropdownMenuItem>
         <DropdownMenuSeparator />
         {remoteDevices.length ? (
@@ -227,10 +228,81 @@ function RemoteTargetMenu({
   );
 }
 
+function CastReceiverAutoSelector() {
+  const queryClient = useQueryClient();
+  const remoteTarget = useRemoteControllerStore((state) => state.target);
+  const setTargetSelection = useRemoteControllerStore(
+    (state) => state.setTargetSelection,
+  );
+  const castReceiverDeviceId = useGoogleCastStore(
+    (state) => state.receiverDeviceId,
+  );
+  const castReceiverPaired = useGoogleCastStore(
+    (state) => state.receiverPaired,
+  );
+  const castReceiverPairingCode = useGoogleCastStore(
+    (state) => state.receiverPairingCode,
+  );
+  const castDeviceName = useGoogleCastStore((state) => state.deviceName);
+  const selectMutation = useMutation({
+    mutationFn: async () => {
+      let deviceId = castReceiverDeviceId;
+      if (!castReceiverPaired && castReceiverPairingCode) {
+        const device = await pairReceiver({
+          code: castReceiverPairingCode,
+          rememberDevice: true,
+          name: castDeviceName
+            ? `Google Cast - ${castDeviceName}`
+            : "Google Cast receiver",
+        });
+        deviceId = device.id;
+        useGoogleCastStore.setState({
+          receiverDeviceId: device.id,
+          receiverPaired: true,
+          receiverPairingCode: null,
+        });
+      }
+      if (!deviceId) {
+        throw new Error("The Cast receiver did not provide a device ID.");
+      }
+      return selectRemoteControllerTarget(deviceId);
+    },
+    onSuccess: (selection) => {
+      setTargetSelection(selection);
+      queryClient.setQueryData(["remote", "controller", "target"], selection);
+      void queryClient.invalidateQueries({ queryKey: ["remote", "receivers"] });
+    },
+    onError: (error) => {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "The Cast receiver could not be selected.",
+      );
+    },
+  });
+
+  useEffect(() => {
+    if (
+      (castReceiverPaired || !!castReceiverPairingCode) &&
+      castReceiverDeviceId &&
+      remoteTarget?.id !== castReceiverDeviceId &&
+      !selectMutation.isPending
+    ) {
+      selectMutation.mutate();
+    }
+  }, [
+    castReceiverDeviceId,
+    castReceiverPaired,
+    castReceiverPairingCode,
+    remoteTarget?.id,
+  ]);
+
+  return null;
+}
+
 function RemoteTargetStatusBanner() {
   const remoteTarget = useRemoteControllerStore((state) => state.target);
   const castConnected = useGoogleCastStore((state) => state.connected);
-  const castHasMedia = useGoogleCastStore((state) => state.hasMedia);
   const castDeviceName = useGoogleCastStore((state) => state.deviceName);
   const targetQuery = useRemoteControllerTargetQuery({
     enabled: !!remoteTarget,
@@ -242,18 +314,14 @@ function RemoteTargetStatusBanner() {
   );
   const controlMutation = useMutation({
     mutationFn: async (command: "play" | "pause" | "stop") => {
-      if (castConnected) {
-        if (command === "play") return resumeGoogleCastPlayback();
-        if (command === "pause") return pauseGoogleCastPlayback();
-        return stopGoogleCastPlayback();
-      }
       if (command === "play") return resumeRemotePlayback();
       if (command === "pause") return pauseRemotePlayback();
       return stopRemotePlayback();
     },
     onError: (error) => toast.error(error instanceof Error ? error.message : "Playback control failed."),
   });
-  const controlsDisabled = controlMutation.isPending || (castConnected ? !castHasMedia : !resolvedTarget?.currentPlayback);
+  const controlsDisabled =
+    controlMutation.isPending || !resolvedTarget?.currentPlayback;
 
   if (!remoteTarget && !castConnected) {
     return null;
@@ -264,7 +332,7 @@ function RemoteTargetStatusBanner() {
       <div className="mx-auto flex w-full max-w-[1240px] flex-wrap items-center justify-center gap-2">
         <span>
           {castConnected ? <>
-            Casting to <span className="font-semibold">{castDeviceName ?? "Google Cast"}</span>
+            Euripus Receiver open on <span className="font-semibold">{castDeviceName ?? "Google Cast"}</span>
           </> : <>
             Controlling <span className="font-semibold">{remoteTarget?.name}</span>
             {resolvedTarget?.currentPlayback ? ` - ${formatReceiverPlaybackSummary(resolvedTarget)}` : ""}
@@ -350,6 +418,7 @@ export function AppShell() {
 
   return (
     <div className="flex h-screen w-full flex-col overflow-hidden bg-background md:flex-row">
+      <CastReceiverAutoSelector />
       <MobileTopHeader />
 
       <aside className="relative z-20 hidden w-[240px] shrink-0 flex-col border-r border-border/40 bg-sidebar shadow-[4px_0_24px_rgba(0,0,0,0.02)] md:flex">

@@ -526,10 +526,10 @@ fn playback_credentials(
 }
 
 fn playback_target_for_receiver_app(app_kind: &str) -> PlaybackTarget {
-    if app_kind == "receiver-android-tv" {
-        PlaybackTarget::ReceiverAndroidTv
-    } else {
-        PlaybackTarget::ReceiverWeb
+    match app_kind {
+        "receiver-android-tv" => PlaybackTarget::ReceiverAndroidTv,
+        "receiver-google-cast" => PlaybackTarget::Cast,
+        _ => PlaybackTarget::ReceiverWeb,
     }
 }
 
@@ -1030,6 +1030,14 @@ mod tests {
         assert_eq!(response.url, format!("http://{addr}/stream.m3u8"));
 
         server.abort();
+    }
+
+    #[test]
+    fn google_cast_receiver_uses_cast_playback_target() {
+        assert_eq!(
+            playback_target_for_receiver_app("receiver-google-cast"),
+            PlaybackTarget::Cast
+        );
     }
 
     #[tokio::test]
