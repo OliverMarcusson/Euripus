@@ -11,6 +11,23 @@ pub(super) mod resolve;
 
 const BROWSER_HLS_UNSUPPORTED_REASON: &str = "This provider stream could not be verified for browser HLS playback. Try a receiver/native target instead.";
 
+#[derive(Debug, Default, Deserialize)]
+struct PlaybackQuery {
+    target: Option<String>,
+}
+
+impl PlaybackQuery {
+    fn target(&self) -> Result<PlaybackTarget, AppError> {
+        match self.target.as_deref() {
+            None | Some("") => Ok(PlaybackTarget::Browser),
+            Some("cast") => Ok(PlaybackTarget::Cast),
+            Some(_) => Err(AppError::BadRequest(
+                "Playback target must be 'cast' when specified.".to_string(),
+            )),
+        }
+    }
+}
+
 #[derive(Debug, FromRow)]
 struct ChannelPlaybackRecord {
     id: Uuid,
@@ -50,28 +67,47 @@ pub(super) fn shared_router() -> Router<AppState> {
 async fn play_channel(
     State(state): State<AppState>,
     headers: HeaderMap,
+    Query(query): Query<PlaybackQuery>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<PlaybackSourceResponse> {
     let auth = require_auth(&state, &headers).await?;
     Ok(Json(
-        resolve_channel_playback_source(&state, &headers, auth.user_id, id).await?,
+        resolve_channel_playback_source_for_target(
+            &state,
+            &headers,
+            None,
+            auth.user_id,
+            id,
+            query.target()?,
+        )
+        .await?,
     ))
 }
 
 async fn play_program(
     State(state): State<AppState>,
     headers: HeaderMap,
+    Query(query): Query<PlaybackQuery>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<PlaybackSourceResponse> {
     let auth = require_auth(&state, &headers).await?;
     Ok(Json(
-        resolve_program_playback_source(&state, &headers, auth.user_id, id).await?,
+        resolve_program_playback_source_for_target(
+            &state,
+            &headers,
+            None,
+            auth.user_id,
+            id,
+            query.target()?,
+        )
+        .await?,
     ))
 }
 
 async fn play_on_demand(
     State(state): State<AppState>,
     headers: HeaderMap,
+    Query(query): Query<PlaybackQuery>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<PlaybackSourceResponse> {
     let auth = require_auth(&state, &headers).await?;
@@ -83,7 +119,7 @@ async fn play_on_demand(
             auth.user_id,
             id,
             false,
-            PlaybackTarget::Browser,
+            query.target()?,
         )
         .await?,
     ))
@@ -92,6 +128,7 @@ async fn play_on_demand(
 async fn play_episode(
     State(state): State<AppState>,
     headers: HeaderMap,
+    Query(query): Query<PlaybackQuery>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<PlaybackSourceResponse> {
     let auth = require_auth(&state, &headers).await?;
@@ -103,7 +140,7 @@ async fn play_episode(
             auth.user_id,
             id,
             true,
-            PlaybackTarget::Browser,
+            query.target()?,
         )
         .await?,
     ))
@@ -195,23 +232,6 @@ async fn resolve_on_demand_playback_source_for_target(
     .await
 }
 
-async fn resolve_channel_playback_source(
-    state: &AppState,
-    headers: &HeaderMap,
-    user_id: Uuid,
-    id: Uuid,
-) -> Result<PlaybackSourceResponse, AppError> {
-    resolve_channel_playback_source_for_target(
-        state,
-        headers,
-        None,
-        user_id,
-        id,
-        PlaybackTarget::Browser,
-    )
-    .await
-}
-
 pub(in crate::server_main) async fn resolve_channel_playback_source_for_receiver(
     state: &AppState,
     headers: &HeaderMap,
@@ -298,23 +318,6 @@ async fn resolve_channel_playback_source_for_target(
         format,
         None,
         browser_hls_preflight_required,
-    )
-    .await
-}
-
-async fn resolve_program_playback_source(
-    state: &AppState,
-    headers: &HeaderMap,
-    user_id: Uuid,
-    id: Uuid,
-) -> Result<PlaybackSourceResponse, AppError> {
-    resolve_program_playback_source_for_target(
-        state,
-        headers,
-        None,
-        user_id,
-        id,
-        PlaybackTarget::Browser,
     )
     .await
 }
@@ -1012,6 +1015,33 @@ mod tests {
         assert_eq!(response.url, format!("http://{addr}/stream.m3u8"));
 
         server.abort();
+    }
+
+    #[tokio::test]
+    async fn playback_source_for_mode_always_relays_cast_targets() {
+        let state = sample_app_state();
+        let response = playback_source_for_mode(
+            &state,
+            &local_request_headers(),
+            None,
+            Uuid::from_u128(41),
+            Uuid::from_u128(42),
+            PlaybackTarget::Cast,
+            "direct",
+            "Arena 1",
+            "https://provider.example.com/live/42.m3u8".to_string(),
+            true,
+            false,
+            PlaybackStreamFormat::Hls,
+            None,
+        )
+        .expect("cast playback source");
+
+        assert!(
+            response
+                .url
+                .starts_with("https://app.example.com/api/relay/hls?token=")
+        );
     }
 
     #[tokio::test]

@@ -23,6 +23,7 @@ pub(in crate::server_main) enum PlaybackMode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::server_main) enum PlaybackTarget {
     Browser,
+    Cast,
     ReceiverWeb,
     ReceiverAndroidTv,
 }
@@ -142,12 +143,15 @@ pub(in crate::server_main) fn playback_source_for_mode(
         .map(|origin| Url::parse(origin).map_err(|error| AppError::Internal(anyhow!(error))))
         .transpose()?
         .unwrap_or(request_base_url(&state.config, headers)?);
-    let relay_required_for_android_tv = matches!(target, PlaybackTarget::ReceiverAndroidTv);
+    let relay_required_for_target = matches!(
+        target,
+        PlaybackTarget::Cast | PlaybackTarget::ReceiverAndroidTv
+    );
     let relay_required_for_https = matches!(target, PlaybackTarget::Browser)
         && should_force_relay_for_secure_request(&request_base_url, &upstream_url);
     if playback_mode == PlaybackMode::Direct
         && !relay_required_for_https
-        && !relay_required_for_android_tv
+        && !relay_required_for_target
     {
         return Ok(direct);
     }
@@ -220,7 +224,7 @@ pub(in crate::server_main) fn resolve_effective_playback_format_for_target(
     output_format: &str,
     legacy_stream_extension: Option<&str>,
 ) -> Result<PlaybackStreamFormat, AppError> {
-    if matches!(target, PlaybackTarget::Browser) {
+    if matches!(target, PlaybackTarget::Browser | PlaybackTarget::Cast) {
         return Ok(PlaybackStreamFormat::Hls);
     }
 
@@ -330,6 +334,15 @@ mod tests {
         let format =
             resolve_effective_playback_format_for_target(PlaybackTarget::Browser, "ts", Some("ts"))
                 .expect("browser playback format");
+
+        assert_eq!(format, PlaybackStreamFormat::Hls);
+    }
+
+    #[test]
+    fn resolve_effective_playback_format_for_cast_forces_hls() {
+        let format =
+            resolve_effective_playback_format_for_target(PlaybackTarget::Cast, "ts", Some("ts"))
+                .expect("cast playback format");
 
         assert_eq!(format, PlaybackStreamFormat::Hls);
     }

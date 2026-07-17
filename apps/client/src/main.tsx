@@ -7,6 +7,7 @@ import { useEffect } from "react";
 import { router } from "@/router";
 import { useBootstrapSession } from "@/hooks/use-bootstrap-session";
 import { useThemeSync } from "@/hooks/use-theme-sync";
+import { initializeGoogleCast } from "@/lib/google-cast";
 import { registerPwaServiceWorker } from "@/lib/pwa";
 import { QUERY_CACHE_GC_TIME_MS } from "@/lib/query-cache";
 import { useThemeStore } from "@/store/theme-store";
@@ -31,6 +32,7 @@ function Bootstrapper() {
 
   useEffect(() => {
     registerPwaServiceWorker();
+    void initializeGoogleCast();
   }, []);
 
   return (
