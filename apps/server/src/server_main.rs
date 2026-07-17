@@ -213,6 +213,7 @@ struct SearchQuery {
     q: String,
     offset: Option<i64>,
     limit: Option<i64>,
+    quality_channels_only: Option<bool>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]

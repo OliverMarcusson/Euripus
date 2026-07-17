@@ -12,10 +12,9 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@/components/ui/empty";
-import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
+import { Field, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Separator } from "@/components/ui/separator";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { ProviderSettingsSection } from "@/features/provider/provider-settings-section";
 import { RestrictedProviderSyncSection } from "@/features/provider/restricted-provider-sync-section";
@@ -24,7 +23,6 @@ import { useChannelFavoriteMutation } from "@/hooks/use-channel-favorite";
 import { useChannelPlaybackMutation } from "@/hooks/use-playback-actions";
 import { usePpvFavoriteMutation } from "@/hooks/use-ppv-favorite";
 import {
-  getProviders,
   getRecents,
   getRemoteReceivers,
   pairReceiver,
@@ -56,6 +54,57 @@ const themeOptions: Array<{
   { value: "dark", label: "Dark", icon: Moon },
 ] as const;
 
+function SettingsSwitch({
+  id,
+  checked,
+  onToggle,
+}: {
+  id: string;
+  checked: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <button
+      id={id}
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      onClick={onToggle}
+      className="relative inline-flex h-7 w-12 shrink-0 items-center rounded-full border border-border bg-muted transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring data-[state=checked]:border-primary data-[state=checked]:bg-primary"
+      data-state={checked ? "checked" : "unchecked"}
+    >
+      <span
+        className="mx-1 block size-5 rounded-full bg-white shadow-sm transition-transform data-[state=checked]:translate-x-5"
+        data-state={checked ? "checked" : "unchecked"}
+      />
+    </button>
+  );
+}
+
+function SettingSwitchRow({
+  label,
+  id,
+  checked,
+  onToggle,
+}: {
+  label: string;
+  id: string;
+  checked: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <div className="grid gap-4 py-6 md:grid-cols-[minmax(0,240px)_minmax(0,520px)] md:items-center md:justify-between">
+      <h2 className="text-sm font-medium">PPV event dates</h2>
+      <div className="flex items-center justify-between gap-4">
+        <label htmlFor={id} className="text-sm text-muted-foreground">
+          {label}
+        </label>
+        <SettingsSwitch id={id} checked={checked} onToggle={onToggle} />
+      </div>
+    </div>
+  );
+}
+
 export function SettingsPage() {
   const user = useAuthStore((state) => state.user);
   const queryClient = useQueryClient();
@@ -65,11 +114,6 @@ export function SettingsPage() {
   const recentsQuery = useQuery({
     queryKey: ["recents"],
     queryFn: getRecents,
-    staleTime: STANDARD_QUERY_STALE_TIME_MS,
-  });
-  const providersQuery = useQuery({
-    queryKey: ["providers"],
-    queryFn: getProviders,
     staleTime: STANDARD_QUERY_STALE_TIME_MS,
   });
   const remoteDevicesQuery = useQuery({
@@ -94,7 +138,6 @@ export function SettingsPage() {
     },
   });
   const preference = useThemeStore((state) => state.preference);
-  const resolvedTheme = useThemeStore((state) => state.resolvedTheme);
   const setPreference = useThemeStore((state) => state.setPreference);
   const livePlaybackPreference = usePlaybackSettingsStore(
     (state) => state.livePlaybackPreference,
@@ -108,323 +151,129 @@ export function SettingsPage() {
   const setFilterPpvByDate = useChannelSettingsStore(
     (state) => state.setFilterPpvByDate,
   );
+  const qualityChannelsOnly = useChannelSettingsStore(
+    (state) => state.qualityChannelsOnly,
+  );
+  const setQualityChannelsOnly = useChannelSettingsStore(
+    (state) => state.setQualityChannelsOnly,
+  );
   const recents = recentsQuery.data ?? [];
-  const providers = providersQuery.data ?? [];
   const remoteDevices = remoteDevicesQuery.data ?? [];
   const playMutation = useChannelPlaybackMutation();
 
   return (
-    <div className="flex flex-col gap-5 sm:gap-6">
-      <PageHeader
-        title="Settings"
-        meta={
-          <>
-            <Badge variant="accent">{resolvedTheme} theme</Badge>
-            <Badge variant="outline">
-              {remoteDevices.length} paired screens
-            </Badge>
-            <Badge variant="outline">{recents.length} recent channels</Badge>
-            <Badge variant="outline">
-              {providers.length} provider{providers.length === 1 ? "" : "s"}
-            </Badge>
-          </>
-        }
-      />
+    <div className="flex flex-col">
+      <PageHeader title="Settings" />
 
-      <div className="grid gap-6 xl:grid-cols-[320px_minmax(0,1fr)]">
-        <Card className="self-start rounded-none border-0 bg-transparent shadow-none sm:rounded-3xl sm:border sm:border-border/50 sm:bg-card/40 sm:backdrop-blur-xl sm:shadow-2xl">
-          <CardHeader className="px-0 pb-4 pt-0 sm:p-6 sm:pb-0">
-            <CardTitle className="text-xl font-medium tracking-tight">Appearance</CardTitle>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-6 px-0 pb-0 sm:p-6">
-            <ToggleGroup
-              type="single"
-              value={preference}
-              onValueChange={(value) => {
-                if (value) {
-                  setPreference(value as ThemePreference);
-                }
-              }}
-              className="grid w-full grid-cols-1 gap-1.5 rounded-2xl bg-black/20 p-1.5 shadow-inner"
+      <div className="flex flex-col">
+        <Card className="flex flex-col overflow-hidden rounded-none border-0 bg-transparent py-8 shadow-none sm:py-10">
+          <CardHeader className="flex shrink-0 flex-row items-center justify-between gap-4 px-0 pb-5 pt-0">
+            <CardTitle className="text-2xl font-semibold tracking-tight">
+              Recent channels
+            </CardTitle>
+            <Badge
+              variant="outline"
+              className="bg-background/60 backdrop-blur-md"
             >
-              {themeOptions.map((option) => {
-                const Icon = option.icon;
-
-                return (
-                  <ToggleGroupItem
-                    key={option.value}
-                    value={option.value}
-                    className="justify-start rounded-xl px-4 py-3 data-[state=on]:bg-secondary/80 data-[state=on]:shadow-sm transition-all"
-                  >
-                    <Icon data-icon="inline-start" />
-                    {option.label}
-                  </ToggleGroupItem>
-                );
-              })}
-            </ToggleGroup>
-
-            <Separator />
-
-            <div className="flex flex-col gap-3">
-              <div>
-                <h2 className="text-base font-medium tracking-tight">
-                  Live playback
-                </h2>
-                <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
-                  Choose a larger buffer for stability or stay closer to the
-                  live broadcast.
-                </p>
-              </div>
-              <ToggleGroup
-                type="single"
-                value={livePlaybackPreference}
-                onValueChange={(value) => {
-                  if (value === "stable" || value === "low-latency") {
-                    setLivePlaybackPreference(value);
-                  }
-                }}
-                aria-label="Live playback preference"
-                className="grid w-full grid-cols-2 gap-1.5 rounded-2xl bg-black/20 p-1.5 shadow-inner"
-              >
-                <ToggleGroupItem
-                  value="stable"
-                  className="rounded-xl px-3 py-3 data-[state=on]:bg-secondary/80 data-[state=on]:shadow-sm"
-                >
-                  More stable
-                </ToggleGroupItem>
-                <ToggleGroupItem
-                  value="low-latency"
-                  className="rounded-xl px-3 py-3 data-[state=on]:bg-secondary/80 data-[state=on]:shadow-sm"
-                >
-                  Closer to live
-                </ToggleGroupItem>
-              </ToggleGroup>
-              <p className="text-xs leading-relaxed text-muted-foreground">
-                {livePlaybackPreference === "stable"
-                  ? "Uses a larger buffer to reduce interruptions."
-                  : "Uses a smaller buffer and briefly speeds up when needed to catch up with live."}
-              </p>
-            </div>
-
-            <Separator />
-
-            <div className="flex flex-col gap-3">
-              <div>
-                <h2 className="text-base font-medium tracking-tight">
-                  PPV event dates
-                </h2>
-                <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
-                  In discovery views, times with a recognized timezone are
-                  converted to this device&apos;s local timezone and shown for
-                  today or tomorrow between 00:00 and 06:59. Without a timezone,
-                  the printed date must be today. Undated channels remain visible.
-                </p>
-              </div>
-              <div className="flex items-center justify-between gap-3 rounded-2xl border border-border/40 bg-black/10 px-4 py-3 shadow-inner">
-                <label
-                  htmlFor="ppv-date-filter-toggle"
-                  className="text-sm font-medium"
-                >
-                  Filter PPV channels by date
-                </label>
-                <button
-                  id="ppv-date-filter-toggle"
-                  type="button"
-                  role="switch"
-                  aria-checked={filterPpvByDate}
-                  onClick={() => setFilterPpvByDate(!filterPpvByDate)}
-                  className="relative inline-flex h-8 w-14 shrink-0 items-center rounded-full border border-white/10 bg-muted/50 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background data-[state=checked]:bg-primary"
-                  data-state={filterPpvByDate ? "checked" : "unchecked"}
-                >
-                  <span
-                    className="relative z-10 mx-1 block size-6 rounded-full bg-white shadow-sm transition-transform data-[state=checked]:translate-x-6"
-                    data-state={filterPpvByDate ? "checked" : "unchecked"}
-                  />
-                </button>
-              </div>
-            </div>
-
-            <Separator />
-
-            <div className="flex flex-col gap-5">
-              <div className="flex items-center justify-between gap-3">
-                <span className="text-base font-medium tracking-tight">Pair screen</span>
-                <Badge variant="outline" className="bg-background/50">{remoteDevices.length} paired</Badge>
-              </div>
-              <p className="text-sm text-muted-foreground leading-relaxed">
-                Enter the 4-character code shown on the receiver screen.
-              </p>
-              
-              <FieldGroup className="gap-4">
-                <Field>
-                  <FieldLabel className="sr-only">Pairing code</FieldLabel>
-                  <Input
-                    aria-label="Pairing code"
-                    value={pairCode}
-                    onChange={(event) =>
-                      setPairCode(event.target.value.toUpperCase().slice(0, 4))
-                    }
-                    placeholder="XT8P"
-                    className="bg-background/50 font-mono text-center text-lg tracking-[0.2em]"
-                  />
-                </Field>
-                <Field>
-                  <FieldLabel className="sr-only">Receiver name</FieldLabel>
-                  <Input
-                    aria-label="Receiver name"
-                    value={pairName}
-                    onChange={(event) => setPairName(event.target.value)}
-                    placeholder="Living room TV"
-                    className="bg-background/50"
-                  />
-                </Field>
-              </FieldGroup>
-              
-              <div className="flex items-center justify-between gap-3 rounded-2xl border border-border/40 bg-black/10 px-4 py-3 shadow-inner">
-                <label
-                  htmlFor="remember-device-toggle"
-                  className="text-sm font-medium"
-                >
-                  Remember this device
-                </label>
-                <button
-                  id="remember-device-toggle"
-                  type="button"
-                  role="switch"
-                  aria-checked={rememberDevice}
-                  aria-label="Remember this device"
-                  onClick={() => setRememberDevice((value) => !value)}
-                  className="relative inline-flex h-8 w-14 shrink-0 items-center rounded-full border border-white/10 bg-muted/50 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background data-[state=checked]:bg-primary"
-                  data-state={rememberDevice ? "checked" : "unchecked"}
-                >
-                  <span
-                    className="relative z-10 mx-1 block size-6 rounded-full bg-white shadow-sm transition-transform data-[state=checked]:translate-x-6"
-                    data-state={rememberDevice ? "checked" : "unchecked"}
-                  />
-                </button>
-              </div>
-              
-              <Button
-                type="button"
-                size="lg"
-                className="mt-1 rounded-xl shadow-lg shadow-primary/20"
-                onClick={() =>
-                  pairMutation.mutate({
-                    code: pairCode,
-                    rememberDevice,
-                    name: pairName.trim() || undefined,
-                  })
-                }
-                disabled={pairCode.length !== 4 || pairMutation.isPending}
-              >
-                Pair screen
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Separator className="sm:hidden" />
-
-        <Card className="flex flex-col overflow-hidden rounded-none border-0 bg-transparent shadow-none sm:rounded-3xl sm:border sm:border-border/50 sm:bg-card/40 sm:backdrop-blur-xl sm:shadow-2xl">
-          <CardHeader className="flex shrink-0 flex-row items-center justify-between gap-4 px-0 pb-4 pt-0 sm:p-6 sm:pb-0">
-            <CardTitle className="text-xl font-medium tracking-tight">Recent channels</CardTitle>
-            <Badge variant="outline" className="bg-background/60 backdrop-blur-md">{recents.length}</Badge>
+              {recents.length}
+            </Badge>
           </CardHeader>
-          <CardContent className="flex flex-col p-0 pb-2 sm:px-4 sm:pb-4">
+          <CardContent className="flex flex-col p-0 pb-2">
             {recents.length ? (
               <ScrollArea
-                className="h-[22rem] sm:h-[26rem] xl:h-[33rem] pr-3"
+                className="max-h-[32rem] pr-3"
                 data-testid="recent-channels-scroll-area"
               >
-                <div className="flex flex-col gap-1.5 py-2">
-                  {recents.map((recent, index) => {
+                <div className="flex flex-col">
+                  {recents.map((recent) => {
                     const displayChannelName = formatEventChannelTitle(
                       recent.channel.name,
                     );
 
                     return (
                       <div key={recent.channel.id} className="group">
-                      <div className="flex flex-col gap-4 p-4 rounded-2xl transition-all duration-300 hover:bg-secondary/40 hover:shadow-md lg:flex-row lg:items-center lg:justify-between">
-                        <div className="flex min-w-0 items-center gap-4">
-                          <ChannelAvatar
-                            name={displayChannelName}
-                            logoUrl={recent.channel.logoUrl}
-                            className="size-10"
-                          />
-                          <div className="flex min-w-0 flex-1 flex-col gap-1">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <h2 className="truncate text-sm font-semibold">
-                                {displayChannelName}
-                              </h2>
-                              {recent.channel.categoryName ? (
-                                <Badge variant="outline">
-                                  {recent.channel.categoryName}
-                                </Badge>
-                              ) : null}
-                              {recent.channel.isPpv ? (
-                                <Badge variant="accent">PPV</Badge>
-                              ) : null}
-                              {recent.channel.isFavorite ? (
-                                <Badge variant="accent">Favorite</Badge>
-                              ) : null}
-                              {recent.channel.isPpvFavorite ? (
-                                <Badge variant="outline">PPV saved</Badge>
-                              ) : null}
+                        <div className="flex flex-col gap-4 border-b border-border/50 px-1 py-4 transition-colors last:border-b-0 hover:bg-muted/30 sm:px-3 lg:flex-row lg:items-center lg:justify-between">
+                          <div className="flex min-w-0 items-center gap-4">
+                            <ChannelAvatar
+                              name={displayChannelName}
+                              logoUrl={recent.channel.logoUrl}
+                              className="size-10"
+                            />
+                            <div className="flex min-w-0 flex-1 flex-col gap-1">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <h2 className="truncate text-sm font-semibold">
+                                  {displayChannelName}
+                                </h2>
+                                {recent.channel.categoryName ? (
+                                  <Badge variant="outline">
+                                    {recent.channel.categoryName}
+                                  </Badge>
+                                ) : null}
+                                {recent.channel.isPpv ? (
+                                  <Badge variant="accent">PPV</Badge>
+                                ) : null}
+                                {recent.channel.isFavorite ? (
+                                  <Badge variant="accent">Favorite</Badge>
+                                ) : null}
+                                {recent.channel.isPpvFavorite ? (
+                                  <Badge variant="outline">PPV saved</Badge>
+                                ) : null}
+                              </div>
+                              <p className="text-sm text-muted-foreground">
+                                Last played{" "}
+                                {formatRelativeTime(recent.lastPlayedAt)} (
+                                {formatDateTime(recent.lastPlayedAt)})
+                              </p>
                             </div>
-                            <p className="text-sm text-muted-foreground">
-                              Last played{" "}
-                              {formatRelativeTime(recent.lastPlayedAt)} (
-                              {formatDateTime(recent.lastPlayedAt)})
-                            </p>
                           </div>
-                        </div>
-                        <div className="flex shrink-0 items-center gap-2 opacity-100 transition-opacity duration-300 lg:opacity-0 lg:group-hover:opacity-100">
-                          <Button
-                            variant="secondary"
-                            size="sm"
-                            onClick={() =>
-                              favoriteMutation.mutate(recent.channel)
-                            }
-                            disabled={
-                              favoriteMutation.isPending &&
-                              favoriteMutation.variables?.id ===
-                                recent.channel.id
-                            }
-                          >
-                            {recent.channel.isFavorite
-                              ? "Unfavorite"
-                              : "Favorite"}
-                          </Button>
-                          {recent.channel.isPpv ? (
+                          <div className="flex shrink-0 items-center gap-2">
                             <Button
                               variant="secondary"
                               size="sm"
                               onClick={() =>
-                                ppvFavoriteMutation.mutate(recent.channel)
+                                favoriteMutation.mutate(recent.channel)
                               }
                               disabled={
-                                ppvFavoriteMutation.isPending
-                                && ppvFavoriteMutation.variables?.id === recent.channel.id
+                                favoriteMutation.isPending &&
+                                favoriteMutation.variables?.id ===
+                                  recent.channel.id
                               }
                             >
-                              {recent.channel.isPpvFavorite
-                                ? "Remove PPV"
-                                : "Save PPV"}
+                              {recent.channel.isFavorite
+                                ? "Unfavorite"
+                                : "Favorite"}
                             </Button>
-                          ) : null}
-                          <Button
-                            size="sm"
-                            onClick={() =>
-                              playMutation.mutate(recent.channel.id)
-                            }
-                            disabled={playMutation.isPending}
-                          >
-                            <Play data-icon="inline-start" />
-                            Play
-                          </Button>
+                            {recent.channel.isPpv ? (
+                              <Button
+                                variant="secondary"
+                                size="sm"
+                                onClick={() =>
+                                  ppvFavoriteMutation.mutate(recent.channel)
+                                }
+                                disabled={
+                                  ppvFavoriteMutation.isPending &&
+                                  ppvFavoriteMutation.variables?.id ===
+                                    recent.channel.id
+                                }
+                              >
+                                {recent.channel.isPpvFavorite
+                                  ? "Remove PPV"
+                                  : "Save PPV"}
+                              </Button>
+                            ) : null}
+                            <Button
+                              size="sm"
+                              onClick={() =>
+                                playMutation.mutate(recent.channel.id)
+                              }
+                              disabled={playMutation.isPending}
+                            >
+                              <Play data-icon="inline-start" />
+                              Play
+                            </Button>
+                          </div>
                         </div>
                       </div>
-                    </div>
                     );
                   })}
                 </div>
@@ -441,24 +290,187 @@ export function SettingsPage() {
             )}
           </CardContent>
         </Card>
+
+        <Card className="rounded-none border-0 border-t border-border/60 bg-transparent py-8 shadow-none sm:py-10">
+          <CardHeader className="px-0 pb-6 pt-0">
+            <CardTitle className="text-2xl font-semibold tracking-tight">
+              Playback & appearance
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="divide-y divide-border/60 p-0">
+            <div className="grid gap-4 py-6 first:pt-0 md:grid-cols-[minmax(0,240px)_minmax(0,520px)] md:items-center md:justify-between">
+              <h2 className="text-sm font-medium">Theme</h2>
+              <ToggleGroup
+                type="single"
+                value={preference}
+                onValueChange={(value) => {
+                  if (value) setPreference(value as ThemePreference);
+                }}
+                className="grid w-full grid-cols-3 rounded-lg border border-border/70 bg-muted/30 p-1"
+              >
+                {themeOptions.map((option) => {
+                  const Icon = option.icon;
+                  return (
+                    <ToggleGroupItem
+                      key={option.value}
+                      value={option.value}
+                      className="rounded-md px-3 py-2.5 data-[state=on]:bg-background data-[state=on]:shadow-sm"
+                    >
+                      <Icon data-icon="inline-start" />
+                      {option.label}
+                    </ToggleGroupItem>
+                  );
+                })}
+              </ToggleGroup>
+            </div>
+
+            <div className="grid gap-4 py-6 md:grid-cols-[minmax(0,240px)_minmax(0,520px)] md:items-center md:justify-between">
+              <h2 className="text-sm font-medium">Live playback</h2>
+              <ToggleGroup
+                type="single"
+                value={livePlaybackPreference}
+                onValueChange={(value) => {
+                  if (value === "stable" || value === "low-latency") {
+                    setLivePlaybackPreference(value);
+                  }
+                }}
+                aria-label="Live playback preference"
+                className="grid w-full grid-cols-2 rounded-lg border border-border/70 bg-muted/30 p-1"
+              >
+                <ToggleGroupItem
+                  value="stable"
+                  className="rounded-md px-3 py-2.5 data-[state=on]:bg-background data-[state=on]:shadow-sm"
+                >
+                  More stable
+                </ToggleGroupItem>
+                <ToggleGroupItem
+                  value="low-latency"
+                  className="rounded-md px-3 py-2.5 data-[state=on]:bg-background data-[state=on]:shadow-sm"
+                >
+                  Closer to live
+                </ToggleGroupItem>
+              </ToggleGroup>
+            </div>
+
+            <SettingSwitchRow
+              label="Filter PPV channels by date"
+              id="ppv-date-filter-toggle"
+              checked={filterPpvByDate}
+              onToggle={() => setFilterPpvByDate(!filterPpvByDate)}
+            />
+
+            <div className="grid gap-4 py-6 md:grid-cols-[minmax(0,240px)_minmax(0,520px)] md:items-center md:justify-between">
+              <h2 className="text-sm font-medium">Quality channels</h2>
+              <div className="flex items-center justify-between gap-4">
+                <div className="flex items-center gap-2">
+                  <label
+                    htmlFor="quality-channels-toggle"
+                    className="text-sm text-muted-foreground"
+                  >
+                    Only show quality channels
+                  </label>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => {
+                      window.location.href = "/admin";
+                    }}
+                  >
+                    Manage
+                  </Button>
+                </div>
+                <SettingsSwitch
+                  id="quality-channels-toggle"
+                  checked={qualityChannelsOnly}
+                  onToggle={() => setQualityChannelsOnly(!qualityChannelsOnly)}
+                />
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className="rounded-none border-0 border-t border-border/60 bg-transparent py-8 shadow-none sm:py-10">
+          <CardHeader className="flex flex-row items-center justify-between gap-4 px-0 pb-6 pt-0">
+            <CardTitle className="text-2xl font-semibold tracking-tight">
+              Pair a screen
+            </CardTitle>
+            <Badge variant="outline">{remoteDevices.length} paired</Badge>
+          </CardHeader>
+          <CardContent className="p-0">
+            <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] md:items-end">
+              <Field>
+                <FieldLabel htmlFor="pairingCode">Pairing code</FieldLabel>
+                <Input
+                  id="pairingCode"
+                  value={pairCode}
+                  onChange={(event) =>
+                    setPairCode(event.target.value.toUpperCase().slice(0, 4))
+                  }
+                  placeholder="XT8P"
+                  className="font-mono text-center text-lg tracking-[0.2em]"
+                />
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="receiverName">Screen name</FieldLabel>
+                <Input
+                  id="receiverName"
+                  value={pairName}
+                  onChange={(event) => setPairName(event.target.value)}
+                  placeholder="Living room TV"
+                />
+              </Field>
+              <Button
+                type="button"
+                size="lg"
+                onClick={() =>
+                  pairMutation.mutate({
+                    code: pairCode,
+                    rememberDevice,
+                    name: pairName.trim() || undefined,
+                  })
+                }
+                disabled={pairCode.length !== 4 || pairMutation.isPending}
+              >
+                Pair screen
+              </Button>
+            </div>
+            <div className="mt-5 flex items-center gap-3">
+              <SettingsSwitch
+                id="remember-device-toggle"
+                checked={rememberDevice}
+                onToggle={() => setRememberDevice((value) => !value)}
+              />
+              <label
+                htmlFor="remember-device-toggle"
+                className="text-sm text-muted-foreground"
+              >
+                Remember this device
+              </label>
+            </div>
+          </CardContent>
+        </Card>
       </div>
 
-      <Separator className="sm:hidden" />
-
-      {user?.providerLocked ? <RestrictedProviderSyncSection /> : <ProviderSettingsSection />}
+      {user?.providerLocked ? (
+        <RestrictedProviderSyncSection />
+      ) : (
+        <ProviderSettingsSection />
+      )}
 
       <GoogleCalendarSettings />
 
       {remoteDevices.length ? (
-        <Card className="rounded-none border-0 bg-transparent shadow-none sm:rounded-3xl sm:border sm:border-border/50 sm:bg-card/40 sm:backdrop-blur-xl sm:shadow-2xl">
-          <CardHeader className="px-0 pb-4 pt-0 sm:p-6 sm:pb-0">
-            <CardTitle className="text-xl font-medium tracking-tight">Paired receivers</CardTitle>
+        <Card className="rounded-none border-0 border-t border-border/60 bg-transparent py-8 shadow-none sm:py-10">
+          <CardHeader className="px-0 pb-6 pt-0">
+            <CardTitle className="text-2xl font-semibold tracking-tight">
+              Paired receivers
+            </CardTitle>
           </CardHeader>
-          <CardContent className="flex flex-col gap-3 px-0 pb-0 sm:p-6">
+          <CardContent className="flex flex-col gap-3 px-0 pb-0">
             {remoteDevices.map((device) => (
               <div
                 key={device.id}
-                className="flex items-center justify-between gap-3 rounded-2xl border border-border/40 bg-background/30 p-5 shadow-sm backdrop-blur-md transition-colors hover:bg-secondary/40"
+                className="flex items-center justify-between gap-3 border-b border-border/50 py-4 last:border-b-0"
               >
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-2">

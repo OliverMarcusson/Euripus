@@ -10,6 +10,7 @@ import {
   deleteAllAdminPatternGroups,
   deleteAdminPatternGroup,
   getAdminPatternGroups,
+  getAdminQualityChannelPrefixes,
   getAdminRestrictedAccounts,
   importAdminPatternGroups,
   testAdminSearchPatterns,
@@ -27,6 +28,8 @@ vi.mock("@/lib/api", () => ({
   deleteAllAdminPatternGroups: vi.fn(),
   deleteAdminPatternGroup: vi.fn(),
   getAdminPatternGroups: vi.fn(),
+  getAdminQualityChannelPrefixes: vi.fn(),
+  saveAdminQualityChannelPrefixes: vi.fn(),
   getAdminRestrictedAccounts: vi.fn(),
   importAdminPatternGroups: vi.fn(),
   testAdminSearchPatterns: vi.fn(),
@@ -37,6 +40,7 @@ vi.mock("@/lib/api", () => ({
 }));
 
 const mockedGetAdminPatternGroups = vi.mocked(getAdminPatternGroups);
+const mockedGetAdminQualityChannelPrefixes = vi.mocked(getAdminQualityChannelPrefixes);
 const mockedGetAdminRestrictedAccounts = vi.mocked(getAdminRestrictedAccounts);
 const mockedImportAdminPatternGroups = vi.mocked(importAdminPatternGroups);
 const mockedAdminLogin = vi.mocked(adminLogin);
@@ -52,6 +56,7 @@ describe("AdminPage JSON import", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockedGetAdminPatternGroups.mockResolvedValue([]);
+    mockedGetAdminQualityChannelPrefixes.mockResolvedValue({ prefixes: [], includeCategoriesWithoutCountryPrefix: false });
     mockedGetAdminRestrictedAccounts.mockResolvedValue([]);
     mockedImportAdminPatternGroups.mockResolvedValue([]);
     mockedAdminLogin.mockResolvedValue();

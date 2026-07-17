@@ -23,6 +23,8 @@ import {
   deleteAllAdminPatternGroups,
   deleteAdminPatternGroup,
   getAdminPatternGroups,
+  getAdminQualityChannelPrefixes,
+  saveAdminQualityChannelPrefixes,
   getAdminRestrictedAccounts,
   getAdminImportErrors,
   importAdminPatternGroups,
@@ -75,6 +77,8 @@ const DEFAULT_MANAGED_ACCOUNT: AdminRestrictedAccountInput = {
 export function AdminPage() {
   const queryClient = useQueryClient();
   const [password, setPassword] = useState("");
+  const [selectedQualityPrefixes, setSelectedQualityPrefixes] = useState<string[]>([]);
+  const [includeCategoriesWithoutCountryPrefix, setIncludeCategoriesWithoutCountryPrefix] = useState(false);
   const [loginError, setLoginError] = useState<string | null>(null);
   const [draftGroup, setDraftGroup] = useState<EditableGroup>(DEFAULT_GROUP);
   const [testInput, setTestInput] = useState({
@@ -96,10 +100,29 @@ export function AdminPage() {
     queryFn: getAdminPatternGroups,
     retry: false,
   });
+  const qualityPrefixesQuery = useQuery({
+    queryKey: ["admin", "quality-channel-prefixes"],
+    queryFn: getAdminQualityChannelPrefixes,
+    retry: false,
+  });
   const managedAccountsQuery = useQuery({
     queryKey: ["admin", "restricted-accounts"],
     queryFn: getAdminRestrictedAccounts,
     retry: false,
+  });
+
+  useEffect(() => {
+    if (qualityPrefixesQuery.data) {
+      setSelectedQualityPrefixes(qualityPrefixesQuery.data.prefixes.filter((entry) => entry.selected).map((entry) => entry.prefix));
+      setIncludeCategoriesWithoutCountryPrefix(qualityPrefixesQuery.data.includeCategoriesWithoutCountryPrefix);
+    }
+  }, [qualityPrefixesQuery.data]);
+
+  const saveQualityPrefixesMutation = useMutation({
+    mutationFn: saveAdminQualityChannelPrefixes,
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["admin", "quality-channel-prefixes"] });
+    },
   });
 
   const loginMutation = useMutation({
@@ -107,7 +130,7 @@ export function AdminPage() {
     onSuccess: async () => {
       setLoginError(null);
       setPassword("");
-      await queryClient.invalidateQueries({ queryKey: ["admin", "pattern-groups"] });
+      await queryClient.invalidateQueries({ queryKey: ["admin"] });
     },
     onError: (error) => {
       setLoginError(error instanceof Error ? error.message : "Unable to sign in");
@@ -269,6 +292,30 @@ export function AdminPage() {
           </>
         }
       />
+
+      <Card>
+        <CardHeader><CardTitle>Quality channels</CardTitle></CardHeader>
+        <CardContent className="flex flex-col gap-4">
+          <p className="text-sm text-muted-foreground">Choose the country prefixes considered quality channels. Prefixes are discovered from channel and category names in the database.</p>
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+            {(qualityPrefixesQuery.data?.prefixes ?? []).map((entry) => (
+              <label key={entry.prefix} className="flex items-center gap-3 rounded-lg border p-3">
+                <input type="checkbox" checked={selectedQualityPrefixes.includes(entry.prefix)} onChange={(event) => setSelectedQualityPrefixes((current) => event.target.checked ? [...current, entry.prefix] : current.filter((prefix) => prefix !== entry.prefix))} />
+                <span><strong>{entry.prefix}</strong><span className="block text-xs text-muted-foreground">{entry.channelCount} channels · {entry.categoryCount} categories</span></span>
+              </label>
+            ))}
+          </div>
+          {!qualityPrefixesQuery.isPending && !(qualityPrefixesQuery.data?.prefixes.length) ? <p className="text-sm text-muted-foreground">No prefixes were found.</p> : null}
+          <label className="flex items-center gap-3 rounded-lg border p-3">
+            <input type="checkbox" checked={includeCategoriesWithoutCountryPrefix} onChange={(event) => setIncludeCategoriesWithoutCountryPrefix(event.target.checked)} />
+            <span><strong>Categories without a country prefix</strong><span className="block text-xs text-muted-foreground">Include channels in categories that do not start with a letter-only country prefix.</span></span>
+          </label>
+          {qualityPrefixesQuery.isError ? <p className="text-sm text-destructive">Unable to load quality prefixes.</p> : null}
+          <Button onClick={() => saveQualityPrefixesMutation.mutate({ prefixes: selectedQualityPrefixes, includeCategoriesWithoutCountryPrefix })} disabled={saveQualityPrefixesMutation.isPending}>
+            {saveQualityPrefixesMutation.isPending ? "Saving..." : "Save quality prefixes"}
+          </Button>
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader>

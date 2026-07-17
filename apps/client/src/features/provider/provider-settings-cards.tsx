@@ -1,28 +1,28 @@
-import type { ProviderProfile, SyncJob } from "@euripus/shared"
-import { RefreshCcw } from "lucide-react"
-import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Progress } from "@/components/ui/progress"
-import { Separator } from "@/components/ui/separator"
-import { formatDateTime, formatRelativeTime } from "@/lib/utils"
+import type { ProviderProfile, SyncJob } from "@euripus/shared";
+import { RefreshCcw } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Progress } from "@/components/ui/progress";
+import { Separator } from "@/components/ui/separator";
+import { formatDateTime, formatRelativeTime } from "@/lib/utils";
 
 type ProviderHealthCardProps = {
-  provider: ProviderProfile | null | undefined
-  outputFormat: string
-  playbackMode: string
-  displayedEpgSourceCount: number
-}
+  provider: ProviderProfile | null | undefined;
+  outputFormat: string;
+  playbackMode: string;
+  displayedEpgSourceCount: number;
+};
 
 type ProviderSyncActivityCardProps = {
-  latestJob: SyncJob | null | undefined
-  syncProgressValue: number
-  syncErrorMessage: string | null
-  syncPending: boolean
-  syncBlockedByActiveJob: boolean
-  provider: ProviderProfile | null | undefined
-  onTriggerSync: () => void
-}
+  latestJob: SyncJob | null | undefined;
+  syncProgressValue: number;
+  syncErrorMessage: string | null;
+  syncPending: boolean;
+  syncBlockedByActiveJob: boolean;
+  provider: ProviderProfile | null | undefined;
+  onTriggerSync: () => void;
+};
 
 export function ProviderHealthCard({
   provider,
@@ -31,13 +31,13 @@ export function ProviderHealthCard({
   displayedEpgSourceCount,
 }: ProviderHealthCardProps) {
   return (
-    <Card className="rounded-none border-0 bg-transparent shadow-none sm:rounded-3xl sm:border sm:border-border/50 sm:bg-card/40 sm:backdrop-blur-xl sm:shadow-2xl">
-      <CardHeader className="px-0 pt-0 pb-4 sm:p-6 sm:pb-0">
-        <CardTitle className="text-xl font-medium tracking-tight">
+    <Card className="rounded-none border-0 border-t border-border/60 bg-transparent py-8 shadow-none sm:py-10">
+      <CardHeader className="px-0 pb-6 pt-0">
+        <CardTitle className="text-2xl font-semibold tracking-tight">
           Profile health
         </CardTitle>
       </CardHeader>
-      <CardContent className="flex flex-col gap-4 px-0 pb-0 sm:p-6">
+      <CardContent className="flex flex-col gap-4 px-0 pb-0">
         <StatusRow
           label="Provider status"
           value={provider?.status ?? "missing"}
@@ -51,7 +51,9 @@ export function ProviderHealthCard({
         <StatusRow
           label="Last sync"
           value={
-            provider?.lastSyncAt ? formatRelativeTime(provider.lastSyncAt) : "Never"
+            provider?.lastSyncAt
+              ? formatRelativeTime(provider.lastSyncAt)
+              : "Never"
           }
           detail={formatDateTime(provider?.lastSyncAt ?? null)}
         />
@@ -74,7 +76,7 @@ export function ProviderHealthCard({
         ) : null}
       </CardContent>
     </Card>
-  )
+  );
 }
 
 export function ProviderSyncActivityCard({
@@ -87,19 +89,20 @@ export function ProviderSyncActivityCard({
   onTriggerSync,
 }: ProviderSyncActivityCardProps) {
   return (
-    <Card className="rounded-none border-0 bg-transparent shadow-none sm:rounded-3xl sm:border sm:border-border/50 sm:bg-card/40 sm:backdrop-blur-xl sm:shadow-2xl">
-      <CardHeader className="px-0 pt-0 pb-4 sm:p-6 sm:pb-0">
-        <CardTitle className="text-xl font-medium tracking-tight">
+    <Card className="rounded-none border-0 border-t border-border/60 bg-transparent py-8 shadow-none sm:py-10">
+      <CardHeader className="px-0 pb-6 pt-0">
+        <CardTitle className="text-2xl font-semibold tracking-tight">
           Sync activity
         </CardTitle>
       </CardHeader>
-      <CardContent className="flex flex-col gap-4 px-0 pb-0 sm:p-6">
+      <CardContent className="flex flex-col gap-4 px-0 pb-0">
         {latestJob ? (
           <div className="py-2 sm:rounded-2xl sm:border sm:border-border/70 sm:bg-muted/40 sm:p-4">
             <div className="flex items-center justify-between gap-3">
               <div className="flex flex-col gap-1">
                 <span className="text-sm font-medium capitalize">
-                  {latestJob.currentPhase?.replaceAll("-", " ") ?? latestJob.status}
+                  {latestJob.currentPhase?.replaceAll("-", " ") ??
+                    latestJob.status}
                 </span>
               </div>
               <Badge
@@ -163,7 +166,7 @@ export function ProviderSyncActivityCard({
         </Button>
       </CardContent>
     </Card>
-  )
+  );
 }
 
 function StatusRow({
@@ -171,9 +174,9 @@ function StatusRow({
   value,
   detail,
 }: {
-  label: string
-  value: string
-  detail?: string
+  label: string;
+  value: string;
+  detail?: string;
 }) {
   return (
     <div className="flex items-center justify-between gap-4">
@@ -187,5 +190,5 @@ function StatusRow({
         {value}
       </span>
     </div>
-  )
+  );
 }

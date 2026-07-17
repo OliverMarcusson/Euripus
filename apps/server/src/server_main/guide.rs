@@ -99,6 +99,13 @@ pub(super) struct SaveGuidePreferencesPayload {
 #[serde(rename_all = "camelCase")]
 pub(super) struct GuideOverviewQuery {
     pub(super) with_epg_only: Option<bool>,
+    pub(super) quality_channels_only: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct ChannelListQuery {
+    pub(super) quality_channels_only: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -107,6 +114,7 @@ pub(super) struct GuideCategoryQuery {
     pub(super) offset: Option<i64>,
     pub(super) limit: Option<i64>,
     pub(super) with_epg_only: Option<bool>,
+    pub(super) quality_channels_only: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -125,13 +133,24 @@ pub(super) struct SavePpvFavoriteOrderPayload {
 async fn list_channels(
     State(state): State<AppState>,
     headers: HeaderMap,
+    Query(query): Query<ChannelListQuery>,
 ) -> ApiResult<Vec<ChannelResponse>> {
     let auth = require_auth(&state, &headers).await?;
     let visibility = load_channel_visibility_map(&state, auth.user_id, None).await?;
-    let visible_channel_ids = visibility
+    let mut visible_channel_ids = visibility
         .iter()
         .filter_map(|(id, visibility)| (!visibility.is_hidden).then_some(*id))
         .collect::<HashSet<_>>();
+    if query.quality_channels_only.unwrap_or(false) {
+        visible_channel_ids = quality_channel_ids(
+            &state.pool,
+            auth.user_id,
+            visible_channel_ids.into_iter().collect(),
+        )
+        .await?
+        .into_iter()
+        .collect();
+    }
     let mut channels = fetch_channels(&state.pool, auth.user_id).await?;
     channels.retain(|channel| visible_channel_ids.contains(&channel.id));
     rewrite_channel_logo_urls(&state, &headers, auth.user_id, &mut channels)?;
@@ -204,11 +223,16 @@ async fn get_guide(
 ) -> Result<Response, AppError> {
     let auth = require_auth(&state, &headers).await?;
     let visibility = load_channel_visibility_map(&state, auth.user_id, None).await?;
+    let mut visible_channel_ids = visible_channel_ids_from_map(&visibility);
+    if query.quality_channels_only.unwrap_or(false) {
+        visible_channel_ids =
+            quality_channel_ids(&state.pool, auth.user_id, visible_channel_ids).await?;
+    }
     let payload = GuideResponse {
         categories: fetch_guide_categories(
             &state.pool,
             auth.user_id,
-            &visible_channel_ids_from_map(&visibility),
+            &visible_channel_ids,
             query.with_epg_only.unwrap_or(false),
         )
         .await?,
@@ -264,9 +288,14 @@ async fn get_guide_category(
 ) -> Result<Response, AppError> {
     let auth = require_auth(&state, &headers).await?;
     let with_epg_only = query.with_epg_only.unwrap_or(false);
+    let quality_channels_only = query.quality_channels_only.unwrap_or(false);
     let (offset, limit) = parse_guide_category_pagination(query)?;
     let visibility = load_channel_visibility_map(&state, auth.user_id, None).await?;
-    let visible_channel_ids = visible_channel_ids_from_map(&visibility);
+    let mut visible_channel_ids = visible_channel_ids_from_map(&visibility);
+    if quality_channels_only {
+        visible_channel_ids =
+            quality_channel_ids(&state.pool, auth.user_id, visible_channel_ids).await?;
+    }
     let category = fetch_guide_category_summary(
         &state.pool,
         auth.user_id,
@@ -1063,6 +1092,31 @@ async fn list_recents(
     json_response_with_revalidation(&headers, &recents)
 }
 
+pub(super) async fn quality_channel_ids(
+    pool: &PgPool,
+    user_id: Uuid,
+    candidate_ids: Vec<Uuid>,
+) -> Result<Vec<Uuid>> {
+    if candidate_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    Ok(sqlx::query_scalar::<_, Uuid>(r#"
+        SELECT c.id FROM channels c
+        LEFT JOIN channel_categories cc ON cc.id = c.category_id
+        WHERE c.user_id = $1 AND c.id = ANY($2)
+          AND (
+            NOT EXISTS (SELECT 1 FROM admin_quality_channel_prefixes)
+            OR EXISTS (SELECT 1 FROM admin_quality_channel_prefixes q
+              WHERE UPPER((regexp_match(c.name, '^[[:space:]]*([A-Za-z0-9]{2,3})[[:space:]]*\|'))[1]) = RTRIM(q.prefix, '|')
+                 OR UPPER((regexp_match(COALESCE(cc.name, ''), '^[[:space:]]*([A-Za-z0-9]{2,3})[[:space:]]*\|'))[1]) = RTRIM(q.prefix, '|'))
+            OR (
+              COALESCE((SELECT include_categories_without_country_prefix FROM admin_quality_channel_settings WHERE singleton = TRUE), FALSE)
+              AND COALESCE(cc.name, '') !~ '^[[:space:]]*[A-Za-z]{2,3}[[:space:]]*\|'
+            )
+          )
+    "#).bind(user_id).bind(candidate_ids).fetch_all(pool).await?)
+}
+
 pub(super) const GUIDE_DEFAULT_LIMIT: i64 = 40;
 pub(super) const GUIDE_MAX_LIMIT: i64 = 100;
 
@@ -1573,6 +1627,7 @@ mod tests {
             offset: None,
             limit: Some(GUIDE_MAX_LIMIT + 25),
             with_epg_only: None,
+            quality_channels_only: None,
         })
         .expect("pagination");
 
@@ -1586,6 +1641,7 @@ mod tests {
             offset: Some(-1),
             limit: Some(10),
             with_epg_only: None,
+            quality_channels_only: None,
         })
         .expect_err("negative offset should fail");
 

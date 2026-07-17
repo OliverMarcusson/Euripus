@@ -9,6 +9,10 @@ pub(super) fn browser_router() -> Router<AppState> {
         .route("/admin/auth/login", post(login))
         .route("/admin/auth/logout", post(logout))
         .route(
+            "/admin/quality-channel-prefixes",
+            get(list_quality_channel_prefixes).put(save_quality_channel_prefixes),
+        )
+        .route(
             "/admin/restricted-accounts",
             get(list_restricted_accounts).post(create_restricted_account),
         )
@@ -62,6 +66,30 @@ struct AdminPatternGroupResponse {
 #[serde(rename_all = "camelCase")]
 struct AdminLoginPayload {
     password: String,
+}
+
+#[derive(Debug, Serialize, FromRow)]
+#[serde(rename_all = "camelCase")]
+struct AdminQualityPrefixResponse {
+    prefix: String,
+    country_code: String,
+    channel_count: i64,
+    category_count: i64,
+    selected: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AdminQualityPrefixSettingsResponse {
+    prefixes: Vec<AdminQualityPrefixResponse>,
+    include_categories_without_country_prefix: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SaveQualityPrefixesPayload {
+    prefixes: Vec<String>,
+    include_categories_without_country_prefix: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -201,6 +229,98 @@ struct ValidatedPatternGroupInput {
     enabled: bool,
     patterns: Vec<String>,
     country_codes: Vec<String>,
+}
+
+async fn list_quality_channel_prefixes(
+    State(state): State<AppState>,
+    jar: CookieJar,
+) -> ApiResult<AdminQualityPrefixSettingsResponse> {
+    require_admin(&state, &jar)?;
+    let rows = sqlx::query_as::<_, AdminQualityPrefixResponse>(
+        r#"
+        WITH channel_prefixes AS (
+          SELECT UPPER((regexp_match(c.name, '^[[:space:]]*([A-Za-z0-9]{2,3})[[:space:]]*\|'))[1]) || '|' AS prefix,
+                 COUNT(*)::bigint AS channel_count
+          FROM channels c
+          WHERE c.name ~ '^[[:space:]]*[A-Za-z0-9]{2,3}[[:space:]]*\|'
+          GROUP BY 1
+        ), category_prefixes AS (
+          SELECT UPPER((regexp_match(cc.name, '^[[:space:]]*([A-Za-z0-9]{2,3})[[:space:]]*\|'))[1]) || '|' AS prefix,
+                 COUNT(*)::bigint AS category_count
+          FROM channel_categories cc
+          WHERE cc.name ~ '^[[:space:]]*[A-Za-z0-9]{2,3}[[:space:]]*\|'
+          GROUP BY 1
+        ), discovered AS (
+          SELECT prefix FROM channel_prefixes UNION SELECT prefix FROM category_prefixes
+        )
+        SELECT d.prefix, RTRIM(d.prefix, '|') AS country_code,
+               COALESCE(cp.channel_count, 0) AS channel_count,
+               COALESCE(kp.category_count, 0) AS category_count,
+               (selected.prefix IS NOT NULL) AS selected
+        FROM discovered d
+        LEFT JOIN channel_prefixes cp USING (prefix)
+        LEFT JOIN category_prefixes kp USING (prefix)
+        LEFT JOIN admin_quality_channel_prefixes selected USING (prefix)
+        ORDER BY d.prefix
+        "#,
+    )
+    .fetch_all(&state.pool)
+    .await?;
+    let include_categories_without_country_prefix = sqlx::query_scalar::<_, bool>(
+        "SELECT include_categories_without_country_prefix FROM admin_quality_channel_settings WHERE singleton = TRUE",
+    )
+    .fetch_optional(&state.pool)
+    .await?
+    .unwrap_or(false);
+    Ok(Json(AdminQualityPrefixSettingsResponse {
+        prefixes: rows,
+        include_categories_without_country_prefix,
+    }))
+}
+
+async fn save_quality_channel_prefixes(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    headers: HeaderMap,
+    Json(payload): Json<SaveQualityPrefixesPayload>,
+) -> ApiResult<AdminQualityPrefixSettingsResponse> {
+    require_admin(&state, &jar)?;
+    validate_admin_csrf(&jar, &headers)?;
+    let mut prefixes = payload
+        .prefixes
+        .into_iter()
+        .map(|value| value.trim().to_uppercase())
+        .collect::<Vec<_>>();
+    prefixes.sort();
+    prefixes.dedup();
+    if prefixes.iter().any(|prefix| {
+        let code = prefix.strip_suffix('|').unwrap_or("");
+        !(2..=3).contains(&code.len())
+            || !code
+                .chars()
+                .all(|character| character.is_ascii_alphanumeric())
+    }) {
+        return Err(AppError::BadRequest(
+            "Quality prefixes must contain a 2-3 letter country code followed by |".to_string(),
+        ));
+    }
+    let mut transaction = state.pool.begin().await?;
+    sqlx::query("DELETE FROM admin_quality_channel_prefixes")
+        .execute(&mut *transaction)
+        .await?;
+    for prefix in prefixes {
+        sqlx::query("INSERT INTO admin_quality_channel_prefixes (prefix) VALUES ($1)")
+            .bind(prefix)
+            .execute(&mut *transaction)
+            .await?;
+    }
+    sqlx::query(r#"INSERT INTO admin_quality_channel_settings (singleton, include_categories_without_country_prefix, updated_at)
+        VALUES (TRUE, $1, NOW()) ON CONFLICT (singleton) DO UPDATE SET
+        include_categories_without_country_prefix = EXCLUDED.include_categories_without_country_prefix, updated_at = NOW()"#)
+        .bind(payload.include_categories_without_country_prefix)
+        .execute(&mut *transaction).await?;
+    transaction.commit().await?;
+    list_quality_channel_prefixes(State(state), jar).await
 }
 
 async fn login(
