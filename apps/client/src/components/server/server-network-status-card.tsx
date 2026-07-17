@@ -22,27 +22,62 @@ export function ServerNetworkStatusCard({
     staleTime: SERVER_NETWORK_STALE_TIME_MS,
   });
   const status = statusQuery.data;
-  const vpnLabel = status?.vpnProvider ? `${status.vpnProvider} active` : "VPN active";
+  const vpnLabel = status?.vpnProvider
+    ? `${status.vpnProvider} active`
+    : "VPN active";
 
   return (
-    <Card className={cn("overflow-hidden rounded-none border-0 bg-transparent shadow-none sm:rounded-3xl sm:border sm:border-border/50 sm:bg-card/40 sm:backdrop-blur-xl sm:shadow-2xl", className)}>
-      <CardHeader className="flex flex-row items-start justify-between gap-4 px-0 pt-0 pb-4 sm:p-6 sm:pb-0">
-        <CardTitle className="shrink-0 text-xl font-medium tracking-tight whitespace-nowrap">Server route</CardTitle>
+    <Card
+      className={cn(
+        "overflow-hidden rounded-none border-0 bg-transparent shadow-none",
+        className,
+      )}
+    >
+      <CardHeader className="flex flex-row items-start justify-between gap-4 px-0 pb-6 pt-0">
+        <CardTitle className="shrink-0 text-2xl font-semibold tracking-tight whitespace-nowrap">
+          Server route
+        </CardTitle>
         <div className="flex flex-wrap justify-end gap-2">
-          <Badge variant={statusQuery.isError ? "destructive" : statusQuery.isSuccess ? "accent" : "outline"} className="gap-1.5">
+          <Badge
+            variant={
+              statusQuery.isError
+                ? "destructive"
+                : statusQuery.isSuccess
+                  ? "accent"
+                  : "outline"
+            }
+            className="gap-1.5"
+          >
             <Server className="size-3.5" />
-            {statusQuery.isError ? "Server unreachable" : statusQuery.isSuccess ? "Server online" : "Checking server"}
+            {statusQuery.isError
+              ? "Server unreachable"
+              : statusQuery.isSuccess
+                ? "Server online"
+                : "Checking server"}
           </Badge>
-          <Badge variant={status?.vpnActive ? "success" : "outline"} className="gap-1.5">
-            {status?.vpnActive ? <ShieldCheck className="size-3.5" /> : <ShieldOff className="size-3.5" />}
+          <Badge
+            variant={status?.vpnActive ? "success" : "outline"}
+            className="gap-1.5"
+          >
+            {status?.vpnActive ? (
+              <ShieldCheck className="size-3.5" />
+            ) : (
+              <ShieldOff className="size-3.5" />
+            )}
             {status?.vpnActive ? vpnLabel : "VPN off"}
           </Badge>
         </div>
       </CardHeader>
-      <CardContent className="flex flex-col gap-4 px-0 pb-0 sm:p-6">
+      <CardContent className="flex flex-col gap-4 px-0 pb-0">
         <StatusRow
           label="Server"
-          value={statusQuery.isError ? "Offline" : statusQuery.isSuccess ? "Online" : "Checking"}
+          value={
+            statusQuery.isError
+              ? "Offline"
+              : statusQuery.isSuccess
+                ? "Online"
+                : "Checking"
+          }
         />
         <Separator />
         <StatusRow
@@ -50,7 +85,7 @@ export function ServerNetworkStatusCard({
           value={
             statusQuery.isSuccess
               ? status?.vpnActive
-                ? status.vpnProvider ?? "Enabled"
+                ? (status.vpnProvider ?? "Enabled")
                 : "Disabled"
               : "Unknown"
           }
@@ -59,7 +94,10 @@ export function ServerNetworkStatusCard({
         <Separator />
         <StatusRow
           label="Public IP"
-          value={status?.publicIp ?? (statusQuery.isError ? "Unavailable" : "Looking up...")}
+          value={
+            status?.publicIp ??
+            (statusQuery.isError ? "Unavailable" : "Looking up...")
+          }
           detail={
             status?.publicIp
               ? `Checked ${formatRelativeTime(status.publicIpCheckedAt)} (${formatDateTime(status.publicIpCheckedAt)})`
@@ -93,9 +131,16 @@ function StatusRow({
     <div className="flex items-center justify-between gap-4">
       <div className="flex flex-col gap-1">
         <span className="text-sm text-muted-foreground">{label}</span>
-        {detail ? <span className="text-xs text-muted-foreground/70">{detail}</span> : null}
+        {detail ? (
+          <span className="text-xs text-muted-foreground/70">{detail}</span>
+        ) : null}
       </div>
-      <span className={cn("text-sm font-semibold tracking-tight text-right whitespace-nowrap bg-black/20 px-3 py-1.5 rounded-lg border border-white/5 shadow-inner", capitalizeValue && "capitalize")}>
+      <span
+        className={cn(
+          "text-sm font-semibold tracking-tight text-right whitespace-nowrap bg-black/20 px-3 py-1.5 rounded-lg border border-white/5 shadow-inner",
+          capitalizeValue && "capitalize",
+        )}
+      >
         {value}
       </span>
     </div>

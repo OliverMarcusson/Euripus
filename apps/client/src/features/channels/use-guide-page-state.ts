@@ -4,6 +4,7 @@ import type { GuidePreferences } from "@euripus/shared";
 import { getGuide, getGuidePreferences, saveGuidePreferences } from "@/lib/api";
 import { STANDARD_QUERY_STALE_TIME_MS } from "@/lib/query-cache";
 import { useGuideNavigationStore } from "@/store/guide-navigation-store";
+import { useChannelSettingsStore } from "@/store/channel-settings-store";
 
 export function useGuidePageState() {
   const queryClient = useQueryClient();
@@ -18,10 +19,13 @@ export function useGuidePageState() {
   const [filterInput, setFilterInput] = useState("");
   const [appliedFilter, setAppliedFilter] = useState("");
   const [showOnlyChannelsWithEpg, setShowOnlyChannelsWithEpg] = useState(false);
+  const qualityChannelsOnly = useChannelSettingsStore((state) => state.qualityChannelsOnly);
 
   const guideQuery = useQuery({
-    queryKey: ["guide", "overview", { withEpgOnly: showOnlyChannelsWithEpg }],
-    queryFn: () => getGuide(showOnlyChannelsWithEpg),
+    queryKey: ["guide", "overview", { withEpgOnly: showOnlyChannelsWithEpg, qualityChannelsOnly }],
+    queryFn: () => qualityChannelsOnly
+      ? getGuide(showOnlyChannelsWithEpg, true)
+      : getGuide(showOnlyChannelsWithEpg),
     staleTime: STANDARD_QUERY_STALE_TIME_MS,
   });
   const preferencesQuery = useQuery({

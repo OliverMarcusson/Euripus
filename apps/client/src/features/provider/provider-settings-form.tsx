@@ -1,18 +1,17 @@
-import type { ProviderProfile, SyncJob } from "@euripus/shared"
-import { CheckCircle2, ServerCog, Trash2 } from "lucide-react"
-import type { FormEventHandler } from "react"
-import { Controller, type UseFormReturn } from "react-hook-form"
-import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import type { ProviderProfile, SyncJob } from "@euripus/shared";
+import { CheckCircle2, ServerCog, Trash2 } from "lucide-react";
+import type { FormEventHandler } from "react";
+import { Controller, type UseFormReturn } from "react-hook-form";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Field,
-  FieldDescription,
   FieldError,
   FieldGroup,
   FieldLabel,
-} from "@/components/ui/field"
-import { Input } from "@/components/ui/input"
+} from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
 import {
   Select,
   SelectContent,
@@ -20,23 +19,23 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "@/components/ui/select"
-import { ProviderEpgSourcesEditor } from "@/features/provider/provider-epg-sources-editor"
-import type { ProviderFormValues } from "@/features/provider/use-provider-settings-form"
+} from "@/components/ui/select";
+import { ProviderEpgSourcesEditor } from "@/features/provider/provider-epg-sources-editor";
+import type { ProviderFormValues } from "@/features/provider/use-provider-settings-form";
 
 type ProviderSettingsFormProps = {
-  form: UseFormReturn<ProviderFormValues>
-  provider: ProviderProfile | null | undefined
-  isCreatingProvider: boolean
-  latestJob: SyncJob | null | undefined
-  savePending: boolean
-  validatePending: boolean
-  deletePending: boolean
-  validationMessage?: string
-  onSubmit: FormEventHandler<HTMLFormElement>
-  onValidate: () => void
-  onDelete: () => void
-}
+  form: UseFormReturn<ProviderFormValues>;
+  provider: ProviderProfile | null | undefined;
+  isCreatingProvider: boolean;
+  latestJob: SyncJob | null | undefined;
+  savePending: boolean;
+  validatePending: boolean;
+  deletePending: boolean;
+  validationMessage?: string;
+  onSubmit: FormEventHandler<HTMLFormElement>;
+  onValidate: () => void;
+  onDelete: () => void;
+};
 
 export function ProviderSettingsForm({
   form,
@@ -51,12 +50,12 @@ export function ProviderSettingsForm({
   onValidate,
   onDelete,
 }: ProviderSettingsFormProps) {
-  const createMode = isCreatingProvider || !provider
+  const createMode = isCreatingProvider || !provider;
 
   return (
-    <Card className="self-start overflow-hidden rounded-none border-0 bg-transparent shadow-none sm:rounded-3xl sm:border sm:border-border/50 sm:bg-card/40 sm:backdrop-blur-xl sm:shadow-2xl">
-      <CardHeader className="flex flex-row items-start justify-between gap-4 px-0 pt-0 pb-4 sm:p-6 sm:pb-0">
-        <CardTitle className="text-xl font-medium tracking-tight">
+    <Card className="overflow-hidden rounded-none border-0 border-t border-border/60 bg-transparent py-8 shadow-none sm:py-10">
+      <CardHeader className="flex flex-row items-start justify-between gap-4 px-0 pb-6 pt-0">
+        <CardTitle className="text-2xl font-semibold tracking-tight">
           {createMode ? "Add provider" : "Provider settings"}
         </CardTitle>
         <div className="flex flex-wrap items-center gap-2">
@@ -74,10 +73,12 @@ export function ProviderSettingsForm({
           <Badge variant="outline">{latestJob?.status ?? "idle"}</Badge>
         </div>
       </CardHeader>
-      <CardContent className="px-0 pb-0 sm:p-6">
+      <CardContent className="px-0 pb-0">
         <form className="flex flex-col gap-6" onSubmit={onSubmit}>
-          <FieldGroup>
-            <Field data-invalid={form.formState.errors.baseUrl ? true : undefined}>
+          <FieldGroup className="grid gap-6 lg:grid-cols-2">
+            <Field
+              data-invalid={form.formState.errors.baseUrl ? true : undefined}
+            >
               <FieldLabel htmlFor="baseUrl">Base URL</FieldLabel>
               <Input
                 id="baseUrl"
@@ -97,7 +98,9 @@ export function ProviderSettingsForm({
                 </FieldLabel>
                 <Input
                   id="providerUsername"
-                  aria-invalid={form.formState.errors.username ? true : undefined}
+                  aria-invalid={
+                    form.formState.errors.username ? true : undefined
+                  }
                   {...form.register("username")}
                 />
                 <FieldError errors={[form.formState.errors.username]} />
@@ -112,7 +115,9 @@ export function ProviderSettingsForm({
                 <Input
                   id="providerPassword"
                   type="password"
-                  aria-invalid={form.formState.errors.password ? true : undefined}
+                  aria-invalid={
+                    form.formState.errors.password ? true : undefined
+                  }
                   {...form.register("password")}
                 />
                 <FieldError errors={[form.formState.errors.password]} />
@@ -120,15 +125,13 @@ export function ProviderSettingsForm({
             </div>
 
             <Field
-              data-invalid={form.formState.errors.outputFormat ? true : undefined}
+              data-invalid={
+                form.formState.errors.outputFormat ? true : undefined
+              }
             >
               <FieldLabel htmlFor="outputFormat">
                 Receiver/native output format
               </FieldLabel>
-              <FieldDescription>
-                Browser playback always uses HLS. This setting is reserved for
-                receiver/native compatibility when a provider prefers TS.
-              </FieldDescription>
               <Controller
                 control={form.control}
                 name="outputFormat"
@@ -155,7 +158,9 @@ export function ProviderSettingsForm({
             </Field>
 
             <Field
-              data-invalid={form.formState.errors.playbackMode ? true : undefined}
+              data-invalid={
+                form.formState.errors.playbackMode ? true : undefined
+              }
             >
               <FieldLabel htmlFor="playbackMode">Playback routing</FieldLabel>
               <Controller
@@ -187,38 +192,45 @@ export function ProviderSettingsForm({
               <FieldError errors={[form.formState.errors.playbackMode]} />
             </Field>
 
-            <ProviderEpgSourcesEditor form={form} provider={provider} />
+            <div className="lg:col-span-2">
+              <ProviderEpgSourcesEditor form={form} provider={provider} />
+            </div>
           </FieldGroup>
 
-          <div className="flex flex-wrap items-center gap-3">
-            <Button
-              type="button"
-              variant="secondary"
-              onClick={onValidate}
-              disabled={validatePending || deletePending}
-            >
-              <CheckCircle2 data-icon="inline-start" />
-              {validatePending ? "Validating..." : "Validate"}
-            </Button>
-            <Button type="submit" disabled={savePending || deletePending}>
-              <ServerCog data-icon="inline-start" />
-              {savePending
-                ? "Saving..."
-                : createMode
-                  ? "Add provider"
-                  : "Save provider"}
-            </Button>
-            {!createMode ? (
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border/60 pt-6">
+            <div>
+              {!createMode ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+                  onClick={onDelete}
+                  disabled={deletePending || savePending || validatePending}
+                >
+                  <Trash2 data-icon="inline-start" />
+                  {deletePending ? "Deleting..." : "Delete provider"}
+                </Button>
+              ) : null}
+            </div>
+            <div className="flex items-center gap-3">
               <Button
                 type="button"
-                variant="destructive"
-                onClick={onDelete}
-                disabled={deletePending || savePending || validatePending}
+                variant="outline"
+                onClick={onValidate}
+                disabled={validatePending || deletePending}
               >
-                <Trash2 data-icon="inline-start" />
-                {deletePending ? "Deleting..." : "Delete provider"}
+                <CheckCircle2 data-icon="inline-start" />
+                {validatePending ? "Validating..." : "Validate"}
               </Button>
-            ) : null}
+              <Button type="submit" disabled={savePending || deletePending}>
+                <ServerCog data-icon="inline-start" />
+                {savePending
+                  ? "Saving..."
+                  : createMode
+                    ? "Add provider"
+                    : "Save provider"}
+              </Button>
+            </div>
           </div>
 
           {validationMessage ? (
@@ -229,5 +241,5 @@ export function ProviderSettingsForm({
         </form>
       </CardContent>
     </Card>
-  )
+  );
 }

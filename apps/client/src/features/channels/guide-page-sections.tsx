@@ -276,15 +276,18 @@ export function GuideCategorySection({
   const filterPpvByDate = useChannelSettingsStore(
     (state) => state.filterPpvByDate,
   );
+  const qualityChannelsOnly = useChannelSettingsStore((state) => state.qualityChannelsOnly);
   const categoryQuery = useInfiniteQuery({
-    queryKey: ["guide", "category", category.id, { withEpgOnly: showOnlyChannelsWithEpg }],
-    queryFn: ({ pageParam }) =>
-      getGuideCategory(
+    queryKey: ["guide", "category", category.id, { withEpgOnly: showOnlyChannelsWithEpg, qualityChannelsOnly }],
+    queryFn: ({ pageParam }) => {
+      const args = [
         category.id,
         pageParam,
         filterPpvByDate ? FILTERED_GUIDE_PAGE_SIZE : GUIDE_PAGE_SIZE,
         showOnlyChannelsWithEpg,
-      ),
+      ] as const;
+      return qualityChannelsOnly ? getGuideCategory(...args, true) : getGuideCategory(...args);
+    },
     initialPageParam: 0,
     getNextPageParam: (lastPage) => lastPage.nextOffset ?? undefined,
     enabled: open,

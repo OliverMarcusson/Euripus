@@ -1,9 +1,9 @@
-import { ArrowDown, ArrowUp, Link2, Plus, Trash2 } from "lucide-react"
-import type { ProviderProfile } from "@euripus/shared"
-import { Controller, useFieldArray, type UseFormReturn } from "react-hook-form"
-import { Button } from "@/components/ui/button"
-import { Field, FieldError, FieldLabel } from "@/components/ui/field"
-import { Input } from "@/components/ui/input"
+import { ArrowDown, ArrowUp, Link2, Plus, Trash2 } from "lucide-react";
+import type { ProviderProfile } from "@euripus/shared";
+import { Controller, useFieldArray, type UseFormReturn } from "react-hook-form";
+import { Button } from "@/components/ui/button";
+import { Field, FieldError, FieldLabel } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
 import {
   Select,
   SelectContent,
@@ -11,17 +11,17 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "@/components/ui/select"
+} from "@/components/ui/select";
 import {
   type ProviderFormValues,
   reindexEpgSources,
-} from "@/features/provider/use-provider-settings-form"
-import { formatRelativeTime } from "@/lib/utils"
+} from "@/features/provider/use-provider-settings-form";
+import { formatRelativeTime } from "@/lib/utils";
 
 type ProviderEpgSourcesEditorProps = {
-  form: UseFormReturn<ProviderFormValues>
-  provider: ProviderProfile | null | undefined
-}
+  form: UseFormReturn<ProviderFormValues>;
+  provider: ProviderProfile | null | undefined;
+};
 
 export function ProviderEpgSourcesEditor({
   form,
@@ -31,25 +31,25 @@ export function ProviderEpgSourcesEditor({
     control: form.control,
     name: "epgSources",
     keyName: "fieldId",
-  })
+  });
 
   function reorderEpgSources(fromIndex: number, toIndex: number) {
-    const current = [...form.getValues("epgSources")]
-    const [moved] = current.splice(fromIndex, 1)
+    const current = [...form.getValues("epgSources")];
+    const [moved] = current.splice(fromIndex, 1);
 
     if (!moved) {
-      return
+      return;
     }
 
-    current.splice(toIndex, 0, moved)
+    current.splice(toIndex, 0, moved);
     form.setValue("epgSources", reindexEpgSources(current), {
       shouldDirty: true,
-    })
+    });
   }
 
   return (
-    <div className="py-2 sm:rounded-[1.5rem] sm:border sm:border-border/40 sm:bg-black/10 sm:p-5 sm:shadow-inner">
-      <div className="mb-5 flex items-center justify-between gap-3">
+    <div className="border-t border-border/60 pt-6">
+      <div className="mb-4 flex items-center justify-between gap-3">
         <div className="space-y-1">
           <FieldLabel>External EPG sources</FieldLabel>
         </div>
@@ -62,7 +62,8 @@ export function ProviderEpgSourcesEditor({
               url: "https://",
               enabled: true,
               priority: epgSourceFields.fields.length,
-            })}
+            })
+          }
         >
           <Plus data-icon="inline-start" />
           Add source
@@ -74,12 +75,12 @@ export function ProviderEpgSourcesEditor({
           epgSourceFields.fields.map((field, index) => {
             const sourceHealth = provider?.epgSources.find(
               (source) => source.id === field.id,
-            )
+            );
 
             return (
               <div
                 key={field.fieldId}
-                className="border-t border-border/60 py-4 first:border-t-0 first:pt-0 shadow-sm backdrop-blur-md transition-all hover:bg-secondary/40 sm:rounded-2xl sm:border sm:border-border/30 sm:bg-background/40 sm:p-5"
+                className="border-t border-border/60 py-4 first:border-t-0 first:pt-0"
               >
                 <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                   <div className="flex items-center gap-2 text-sm font-medium">
@@ -165,7 +166,8 @@ export function ProviderEpgSourcesEditor({
                         <Select
                           value={controllerField.value ? "enabled" : "disabled"}
                           onValueChange={(value) =>
-                            controllerField.onChange(value === "enabled")}
+                            controllerField.onChange(value === "enabled")
+                          }
                         >
                           <SelectTrigger id={`epg-source-enabled-${index}`}>
                             <SelectValue />
@@ -183,7 +185,7 @@ export function ProviderEpgSourcesEditor({
                 </div>
 
                 {sourceHealth ? (
-                  <div className="mt-3 text-sm text-muted-foreground sm:rounded-xl sm:border sm:border-border/70 sm:bg-muted/40 sm:p-3">
+                  <div className="mt-3 border-l-2 border-border pl-3 text-sm text-muted-foreground">
                     <div>
                       Last sync{" "}
                       {sourceHealth.lastSyncAt
@@ -202,14 +204,14 @@ export function ProviderEpgSourcesEditor({
                   </div>
                 ) : null}
               </div>
-            )
+            );
           })
         ) : (
-          <div className="border-t border-dashed border-border/70 py-4 text-sm text-muted-foreground sm:rounded-2xl sm:border sm:bg-background/40 sm:p-4">
+          <div className="py-3 text-sm text-muted-foreground">
             No external EPG sources
           </div>
         )}
       </div>
     </div>
-  )
+  );
 }

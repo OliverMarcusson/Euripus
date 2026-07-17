@@ -1,5 +1,7 @@
 import type {
   AdminPatternGroup,
+  AdminQualityPrefixSettings,
+  AdminQualityPrefixSettingsInput,
   AdminRestrictedAccountInput,
   AdminRestrictedAccountSummary,
   AdminPatternGroupInput,
@@ -261,6 +263,17 @@ export function getSearchFilterOptions() {
   return request<SearchFilterOptionsResponse>("/search/filter-options");
 }
 
+export function getAdminQualityChannelPrefixes() {
+  return adminRequest<AdminQualityPrefixSettings>("/admin/quality-channel-prefixes");
+}
+
+export function saveAdminQualityChannelPrefixes(payload: AdminQualityPrefixSettingsInput) {
+  return adminRequest<AdminQualityPrefixSettings>("/admin/quality-channel-prefixes", {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  }, { includeCsrf: true });
+}
+
 export function getAdminPatternGroups() {
   return adminRequest<AdminPatternGroup[]>("/admin/search/pattern-groups");
 }
@@ -480,18 +493,22 @@ export function getSeriesEpisodes(id: string) {
   return request<OnDemandEpisode[]>(`/on-demand/series/${id}/episodes`);
 }
 
-export function getChannels() {
-  return request<Channel[]>("/channels");
+export function getChannels(qualityChannelsOnly = false) {
+  const suffix = qualityChannelsOnly ? "?qualityChannelsOnly=true" : "";
+  return request<Channel[]>(`/channels${suffix}`);
 }
 
 export function getChannelGuide(id: string) {
   return request<Program[]>(`/guide/channel/${id}`);
 }
 
-export function getGuide(withEpgOnly = false) {
+export function getGuide(withEpgOnly = false, qualityChannelsOnly = false) {
   const params = new URLSearchParams();
   if (withEpgOnly) {
     params.set("withEpgOnly", "true");
+  }
+  if (qualityChannelsOnly) {
+    params.set("qualityChannelsOnly", "true");
   }
 
   const suffix = params.size ? `?${params.toString()}` : "";
@@ -514,6 +531,7 @@ export function getGuideCategory(
   offset = 0,
   limit = 40,
   withEpgOnly = false,
+  qualityChannelsOnly = false,
 ) {
   const params = new URLSearchParams({
     offset: offset.toString(),
@@ -521,6 +539,9 @@ export function getGuideCategory(
   });
   if (withEpgOnly) {
     params.set("withEpgOnly", "true");
+  }
+  if (qualityChannelsOnly) {
+    params.set("qualityChannelsOnly", "true");
   }
   return request<GuideCategoryResponse>(
     `/guide/category/${encodeURIComponent(categoryId)}?${params.toString()}`,
@@ -586,12 +607,13 @@ export function addSportsEventToCalendar(id: string) {
   );
 }
 
-export function searchChannels(query: string, offset = 0, limit = 30) {
+export function searchChannels(query: string, offset = 0, limit = 30, qualityChannelsOnly = false) {
   const params = new URLSearchParams({
     q: query,
     offset: offset.toString(),
     limit: limit.toString(),
   });
+  if (qualityChannelsOnly) params.set("qualityChannelsOnly", "true");
   return request<ChannelSearchResults>(`/search/channels?${params.toString()}`);
 }
 

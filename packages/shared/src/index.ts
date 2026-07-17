@@ -100,6 +100,24 @@ export type SearchFilterOptionsResponse = {
   providers: SearchFilterProviderOption[];
 };
 
+export type AdminQualityPrefix = {
+  prefix: string;
+  countryCode: string;
+  channelCount: number;
+  categoryCount: number;
+  selected: boolean;
+};
+
+export type AdminQualityPrefixSettings = {
+  prefixes: AdminQualityPrefix[];
+  includeCategoriesWithoutCountryPrefix: boolean;
+};
+
+export type AdminQualityPrefixSettingsInput = {
+  prefixes: string[];
+  includeCategoriesWithoutCountryPrefix: boolean;
+};
+
 export type AdminPatternKind = "country" | "provider" | "flag";
 
 export type AdminMatchTarget =

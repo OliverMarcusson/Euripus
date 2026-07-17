@@ -94,15 +94,17 @@ export function SearchPage() {
   const filterPpvByDate = useChannelSettingsStore(
     (state) => state.filterPpvByDate,
   );
+  const qualityChannelsOnly = useChannelSettingsStore((state) => state.qualityChannelsOnly);
   const filterOptionsQuery = useQuery({
     queryKey: ["search", "filter-options"],
     queryFn: getSearchFilterOptions,
     staleTime: SEARCH_QUERY_STALE_TIME_MS,
   });
   const channelQuery = useInfiniteQuery({
-    queryKey: ["search", "channels", debouncedQuery],
-    queryFn: ({ pageParam }) =>
-      searchChannels(debouncedQuery, pageParam, SEARCH_PAGE_SIZE),
+    queryKey: ["search", "channels", debouncedQuery, { qualityChannelsOnly }],
+    queryFn: ({ pageParam }) => qualityChannelsOnly
+      ? searchChannels(debouncedQuery, pageParam, SEARCH_PAGE_SIZE, true)
+      : searchChannels(debouncedQuery, pageParam, SEARCH_PAGE_SIZE),
     initialPageParam: 0,
     getNextPageParam: (lastPage) => lastPage.nextOffset ?? undefined,
     enabled: hasQuery,

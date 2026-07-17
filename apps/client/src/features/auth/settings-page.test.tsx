@@ -25,7 +25,15 @@ vi.mock("@/lib/api", () => ({
   connectGoogleCalendar: vi.fn(),
   disconnectGoogleCalendar: vi.fn(),
   getGoogleCalendars: vi.fn().mockResolvedValue([]),
-  getGoogleCalendarStatus: vi.fn().mockResolvedValue({ configured: false, connected: false, needsReauthorization: false, selectedCalendarId: null, selectedCalendarName: null }),
+  getGoogleCalendarStatus: vi
+    .fn()
+    .mockResolvedValue({
+      configured: false,
+      connected: false,
+      needsReauthorization: false,
+      selectedCalendarId: null,
+      selectedCalendarName: null,
+    }),
   selectGoogleCalendar: vi.fn(),
   deleteProvider: vi.fn(),
   getProviders: vi.fn(),
@@ -149,9 +157,7 @@ describe("SettingsPage", () => {
       createdAt: "2026-04-05T10:00:00.000Z",
     });
     useThemeStore.getState().setPreference("system");
-    usePlaybackSettingsStore
-      .getState()
-      .setLivePlaybackPreference("stable");
+    usePlaybackSettingsStore.getState().setLivePlaybackPreference("stable");
     useChannelSettingsStore.getState().setFilterPpvByDate(false);
   });
 
@@ -177,12 +183,12 @@ describe("SettingsPage", () => {
 
     fireEvent.click(screen.getByRole("radio", { name: /closer to live/i }));
 
+    expect(usePlaybackSettingsStore.getState().livePlaybackPreference).toBe(
+      "low-latency",
+    );
     expect(
-      usePlaybackSettingsStore.getState().livePlaybackPreference,
-    ).toBe("low-latency");
-    expect(
-      screen.getByText(/smaller buffer and briefly speeds up/i),
-    ).toBeInTheDocument();
+      screen.queryByText(/smaller buffer and briefly speeds up/i),
+    ).not.toBeInTheDocument();
   });
 
   it("updates the PPV date filter", () => {
@@ -286,8 +292,8 @@ describe("SettingsPage", () => {
       screen.getByText(/receiver\/native output format/i),
     ).toBeInTheDocument();
     expect(
-      screen.getByText(/browser playback always uses hls/i),
-    ).toBeInTheDocument();
+      screen.queryByText(/browser playback always uses hls/i),
+    ).not.toBeInTheDocument();
   });
 
   it("saves a newly added external epg source", async () => {
@@ -462,13 +468,17 @@ describe("SettingsPage", () => {
       </QueryClientProvider>,
     );
 
-    expect(await screen.findByDisplayValue("https://alpha.example.com")).toBeInTheDocument();
+    expect(
+      await screen.findByDisplayValue("https://alpha.example.com"),
+    ).toBeInTheDocument();
 
     fireEvent.click(
       (await screen.findByText("beta · beta.example.com")).closest("button")!,
     );
 
-    expect(await screen.findByDisplayValue("https://beta.example.com")).toBeInTheDocument();
+    expect(
+      await screen.findByDisplayValue("https://beta.example.com"),
+    ).toBeInTheDocument();
     expect(screen.getByDisplayValue("beta")).toBeInTheDocument();
   });
 
@@ -514,12 +524,16 @@ describe("SettingsPage", () => {
       </QueryClientProvider>,
     );
 
-    expect(await screen.findByDisplayValue("https://alpha.example.com")).toBeInTheDocument();
+    expect(
+      await screen.findByDisplayValue("https://alpha.example.com"),
+    ).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /delete provider/i }));
 
     await waitFor(() => expect(mockedDeleteProvider).toHaveBeenCalled());
     expect(mockedDeleteProvider.mock.calls[0]?.[0]).toBe("provider-1");
-    expect(await screen.findByDisplayValue("https://beta.example.com")).toBeInTheDocument();
+    expect(
+      await screen.findByDisplayValue("https://beta.example.com"),
+    ).toBeInTheDocument();
 
     confirmSpy.mockRestore();
   });

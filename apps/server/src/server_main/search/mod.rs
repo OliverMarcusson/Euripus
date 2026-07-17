@@ -85,9 +85,15 @@ async fn search_channels(
     Query(query): Query<SearchQuery>,
 ) -> ApiResult<ChannelSearchResponse> {
     let auth = require_auth(&state, &headers).await?;
+    let quality_channels_only = query.quality_channels_only.unwrap_or(false);
     let (term, offset, limit, parsed) = parse_search_pagination(query)?;
     let visibility = load_channel_visibility_map(&state, auth.user_id, None).await?;
-    let visible_channel_ids = visible_channel_ids_from_map(&visibility);
+    let mut visible_channel_ids = visible_channel_ids_from_map(&visibility);
+    if quality_channels_only {
+        visible_channel_ids =
+            super::guide::quality_channel_ids(&state.pool, auth.user_id, visible_channel_ids)
+                .await?;
+    }
     let visible_channel_set = visible_channel_ids.iter().copied().collect::<HashSet<_>>();
     if indexing::meili_is_ready_for_user(&state, auth.user_id).await {
         let meili = state
@@ -135,9 +141,15 @@ async fn search_programs(
     Query(query): Query<SearchQuery>,
 ) -> ApiResult<ProgramSearchResponse> {
     let auth = require_auth(&state, &headers).await?;
+    let quality_channels_only = query.quality_channels_only.unwrap_or(false);
     let (term, offset, limit, parsed) = parse_search_pagination(query)?;
     let visibility = load_channel_visibility_map(&state, auth.user_id, None).await?;
-    let visible_channel_ids = visible_channel_ids_from_map(&visibility);
+    let mut visible_channel_ids = visible_channel_ids_from_map(&visibility);
+    if quality_channels_only {
+        visible_channel_ids =
+            super::guide::quality_channel_ids(&state.pool, auth.user_id, visible_channel_ids)
+                .await?;
+    }
     let visible_channel_set = visible_channel_ids.iter().copied().collect::<HashSet<_>>();
     if indexing::meili_is_ready_for_user(&state, auth.user_id).await {
         let meili = state
