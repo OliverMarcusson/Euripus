@@ -86,15 +86,6 @@ export type SyncJob = {
   errorMessage: string | null;
 };
 
-export type SearchBackendStatus = {
-  meilisearch: "disabled" | "indexing" | "ready";
-  progressPercent?: number | null;
-  indexedDocuments?: number | null;
-  totalDocuments?: number | null;
-};
-
-export type SearchBackend = "meilisearch" | "postgres";
-
 export type SearchFilterProviderOption = {
   value: string;
   countryCodes: string[];
@@ -456,7 +447,6 @@ export type SportsCalendarEventResponse = {
 
 export type SearchResultPage<T> = {
   query: string;
-  backend: SearchBackend;
   items: T[];
   totalCount: number;
   nextOffset: number | null;

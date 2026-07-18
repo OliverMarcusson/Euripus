@@ -332,7 +332,7 @@ cd "$repo_root"
 
 require_command sha384sum
 
-echo "This will permanently delete the production PostgreSQL and Meilisearch data volumes for this host."
+echo "This will permanently delete the production PostgreSQL data volume for this host."
 echo "Type '$confirmation_phrase' to continue:"
 read -r confirmation_input
 
@@ -346,10 +346,10 @@ printf '%s' "$GHCR_TOKEN" | "$container_cli" login ghcr.io --username "$GHCR_USE
 
 server_image_ref="${EURIPUS_SERVER_IMAGE}:${EURIPUS_IMAGE_TAG}"
 
-info "Stopping existing Euripus stack and removing PostgreSQL + Meilisearch volumes"
-"${compose_cmd[@]}" "${compose_files[@]}" down -v
+info "Stopping existing Euripus stack and removing the PostgreSQL volume"
+"${compose_cmd[@]}" "${compose_files[@]}" down -v --remove-orphans
 info "Pulling Euripus images"
-"${compose_cmd[@]}" "${compose_files[@]}" pull postgres meilisearch server web
+"${compose_cmd[@]}" "${compose_files[@]}" pull postgres server web
 info "Starting PostgreSQL"
 "${compose_cmd[@]}" "${compose_files[@]}" up -d postgres
 info "Waiting for PostgreSQL health"
@@ -357,7 +357,7 @@ wait_for_service_health postgres 180 || exit 1
 info "Repairing SQLx migration checksums if needed"
 repair_sqlx_migration_checksums
 info "Starting remaining Euripus services"
-"${compose_cmd[@]}" "${compose_files[@]}" up -d meilisearch server web
+"${compose_cmd[@]}" "${compose_files[@]}" up -d server web
 if should_connect_external_sports_api; then
   connect_external_sports_api_container
 fi

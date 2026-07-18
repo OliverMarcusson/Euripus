@@ -1,7 +1,6 @@
 import type {
   Channel,
   Program,
-  SearchBackend,
   SearchFilterOptionsResponse,
 } from "@euripus/shared";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
@@ -139,8 +138,6 @@ export function SearchPage() {
     ? channels.length
     : channelQuery.data?.pages[0]?.totalCount ?? 0;
   const programTotal = programQuery.data?.pages[0]?.totalCount ?? 0;
-  const channelBackend = channelQuery.data?.pages[0]?.backend;
-  const programBackend = programQuery.data?.pages[0]?.backend;
   const totalMatches = channelTotal + programTotal;
   const isInitialLoading =
     hasQuery &&
@@ -442,7 +439,6 @@ export function SearchPage() {
 
       <SearchResults
         activeTab={activeTab}
-        channelBackend={channelBackend}
         channelTotal={channelTotal}
         channels={channels}
         channelsHasNextPage={channelQuery.hasNextPage}
@@ -461,7 +457,6 @@ export function SearchPage() {
         onToggleFavorite={handleToggleFavorite}
         onTogglePpvFavorite={handleTogglePpvFavorite}
         playPending={playChannelMutation.isPending || playProgramMutation.isPending}
-        programBackend={programBackend}
         programTotal={programTotal}
         programs={programs}
         programsHasNextPage={programQuery.hasNextPage}
@@ -605,7 +600,6 @@ const ProgramSearchRow = memo(function ProgramSearchRow({
 
 const SearchResults = memo(function SearchResults({
   activeTab,
-  channelBackend,
   channelTotal,
   channels,
   channelsHasNextPage,
@@ -624,14 +618,12 @@ const SearchResults = memo(function SearchResults({
   onToggleFavorite,
   onTogglePpvFavorite,
   playPending,
-  programBackend,
   programTotal,
   programs,
   programsHasNextPage,
   programsLoadingMore,
 }: {
   activeTab: "channels" | "programs";
-  channelBackend?: SearchBackend;
   channelTotal: number;
   channels: Channel[];
   channelsHasNextPage: boolean;
@@ -650,7 +642,6 @@ const SearchResults = memo(function SearchResults({
   onToggleFavorite: (channel: Channel) => void;
   onTogglePpvFavorite: (channel: Channel) => void;
   playPending: boolean;
-  programBackend?: SearchBackend;
   programTotal: number;
   programs: Program[];
   programsHasNextPage: boolean;
@@ -671,11 +662,9 @@ const SearchResults = memo(function SearchResults({
       <TabsList>
         <TabsTrigger value="channels">
           <span>Channels ({channelTotal})</span>
-          <SearchBackendBadge backend={channelBackend} compact />
         </TabsTrigger>
         <TabsTrigger value="programs">
           <span>Programs ({programTotal})</span>
-          <SearchBackendBadge backend={programBackend} compact />
         </TabsTrigger>
       </TabsList>
 
@@ -683,10 +672,7 @@ const SearchResults = memo(function SearchResults({
         <TabsContent value="channels" className="mt-0">
           <Card className="rounded-none border-0 bg-transparent shadow-none sm:rounded-xl sm:border sm:bg-card sm:shadow-sm">
             <CardHeader className="px-0 pt-0 pb-4 sm:px-6 sm:pt-6 sm:pb-0">
-              <div className="flex items-center justify-between gap-3">
-                <CardTitle>Channel matches</CardTitle>
-                <SearchBackendBadge backend={channelBackend} />
-              </div>
+              <CardTitle>Channel matches</CardTitle>
             </CardHeader>
             <CardContent className="p-0">
               {channels.length ? (
@@ -738,10 +724,7 @@ const SearchResults = memo(function SearchResults({
         <TabsContent value="programs" className="mt-0">
           <Card className="rounded-none border-0 bg-transparent shadow-none sm:rounded-xl sm:border sm:bg-card sm:shadow-sm">
             <CardHeader className="px-0 pt-0 pb-4 sm:px-6 sm:pt-6 sm:pb-0">
-              <div className="flex items-center justify-between gap-3">
-                <CardTitle>EPG matches</CardTitle>
-                <SearchBackendBadge backend={programBackend} />
-              </div>
+              <CardTitle>EPG matches</CardTitle>
             </CardHeader>
             <CardContent className="p-0">
               {programs.length ? (
@@ -1129,24 +1112,6 @@ function ProgramStateBadge({ state }: { state: ProgramPlaybackState }) {
   }
 
   return <Badge variant="outline">Info only</Badge>;
-}
-
-function SearchBackendBadge({
-  backend,
-  compact = false,
-}: {
-  backend?: SearchBackend;
-  compact?: boolean;
-}) {
-  if (!backend) {
-    return null;
-  }
-
-  if (backend === "meilisearch") {
-    return <Badge variant="accent">{compact ? "Meili" : "Meilisearch"}</Badge>;
-  }
-
-  return <Badge variant="outline">{compact ? "Postgres" : "PostgreSQL fallback"}</Badge>;
 }
 
 function LoadMoreTrigger({

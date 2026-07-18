@@ -45,7 +45,6 @@ pub(in crate::server_main) async fn search_channels_postgres(
     if visible_channel_ids.is_empty() {
         return Ok(ChannelSearchResponse {
             query: term.to_string(),
-            backend: "postgres".to_string(),
             next_offset: None,
             total_count: 0,
             items: Vec::new(),
@@ -278,7 +277,6 @@ pub(in crate::server_main) async fn search_channels_postgres(
 
     Ok(ChannelSearchResponse {
         query: term.to_string(),
-        backend: "postgres".to_string(),
         next_offset: next_page_offset(offset, limit, total_count),
         total_count,
         items,
@@ -492,7 +490,6 @@ pub(in crate::server_main) async fn search_programs_postgres(
 
     Ok(ProgramSearchResponse {
         query: term.to_string(),
-        backend: "postgres".to_string(),
         next_offset: next_page_offset(offset, limit, total_count),
         total_count,
         items,

@@ -23,8 +23,6 @@ pub struct Config {
     pub browser_cookie_secure: bool,
     pub vpn_enabled: bool,
     pub vpn_provider_name: Option<String>,
-    pub meilisearch_url: Option<String>,
-    pub meilisearch_api_key: Option<String>,
     pub openrouter_api_key: Option<String>,
     pub openrouter_model: String,
     pub sports_api_base_url: Option<Url>,
@@ -86,8 +84,6 @@ impl Config {
             &read_env_or_default("APP_VPN_ENABLED", "false")?,
         )?;
         let vpn_provider_name = read_optional_env("APP_VPN_PROVIDER_NAME")?;
-        let meilisearch_url = read_optional_env("APP_MEILISEARCH_URL")?;
-        let meilisearch_api_key = read_optional_env("APP_MEILISEARCH_API_KEY")?;
         let openrouter_api_key = read_optional_env("APP_OPENROUTER_API_KEY")?;
         let openrouter_model = read_env_or_default("APP_OPENROUTER_MODEL", "openai/gpt-4.1-nano")?;
         let sports_api_base_url = read_optional_env("APP_SPORTS_API_BASE_URL")?
@@ -135,8 +131,6 @@ impl Config {
             browser_cookie_secure,
             vpn_enabled,
             vpn_provider_name,
-            meilisearch_url,
-            meilisearch_api_key,
             openrouter_api_key,
             openrouter_model,
             sports_api_base_url,

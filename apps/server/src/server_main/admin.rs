@@ -1034,6 +1034,8 @@ async fn save_managed_provider(
     if !validation.valid {
         return Err(AppError::BadRequest(validation.message));
     }
+    let user_database_lock = state.user_database_lock(user_id);
+    let _database_guard = user_database_lock.lock().await;
     let id = profile_id.unwrap_or_else(Uuid::new_v4);
     if profile_id.is_some() {
         sqlx::query("UPDATE provider_profiles SET base_url = $2, username = $3, password_encrypted = $4, output_format = $5, playback_mode = $6, status = 'valid', last_validated_at = NOW(), last_sync_error = NULL, updated_at = NOW() WHERE id = $1 AND user_id = $7")
@@ -1919,17 +1921,11 @@ fn spawn_admin_reindex(state: AppState) {
         };
 
         for user_id in user_ids {
+            let user_database_lock = state.user_database_lock(user_id);
+            let _database_guard = user_database_lock.lock().await;
             if let Err(error) = search::indexing::rebuild_search_documents(&state, user_id).await {
                 warn!(user_id = %user_id, "failed to rebuild search documents after admin rule change: {error:?}");
                 continue;
-            }
-
-            if let Some(meili) = state.meili.as_ref() {
-                if let Err(error) =
-                    search::indexing::rebuild_meili_indexes(&state, meili, user_id, None).await
-                {
-                    warn!(user_id = %user_id, "failed to rebuild Meilisearch indexes after admin rule change: {error:?}");
-                }
             }
         }
     });

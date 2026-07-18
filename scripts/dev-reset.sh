@@ -14,8 +14,8 @@ fi
 echo "Stopping existing dev stack..."
 bash "$dev_stop_script"
 
-echo "Removing local PostgreSQL and Meilisearch volumes..."
-docker compose down -v
+echo "Removing local PostgreSQL volume..."
+docker compose down -v --remove-orphans
 
 echo "Rebuilding and restarting dev stack..."
 bash "$dev_start_script"

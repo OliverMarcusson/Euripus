@@ -137,7 +137,7 @@ function Wait-ForApiHealth {
                 if ((-not $resetAttempted) -and $logs -match "migration .* previously applied but has been modified") {
                     $resetAttempted = $true
                     Write-Host "Detected local migration checksum drift in the dev database. Recreating the local database volume..." -ForegroundColor Yellow
-                    & docker compose down -v | Out-Host
+                    & docker compose down -v --remove-orphans | Out-Host
                     & docker compose up --build -d postgres server | Out-Host
                     Start-Sleep -Seconds 2
                     continue
