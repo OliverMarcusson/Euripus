@@ -18,6 +18,7 @@ pub(super) struct AppState {
     pub(super) channel_visibility_cache:
         Arc<DashMap<(Uuid, Option<Uuid>), CachedChannelVisibilityMap>>,
     pub(super) receiver_channels: Arc<DashMap<Uuid, broadcast::Sender<ReceiverEventPayload>>>,
+    pub(super) cast_transcodes: Arc<Mutex<super::transcode::CastTranscodeManager>>,
 }
 
 #[derive(Debug, Clone)]

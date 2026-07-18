@@ -7,6 +7,7 @@ import {
   getIptvHlsQualityLabel,
   getIptvHlsQualityOptions,
   handleIptvHlsError,
+  isFatalHlsCodecError,
   isProviderPlaceholderHlsError,
   syncLivePlaybackPosition,
   updateLivePlaybackRate,
@@ -103,6 +104,27 @@ describe("IPTV HLS helpers", () => {
     expect(controller.destroy).not.toHaveBeenCalled();
     expect(controller.startLoad).not.toHaveBeenCalled();
     expect(controller.recoverMediaError).not.toHaveBeenCalled();
+  });
+
+  it("classifies fatal SourceBuffer codec failures for Cast fallback", () => {
+    expect(
+      isFatalHlsCodecError({
+        fatal: true,
+        details: Hls.ErrorDetails.BUFFER_ADD_CODEC_ERROR,
+      }),
+    ).toBe(true);
+    expect(
+      isFatalHlsCodecError({
+        fatal: false,
+        details: Hls.ErrorDetails.BUFFER_ADD_CODEC_ERROR,
+      }),
+    ).toBe(false);
+    expect(
+      isFatalHlsCodecError({
+        fatal: true,
+        details: Hls.ErrorDetails.BUFFER_STALLED_ERROR,
+      }),
+    ).toBe(false);
   });
 
   it("classifies only the relay placeholder status as provider-unavailable", () => {

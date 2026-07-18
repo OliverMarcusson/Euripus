@@ -306,6 +306,7 @@ fi
 : "${EURIPUS_WEB_IMAGE:=ghcr.io/olivermarcusson/euripus-web}"
 : "${EURIPUS_IMAGE_TAG:=selfhosted-latest}"
 : "${EURIPUS_ENABLE_MULLVAD:=false}"
+: "${EURIPUS_ENABLE_NVIDIA:=false}"
 : "${GHCR_USERNAME:?Set GHCR_USERNAME in the environment or $env_file before resetting.}"
 : "${GHCR_TOKEN:?Set GHCR_TOKEN in the environment or $env_file before resetting.}"
 
@@ -314,7 +315,7 @@ if [[ "$EURIPUS_ENABLE_MULLVAD" == "true" && -f "$repo_root/apps/server/.env.mul
   source "$repo_root/apps/server/.env.mullvad.server"
 fi
 
-export EURIPUS_SERVER_IMAGE EURIPUS_WEB_IMAGE EURIPUS_IMAGE_TAG EURIPUS_ENABLE_MULLVAD
+export EURIPUS_SERVER_IMAGE EURIPUS_WEB_IMAGE EURIPUS_IMAGE_TAG EURIPUS_ENABLE_MULLVAD EURIPUS_ENABLE_NVIDIA
 
 compose_files=(
   "-f" "docker-compose.selfhosted.yml"
@@ -322,6 +323,9 @@ compose_files=(
 
 if [[ "$EURIPUS_ENABLE_MULLVAD" == "true" ]]; then
   compose_files+=("-f" "docker-compose.selfhosted.mullvad.yml")
+fi
+if [[ "$EURIPUS_ENABLE_NVIDIA" == "true" ]]; then
+  compose_files+=("-f" "docker-compose.selfhosted.nvidia.yml")
 fi
 
 cd "$repo_root"
@@ -371,4 +375,7 @@ echo "Server image: ${server_image_ref}"
 echo "Web image: ${EURIPUS_WEB_IMAGE}:${EURIPUS_IMAGE_TAG}"
 if [[ "$EURIPUS_ENABLE_MULLVAD" == "true" ]]; then
   echo "Mullvad override: enabled"
+fi
+if [[ "$EURIPUS_ENABLE_NVIDIA" == "true" ]]; then
+  echo "NVIDIA transcoding override: enabled"
 fi

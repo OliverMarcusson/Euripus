@@ -1017,6 +1017,27 @@ export function heartbeatReceiver(sessionToken: string) {
   });
 }
 
+export function startReceiverCastTranscode(
+  sessionToken: string,
+  source: PlaybackSource,
+) {
+  return receiverRequest<PlaybackSource>("/receiver/transcode", sessionToken, {
+    method: "POST",
+    body: JSON.stringify({
+      sourceUrl: source.url,
+      title: source.title,
+      live: source.live,
+      catchup: source.catchup,
+    }),
+  });
+}
+
+export function stopReceiverCastTranscode(sessionToken: string) {
+  return receiverRequest<void>("/receiver/transcode", sessionToken, {
+    method: "DELETE",
+  });
+}
+
 export function updateReceiverPlaybackState(
   sessionToken: string,
   payload: ReceiverPlaybackStatePayload,

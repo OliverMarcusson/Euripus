@@ -14,6 +14,9 @@ pub struct Config {
     pub access_token_minutes: i64,
     pub refresh_token_days: i64,
     pub relay_token_minutes: i64,
+    pub cast_transcoding_enabled: bool,
+    pub cast_transcode_encoder: String,
+    pub cast_transcode_directory: String,
     pub daily_sync_hour_local: u32,
     pub public_origin: Option<Url>,
     pub allowed_origins: Vec<String>,
@@ -44,6 +47,16 @@ impl Config {
         let access_token_minutes = read_env("APP_ACCESS_TOKEN_MINUTES")?.parse()?;
         let refresh_token_days = read_env("APP_REFRESH_TOKEN_DAYS")?.parse()?;
         let relay_token_minutes = read_env_or_default("APP_RELAY_TOKEN_MINUTES", "120")?.parse()?;
+        let cast_transcoding_enabled = parse_bool_env(
+            "APP_CAST_TRANSCODING_ENABLED",
+            &read_env_or_default("APP_CAST_TRANSCODING_ENABLED", "false")?,
+        )?;
+        let cast_transcode_encoder =
+            read_env_or_default("APP_CAST_TRANSCODE_ENCODER", "h264_nvenc")?;
+        let cast_transcode_directory = read_env_or_default(
+            "APP_CAST_TRANSCODE_DIRECTORY",
+            "/tmp/euripus-cast-transcodes",
+        )?;
         let daily_sync_hour_local =
             read_env_or_default("APP_DAILY_SYNC_HOUR_LOCAL", "6")?.parse()?;
         let public_origin = read_optional_env("APP_PUBLIC_ORIGIN")?
@@ -113,6 +126,9 @@ impl Config {
             access_token_minutes,
             refresh_token_days,
             relay_token_minutes,
+            cast_transcoding_enabled,
+            cast_transcode_encoder,
+            cast_transcode_directory,
             daily_sync_hour_local,
             public_origin,
             allowed_origins,

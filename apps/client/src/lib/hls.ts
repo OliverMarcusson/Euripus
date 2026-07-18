@@ -52,7 +52,7 @@ type HlsLiveSyncController = Pick<Hls, "liveSyncPosition">;
 export type PlaybackFailure =
   | {
       kind: "recoverable";
-      reason: "hls" | "video-error" | "stall" | "unexpected-end";
+      reason: "codec" | "hls" | "video-error" | "stall" | "unexpected-end";
     }
   | {
       kind: "provider-unavailable";
@@ -111,6 +111,12 @@ export function getIptvHlsQualityOptions(
 
 export function isIptvHlsSupported() {
   return Hls.isSupported();
+}
+
+export function isFatalHlsCodecError(
+  data: Pick<ErrorData, "details" | "fatal">,
+) {
+  return data.fatal && data.details === Hls.ErrorDetails.BUFFER_ADD_CODEC_ERROR;
 }
 
 export function isProviderPlaceholderHlsError(
@@ -322,6 +328,9 @@ export function createIptvHls(
       fatal: data.fatal,
       errorType: data.type,
       errorDetails: data.details,
+      errorMessage: data.error?.message ?? null,
+      mimeType: data.mimeType ?? null,
+      sourceBufferName: data.sourceBufferName ?? null,
       responseCode,
       mediaErrorRecoveryAttempts: recoveryState.mediaRecoveryAttempts,
       currentTime: video.currentTime,
@@ -342,6 +351,11 @@ export function createIptvHls(
         kind: "provider-unavailable",
         message: "This channel is currently unavailable from the provider.",
       });
+      return;
+    }
+
+    if (isFatalHlsCodecError(data)) {
+      onPlaybackFailure?.({ kind: "recoverable", reason: "codec" });
       return;
     }
 

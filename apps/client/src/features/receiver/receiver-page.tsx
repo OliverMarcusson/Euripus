@@ -10,6 +10,8 @@ import {
   acknowledgeReceiverCommand,
   createReceiverSession,
   heartbeatReceiver,
+  startReceiverCastTranscode,
+  stopReceiverCastTranscode,
   updateReceiverPlaybackState,
 } from "@/lib/api";
 import type { RemoteDeviceEventPayload } from "@/lib/remote-events";
@@ -138,6 +140,8 @@ export function ReceiverPage() {
     sentAt: number;
   } | null>(null);
   const pendingPlaybackSyncTimerRef = useRef<number | null>(null);
+  const activeCastTranscodeRef = useRef(false);
+  const castTranscodeRequestInFlightRef = useRef(false);
 
   const updateSourceState = (nextSource: PlaybackSource | null) => {
     sourceRef.current = nextSource;
@@ -154,13 +158,7 @@ export function ReceiverPage() {
     setPlaybackError(nextPlaybackError);
   };
 
-  const handleReceiverPlaybackFailure = (failure: PlaybackFailure) => {
-    const message =
-      failure.kind === "provider-unavailable"
-        ? failure.message
-        : failure.reason === "hls"
-          ? "This stream's video format is not supported by this Cast device."
-          : "Playback failed on the receiver.";
+  const failReceiverPlayback = (message: string) => {
     const currentSource = sourceRef.current;
     const pending = pendingCommandRef.current;
 
@@ -188,6 +186,58 @@ export function ReceiverPage() {
       durationSeconds: null,
       errorMessage: message,
     }).catch(() => undefined);
+  };
+
+  const handleReceiverPlaybackFailure = async (failure: PlaybackFailure) => {
+    const currentSource = sourceRef.current;
+    const canRetryWithTranscoding =
+      castReceiver &&
+      failure.kind === "recoverable" &&
+      failure.reason === "codec" &&
+      currentSource?.kind === "hls" &&
+      currentSource.live &&
+      !currentSource.url.includes("/api/transcode/") &&
+      !!session?.sessionToken;
+
+    if (canRetryWithTranscoding && !castTranscodeRequestInFlightRef.current) {
+      castTranscodeRequestInFlightRef.current = true;
+      const originalSourceUrl = currentSource.url;
+      updateBufferingState(false);
+      updatePlaybackErrorState("Preparing a compatible live stream...");
+      try {
+        const transcodedSource = await startReceiverCastTranscode(
+          session.sessionToken,
+          currentSource,
+        );
+        if (sourceRef.current?.url !== originalSourceUrl) {
+          await stopReceiverCastTranscode(session.sessionToken).catch(() => undefined);
+          return;
+        }
+        activeCastTranscodeRef.current = true;
+        updatePlaybackErrorState(null);
+        updateBufferingState(true);
+        updateSourceState(transcodedSource);
+        return;
+      } catch (transcodeError) {
+        const message =
+          transcodeError instanceof Error
+            ? transcodeError.message
+            : "The server could not prepare a compatible live stream.";
+        failReceiverPlayback(message);
+        return;
+      } finally {
+        castTranscodeRequestInFlightRef.current = false;
+      }
+    }
+
+    failReceiverPlayback(
+      failure.kind === "provider-unavailable"
+        ? failure.message
+        : failure.kind === "recoverable" &&
+            (failure.reason === "codec" || failure.reason === "hls")
+          ? "This stream's video format is not supported by this Cast device."
+          : "Playback failed on the receiver.",
+    );
   };
 
   useEffect(() => {
@@ -283,6 +333,10 @@ export function ReceiverPage() {
       if (!payload.source) {
         return;
       }
+      if (activeCastTranscodeRef.current) {
+        activeCastTranscodeRef.current = false;
+        void stopReceiverCastTranscode(session.sessionToken).catch(() => undefined);
+      }
       if (payload.source.kind === "unsupported") {
         updatePlaybackErrorState(
           payload.source.unsupportedReason ??
@@ -333,7 +387,16 @@ export function ReceiverPage() {
       void acknowledgeReceiverCommand(session.sessionToken, payload.command.id, {
         status: "executing",
       }).catch(() => undefined);
-      if (video) {
+      if (commandType === "stop") {
+        video?.pause();
+        updatePlaybackErrorState(null);
+        updateSourceState(null);
+        updateBufferingState(false);
+        if (activeCastTranscodeRef.current) {
+          activeCastTranscodeRef.current = false;
+          void stopReceiverCastTranscode(session.sessionToken).catch(() => undefined);
+        }
+      } else if (video) {
         if (commandType === "pause") {
           void video.pause();
         } else if (commandType === "play") {
@@ -341,10 +404,6 @@ export function ReceiverPage() {
           void video.play().catch(() => undefined);
         } else if (commandType === "seek" && typeof payload.positionSeconds === "number") {
           video.currentTime = payload.positionSeconds;
-        } else if (commandType === "stop") {
-          video.pause();
-          updateSourceState(null);
-          updateBufferingState(false);
         }
       }
     });
@@ -376,6 +435,16 @@ export function ReceiverPage() {
     session?.device.id,
     session?.sessionToken,
   ]);
+
+  useEffect(() => {
+    const sessionToken = session?.sessionToken;
+    return () => {
+      if (sessionToken && activeCastTranscodeRef.current) {
+        activeCastTranscodeRef.current = false;
+        void stopReceiverCastTranscode(sessionToken).catch(() => undefined);
+      }
+    };
+  }, [session?.sessionToken]);
 
   useEffect(() => {
     if (!session?.sessionToken) {

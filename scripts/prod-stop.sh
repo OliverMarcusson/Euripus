@@ -19,6 +19,7 @@ if [[ -f "$env_file" ]]; then
 fi
 
 : "${EURIPUS_ENABLE_MULLVAD:=false}"
+: "${EURIPUS_ENABLE_NVIDIA:=false}"
 
 compose_files=(
   "-f" "docker-compose.selfhosted.yml"
@@ -26,6 +27,9 @@ compose_files=(
 
 if [[ "$EURIPUS_ENABLE_MULLVAD" == "true" ]]; then
   compose_files+=("-f" "docker-compose.selfhosted.mullvad.yml")
+fi
+if [[ "$EURIPUS_ENABLE_NVIDIA" == "true" ]]; then
+  compose_files+=("-f" "docker-compose.selfhosted.nvidia.yml")
 fi
 
 cd "$repo_root"
