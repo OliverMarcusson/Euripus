@@ -67,6 +67,17 @@ export function PlyrSurface({
     if (videoClassName) {
       video.className = videoClassName;
     }
+    if (uiMode === "receiver") {
+      Object.assign(video.style, {
+        background: "#000",
+        display: "block",
+        height: "100vh",
+        inset: "0",
+        objectFit: "contain",
+        position: "fixed",
+        width: "100vw",
+      });
+    }
 
     container.replaceChildren(video);
     if (videoRef) {

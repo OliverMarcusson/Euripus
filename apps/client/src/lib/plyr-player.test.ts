@@ -90,19 +90,14 @@ describe("bindPlaybackSource", () => {
     expect(video.src).toBe("https://example.com/live.m3u8");
   });
 
-  it("uses receiver-specific Plyr controls for the receiver surface", () => {
+  it("uses the native video surface without a Plyr overlay on receivers", () => {
     const video = document.createElement("video");
 
-    bindPlaybackSource(video, HLS_SOURCE, { uiMode: "receiver" });
+    const session = bindPlaybackSource(video, HLS_SOURCE, { uiMode: "receiver" });
 
-    expect(Plyr).toHaveBeenCalledWith(
-      video,
-      expect.objectContaining({
-        clickToPlay: false,
-        controls: [],
-        fullscreen: expect.objectContaining({ enabled: false }),
-      }),
-    );
+    expect(Plyr).not.toHaveBeenCalled();
+    expect(video.play).toHaveBeenCalled();
+    expect(session.plyr).toBeNull();
   });
 
   it("tears down Hls.js and Plyr and clears the media element", () => {
