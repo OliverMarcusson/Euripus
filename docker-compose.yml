@@ -26,10 +26,13 @@ services:
     build:
       context: .
       dockerfile: apps/server/Dockerfile
+    gpus: all
     env_file:
       - apps/server/.env
     environment:
       APP_MEILISEARCH_URL: http://meilisearch:7700
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,video,utility
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:

@@ -53,7 +53,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::{FromRow, PgPool, Postgres, QueryBuilder, Transaction, postgres::PgPoolOptions};
 use tokio::signal;
-use tokio::sync::{RwLock, Semaphore, broadcast};
+use tokio::sync::{Mutex, RwLock, Semaphore, broadcast};
 use tokio::task::{JoinHandle, JoinSet};
 use tokio_retry::{Retry, strategy::ExponentialBackoff};
 use tokio_stream::{StreamExt as TokioStreamExt, wrappers::BroadcastStream};
@@ -80,6 +80,7 @@ mod search;
 mod sports;
 mod state;
 mod sync;
+mod transcode;
 
 use self::playback::relay_tokens::{issue_relay_token, relay_url_for_token};
 use self::playback::resolve::{

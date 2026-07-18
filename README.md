@@ -69,6 +69,17 @@ The web client can launch the Euripus Custom Web Receiver on Chromecast and Goog
 
 The receiver is hosted at `https://tv.marcusson.dev/receiver?cast=1`. A Google Cast application ID must be registered before sender discovery is enabled. See `docs/GOOGLE_CAST_RECEIVER.md` for registration, test-device setup, configuration, and validation.
 
+### NVIDIA Cast live transcoding
+
+Older Chromecast models can reject otherwise valid provider streams that use H.264 levels above their decoder limit. Euripus can retry a failed live Cast stream through an on-demand NVIDIA NVENC transcode. The process starts only after the receiver reports a codec failure, is limited to one active stream, and stops when playback changes or after 45 seconds without segment requests.
+
+1. Install the NVIDIA Container Toolkit on the deployment host.
+2. Set `APP_CAST_TRANSCODING_ENABLED=true` and `APP_CAST_TRANSCODE_ENCODER=h264_nvenc` in `apps/server/.env`.
+3. Set `EURIPUS_ENABLE_NVIDIA=true` in `.env.selfhosted-images`.
+4. Publish and deploy normally. The NVIDIA Compose override exposes the GPU to the server container, whose FFmpeg build encodes Cast-compatible H.264 High Profile Level 4.1 HLS.
+
+Only one receiver can transcode at a time. Compatible live channels continue using the original signed relay without transcoding.
+
 ## Operational Docs
 
 - Server setup handoff: `docs/AI_SERVER_SETUP.md`

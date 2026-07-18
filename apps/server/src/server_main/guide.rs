@@ -1738,6 +1738,9 @@ mod tests {
                 access_token_minutes: 15,
                 refresh_token_days: 7,
                 relay_token_minutes: 30,
+                cast_transcoding_enabled: false,
+                cast_transcode_encoder: "h264_nvenc".to_string(),
+                cast_transcode_directory: "/tmp/euripus-test-transcodes".to_string(),
                 daily_sync_hour_local: 6,
                 public_origin: Some(Url::parse("https://app.example.com").expect("public origin")),
                 allowed_origins: vec!["https://app.example.com".to_string()],
@@ -1767,6 +1770,7 @@ mod tests {
             relay_profile_cache: Arc::new(DashMap::new()),
             channel_visibility_cache: Arc::new(DashMap::new()),
             receiver_channels: Arc::new(DashMap::new()),
+            cast_transcodes: Arc::new(Mutex::new(transcode::CastTranscodeManager::default())),
         }
     }
 

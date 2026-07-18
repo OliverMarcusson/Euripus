@@ -11,7 +11,7 @@ FROM docker.io/library/node:22-bookworm-slim AS pi-runtime
 RUN npm install --ignore-scripts --no-audit --no-fund --prefix /opt/pi @earendil-works/pi-coding-agent@0.80.7
 
 FROM docker.io/library/debian:bookworm-slim
-RUN apt-get update && apt-get install -y ca-certificates curl && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl ffmpeg && rm -rf /var/lib/apt/lists/*
 COPY --from=pi-runtime /usr/local/ /usr/local/
 COPY --from=pi-runtime /opt/pi /opt/pi
 ENV PATH="/opt/pi/node_modules/.bin:${PATH}" \

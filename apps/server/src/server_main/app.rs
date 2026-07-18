@@ -49,6 +49,7 @@ pub async fn run() -> Result<()> {
         relay_profile_cache: Arc::new(DashMap::new()),
         channel_visibility_cache: Arc::new(DashMap::new()),
         receiver_channels: Arc::new(DashMap::new()),
+        cast_transcodes: Arc::new(Mutex::new(transcode::CastTranscodeManager::default())),
     };
 
     if state.meili.is_some() && !meili_setup.schema_ready {
@@ -59,6 +60,7 @@ pub async fn run() -> Result<()> {
 
     let periodic_state = state.clone();
     sync::spawn_periodic_sync_worker(periodic_state);
+    transcode::spawn_reaper(state.clone());
 
     let bind_address: SocketAddr = state.config.bind_address;
     let cors = build_cors_layer(&state.config)?;
@@ -78,6 +80,7 @@ pub async fn run() -> Result<()> {
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await?;
+    transcode::stop_all(&state).await;
     state.pool.close().await;
     Ok(())
 }
@@ -317,6 +320,7 @@ pub(super) fn browser_api_router() -> Router<AppState> {
         .merge(auth::browser_router())
         .merge(receiver::browser_router())
         .merge(relay::router())
+        .merge(transcode::router())
         .merge(shared_api_router())
 }
 
