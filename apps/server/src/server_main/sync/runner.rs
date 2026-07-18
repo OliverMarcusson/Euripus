@@ -1,18 +1,5 @@
 use super::*;
 
-#[derive(Debug)]
-enum SearchRefreshScope {
-    FullProfile {
-        profile_id: Uuid,
-    },
-    ChannelDelta {
-        profile_id: Uuid,
-        changed_remote_stream_ids: Vec<i32>,
-        removed_channel_ids: Vec<Uuid>,
-        removed_program_ids: Vec<Uuid>,
-    },
-}
-
 pub(super) fn spawn_sync_job(
     state: AppState,
     user_id: Uuid,
@@ -223,6 +210,11 @@ async fn run_sync_job(
     profile_id: Uuid,
     job_id: Uuid,
 ) -> Result<()> {
+    // Serialize every provider sync for a user. The persistence and search-document
+    // refresh paths touch shared user rows and can deadlock when they overlap.
+    let user_database_lock = state.user_database_lock(user_id);
+    let _database_guard = user_database_lock.lock().await;
+
     sqlx::query(
         "UPDATE sync_jobs SET status = 'running', started_at = NOW(), current_phase = 'starting', phase_message = 'Preparing sync' WHERE id = $1",
     )
@@ -408,7 +400,7 @@ async fn run_sync_job(
         }
     }
 
-    let search_refresh_scope = if sync_epg {
+    if sync_epg {
         let epg_sources = sqlx::query_as::<_, EpgSourceRecord>(
             r#"
             SELECT
@@ -495,7 +487,6 @@ async fn run_sync_job(
             elapsed_ms = persist_started_at.elapsed().as_millis() as u64,
             "finished persisting sync data"
         );
-        SearchRefreshScope::FullProfile { profile_id }
     } else {
         update_sync_job_phase(
             &state.pool,
@@ -507,7 +498,7 @@ async fn run_sync_job(
         )
         .await?;
         let persist_started_at = Instant::now();
-        let channel_delta = persistence::persist_channel_sync_data(
+        persistence::persist_channel_sync_data(
             &state.pool,
             user_id,
             profile_id,
@@ -521,13 +512,7 @@ async fn run_sync_job(
             elapsed_ms = persist_started_at.elapsed().as_millis() as u64,
             "finished persisting channel catalog"
         );
-        SearchRefreshScope::ChannelDelta {
-            profile_id,
-            changed_remote_stream_ids: channel_delta.changed_remote_stream_ids,
-            removed_channel_ids: channel_delta.removed_channel_ids,
-            removed_program_ids: channel_delta.removed_program_ids,
-        }
-    };
+    }
 
     sqlx::query(
         r#"
@@ -556,144 +541,30 @@ async fn run_sync_job(
     .execute(&state.pool)
     .await?;
     invalidate_channel_visibility_cache(&state, user_id, Some(profile_id));
-    spawn_search_refresh(state.clone(), user_id, job_id, search_refresh_scope);
+    refresh_search_documents(&state, user_id, job_id).await;
 
     Ok(())
 }
 
-fn spawn_search_refresh(
-    state: AppState,
-    user_id: Uuid,
-    job_id: Uuid,
-    scope: SearchRefreshScope,
-) -> JoinHandle<()> {
-    tokio::spawn(async move {
-        let refresh_started_at = Instant::now();
-        info!("sync job {job_id}: refreshing search indexes in background");
+async fn refresh_search_documents(state: &AppState, user_id: Uuid, job_id: Uuid) {
+    let refresh_started_at = Instant::now();
+    info!("sync job {job_id}: refreshing PostgreSQL search documents");
 
-        if state.meili.is_some() {
-            state.meili_bootstrapping_users.insert(user_id);
-        }
+    if let Err(error) = search::indexing::refresh_search_metadata(state, user_id).await {
+        warn!("sync job {job_id}: failed to refresh PostgreSQL search metadata: {error:?}");
+        return;
+    }
 
-        if let Err(error) = search::indexing::refresh_search_metadata(&state, user_id).await {
-            warn!("sync job {job_id}: failed to refresh PostgreSQL search metadata: {error:?}");
-            state.meili_bootstrapping_users.remove(&user_id);
-            return;
-        }
+    if let Err(error) = search::indexing::rebuild_postgres_search_documents(state, user_id).await {
+        warn!("sync job {job_id}: failed to rebuild PostgreSQL search documents: {error:?}");
+        return;
+    }
 
-        if let Some(meili) = &state.meili {
-            info!("sync job {job_id}: refreshing Meilisearch indexes in background");
-            let meili_refresh = match &scope {
-                SearchRefreshScope::FullProfile { profile_id } => {
-                    search::indexing::rebuild_meili_indexes(
-                        &state,
-                        meili,
-                        user_id,
-                        Some(*profile_id),
-                    )
-                    .await
-                }
-                SearchRefreshScope::ChannelDelta {
-                    profile_id,
-                    changed_remote_stream_ids,
-                    removed_channel_ids,
-                    removed_program_ids,
-                } => {
-                    search::indexing::refresh_meili_channels_delta(
-                        &state,
-                        meili,
-                        user_id,
-                        *profile_id,
-                        changed_remote_stream_ids,
-                        removed_channel_ids,
-                        removed_program_ids,
-                    )
-                    .await
-                }
-            };
-
-            let user_readiness = match meili_refresh {
-                Ok(()) => {
-                    search::indexing::inspect_meili_readiness_for_user(
-                        meili,
-                        &state.pool,
-                        user_id,
-                        true,
-                    )
-                    .await
-                }
-                Err(error) => {
-                    warn!("sync job {job_id}: failed to rebuild Meilisearch indexes: {error:?}");
-                    Err(error)
-                }
-            };
-
-            match user_readiness {
-                Ok(MeiliReadiness::Ready) => {
-                    state.meili_bootstrapping_users.remove(&user_id);
-                    if let Err(error) = search::indexing::refresh_meili_readiness(&state).await {
-                        warn!(
-                            "sync job {job_id}: failed to refresh Meilisearch readiness: {error:?}"
-                        );
-                    } else {
-                        info!("sync job {job_id}: finished Meilisearch background refresh");
-                    }
-                }
-                Ok(MeiliReadiness::Bootstrapping) => {
-                    warn!(
-                        "sync job {job_id}: Meilisearch rebuild finished but the user index is still incomplete"
-                    );
-                    if let Err(error) = search::indexing::refresh_meili_readiness(&state).await {
-                        warn!(
-                            "sync job {job_id}: failed to refresh Meilisearch readiness: {error:?}"
-                        );
-                    }
-                }
-                Ok(MeiliReadiness::Disabled) => {}
-                Err(error) => {
-                    warn!(
-                        "sync job {job_id}: failed to inspect Meilisearch readiness for user after refresh: {error:?}"
-                    );
-                    if let Err(error) = search::indexing::refresh_meili_readiness(&state).await {
-                        warn!(
-                            "sync job {job_id}: failed to refresh Meilisearch readiness: {error:?}"
-                        );
-                    }
-                }
-            }
-        } else {
-            info!("sync job {job_id}: Meilisearch is disabled; skipping Meilisearch refresh");
-        }
-
-        // Keep the fallback current even while Meilisearch is healthy. Readiness can change
-        // between requests, and serving stale documents after a Meilisearch error makes a
-        // backend outage look like missing search results.
-        info!("sync job {job_id}: rebuilding PostgreSQL fallback search documents in background");
-        if let Err(error) =
-            search::indexing::rebuild_postgres_search_documents(&state, user_id).await
-        {
-            warn!("sync job {job_id}: failed to rebuild PostgreSQL search documents: {error:?}");
-            return;
-        }
-
-        if state.meili.is_some()
-            && state.meili_bootstrapping_users.contains(&user_id)
-            && !matches!(
-                *state.meili_readiness.read().await,
-                MeiliReadiness::Disabled
-            )
-        {
-            warn!(
-                "sync job {job_id}: keeping user on PostgreSQL fallback until a later successful Meilisearch refresh"
-            );
-        }
-
-        info!(
-            job_id = %job_id,
-            elapsed_ms = refresh_started_at.elapsed().as_millis() as u64,
-            "finished background search refresh"
-        );
-    })
+    info!(
+        job_id = %job_id,
+        elapsed_ms = refresh_started_at.elapsed().as_millis() as u64,
+        "finished PostgreSQL search refresh"
+    );
 }
 
 #[cfg(test)]

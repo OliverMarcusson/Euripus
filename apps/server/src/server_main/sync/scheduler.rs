@@ -53,6 +53,8 @@ async fn queue_scheduled_channel_syncs(state: AppState) -> Result<()> {
 
         let profile_id = profile.id;
         let job_id = job.id;
+        // Keep scheduled jobs sequential. Their bulk persistence paths can lock the
+        // same PostgreSQL tables in different orders when allowed to overlap.
         if let Err(error) =
             sync::spawn_sync_job(state.clone(), profile.user_id, profile_id, job_id).await
         {

@@ -28,8 +28,6 @@ pub async fn run() -> Result<()> {
         ));
     }
 
-    let meili_setup = setup_meilisearch(&config, &pool).await;
-
     let state = AppState {
         pool,
         config,
@@ -40,23 +38,13 @@ pub async fn run() -> Result<()> {
             .connect_timeout(Duration::from_secs(RELAY_UPSTREAM_CONNECT_TIMEOUT_SECONDS))
             .read_timeout(Duration::from_secs(RELAY_UPSTREAM_READ_TIMEOUT_SECONDS))
             .build()?,
-        meili: meili_setup.client,
-        meili_readiness: Arc::new(RwLock::new(meili_setup.readiness)),
-        meili_schema_ready: Arc::new(RwLock::new(meili_setup.schema_ready)),
-        meili_bootstrapping_users: Arc::new(DashSet::new()),
-        search_lexicons: Arc::new(DashMap::new()),
+        user_database_locks: Arc::new(DashMap::new()),
         session_cache: Arc::new(DashMap::new()),
         relay_profile_cache: Arc::new(DashMap::new()),
         channel_visibility_cache: Arc::new(DashMap::new()),
         receiver_channels: Arc::new(DashMap::new()),
         cast_transcodes: Arc::new(Mutex::new(transcode::CastTranscodeManager::default())),
     };
-
-    if state.meili.is_some() && !meili_setup.schema_ready {
-        search::indexing::spawn_meili_startup_worker(state.clone());
-    } else if matches!(meili_setup.readiness, MeiliReadiness::Bootstrapping) {
-        search::indexing::spawn_meili_bootstrap_worker(state.clone());
-    }
 
     let periodic_state = state.clone();
     sync::spawn_periodic_sync_worker(periodic_state);
@@ -128,104 +116,6 @@ pub(super) async fn wait_for_postgres(database_url: &str) -> Result<PgPool> {
         tokio::time::sleep(retry_delay).await;
         retry_delay = std::cmp::min(retry_delay * 2, DATABASE_RETRY_DELAY_MAX);
         attempt += 1;
-    }
-}
-
-pub(super) async fn setup_meilisearch(config: &Config, pool: &PgPool) -> MeiliSetup {
-    let Some(url) = config.meilisearch_url.as_deref() else {
-        return MeiliSetup {
-            client: None,
-            readiness: MeiliReadiness::Disabled,
-            schema_ready: true,
-        };
-    };
-    let client = match MeilisearchClient::new(url, config.meilisearch_api_key.as_deref()) {
-        Ok(client) => client,
-        Err(error) => {
-            warn!(
-                "failed to initialize Meilisearch client, falling back to PostgreSQL search: {error:?}"
-            );
-            return MeiliSetup {
-                client: None,
-                readiness: MeiliReadiness::Disabled,
-                schema_ready: true,
-            };
-        }
-    };
-
-    let startup_result = tokio::time::timeout(MEILI_STARTUP_TIMEOUT, async {
-        let schema_ready = search::indexing::inspect_meili_schema_readiness(&client)
-            .await
-            .unwrap_or_else(|error| {
-            warn!(
-                "failed to inspect Meilisearch schema version before setup; forcing bootstrap: {error:?}"
-            );
-            false
-        });
-
-        let strategy = ExponentialBackoff::from_millis(500).factor(2).take(4);
-        let setup_result = Retry::spawn(strategy, || {
-            let client = client.clone();
-            let pool = pool.clone();
-            async move { search::indexing::configure_meili_indexes(&client, &pool).await }
-        })
-        .await;
-
-        match setup_result {
-            Ok(()) => {
-                let readiness = match search::indexing::inspect_meili_readiness(&client, pool, schema_ready).await {
-                    Ok(readiness) => readiness,
-                    Err(error) => {
-                        warn!(
-                            "failed to verify Meilisearch index readiness, falling back to PostgreSQL search: {error:?}"
-                        );
-                    return MeiliSetup {
-                        client: Some(Arc::new(client.clone())),
-                        readiness: MeiliReadiness::Bootstrapping,
-                        schema_ready: false,
-                    };
-                }
-            };
-            match readiness {
-                    MeiliReadiness::Ready => info!("Meilisearch configured successfully"),
-                    MeiliReadiness::Bootstrapping => warn!(
-                        "Meilisearch configured but requires bootstrap from PostgreSQL; search will use PostgreSQL until bootstrap completes"
-                    ),
-                    MeiliReadiness::Disabled => {}
-                }
-                MeiliSetup {
-                    client: Some(Arc::new(client.clone())),
-                    readiness,
-                    schema_ready,
-                }
-            }
-            Err(error) => {
-                warn!(
-                    "failed to configure Meilisearch during startup, continuing setup in the background: {error:?}"
-                );
-                MeiliSetup {
-                    client: Some(Arc::new(client.clone())),
-                    readiness: MeiliReadiness::Bootstrapping,
-                    schema_ready: false,
-                }
-            }
-        }
-    })
-    .await;
-
-    match startup_result {
-        Ok(setup) => setup,
-        Err(_) => {
-            warn!(
-                "Meilisearch startup exceeded {}s, continuing setup in the background",
-                MEILI_STARTUP_TIMEOUT.as_secs()
-            );
-            MeiliSetup {
-                client: Some(Arc::new(client)),
-                readiness: MeiliReadiness::Bootstrapping,
-                schema_ready: false,
-            }
-        }
     }
 }
 

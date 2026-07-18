@@ -27,8 +27,8 @@ if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
 
-Write-Host "Removing local PostgreSQL and Meilisearch volumes..." -ForegroundColor Cyan
-& docker compose down -v | Out-Host
+Write-Host "Removing local PostgreSQL volume..." -ForegroundColor Cyan
+& docker compose down -v --remove-orphans | Out-Host
 
 Write-Host "Rebuilding and restarting dev stack..." -ForegroundColor Cyan
 & $powerShellExecutable -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $devStartScript

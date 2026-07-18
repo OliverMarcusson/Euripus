@@ -79,14 +79,12 @@ describe("SearchPage", () => {
   it("renders EPG program states and play buttons only for playable results", async () => {
     mockedSearchChannels.mockResolvedValue({
       query: "hammarby",
-      backend: "meilisearch",
       items: [],
       totalCount: 0,
       nextOffset: null,
     });
     mockedSearchPrograms.mockResolvedValue({
       query: "hammarby",
-      backend: "meilisearch",
       items: [
         {
           id: "live-program",
@@ -151,7 +149,6 @@ describe("SearchPage", () => {
     useChannelSettingsStore.setState({ filterPpvByDate: true });
     mockedSearchChannels.mockResolvedValue({
       query: "event",
-      backend: "meilisearch",
       items: [
         {
           id: "old-ppv",
@@ -173,7 +170,6 @@ describe("SearchPage", () => {
     });
     mockedSearchPrograms.mockResolvedValue({
       query: "event",
-      backend: "postgres",
       items: [],
       totalCount: 0,
       nextOffset: null,
@@ -191,7 +187,6 @@ describe("SearchPage", () => {
   it("renders favorite controls for channel matches", async () => {
     mockedSearchChannels.mockResolvedValue({
       query: "arena",
-      backend: "meilisearch",
       items: [
         {
           id: "channel-1",
@@ -212,7 +207,6 @@ describe("SearchPage", () => {
     });
     mockedSearchPrograms.mockResolvedValue({
       query: "arena",
-      backend: "postgres",
       items: [],
       totalCount: 0,
       nextOffset: null,
@@ -232,7 +226,6 @@ describe("SearchPage", () => {
   it("does not render the EPG badge when a channel only has an epg mapping id", async () => {
     mockedSearchChannels.mockResolvedValue({
       query: "film",
-      backend: "postgres",
       items: [
         {
           id: "channel-film",
@@ -253,7 +246,6 @@ describe("SearchPage", () => {
     });
     mockedSearchPrograms.mockResolvedValue({
       query: "film",
-      backend: "postgres",
       items: [],
       totalCount: 0,
       nextOffset: null,
@@ -291,7 +283,6 @@ describe("SearchPage", () => {
     });
     mockedSearchChannels.mockResolvedValue({
       query: "arena",
-      backend: "meilisearch",
       items: [
         {
           id: "channel-1",
@@ -312,7 +303,6 @@ describe("SearchPage", () => {
     });
     mockedSearchPrograms.mockResolvedValue({
       query: "arena",
-      backend: "meilisearch",
       items: [],
       totalCount: 0,
       nextOffset: null,
@@ -330,42 +320,15 @@ describe("SearchPage", () => {
     );
   });
 
-  it("shows which backend answered each search section", async () => {
-    mockedSearchChannels.mockResolvedValue({
-      query: "arena",
-      backend: "meilisearch",
-      items: [],
-      totalCount: 0,
-      nextOffset: null,
-    });
-    mockedSearchPrograms.mockResolvedValue({
-      query: "arena",
-      backend: "postgres",
-      items: [],
-      totalCount: 0,
-      nextOffset: null,
-    });
-
-    renderSearchPage();
-    fireEvent.change(screen.getByPlaceholderText(/^search$/i), {
-      target: { value: "arena" },
-    });
-
-    expect(await screen.findByText("Meilisearch")).toBeInTheDocument();
-    expect(await screen.findByText("Postgres")).toBeInTheDocument();
-  });
-
   it("shows a lightweight search guide and applies filter suggestions", async () => {
     mockedSearchChannels.mockResolvedValue({
       query: "golf country:se",
-      backend: "meilisearch",
       items: [],
       totalCount: 0,
       nextOffset: null,
     });
     mockedSearchPrograms.mockResolvedValue({
       query: "golf country:se",
-      backend: "meilisearch",
       items: [],
       totalCount: 0,
       nextOffset: null,
@@ -390,14 +353,12 @@ describe("SearchPage", () => {
   it("shows country autocomplete options and inserts the selected token", async () => {
     mockedSearchChannels.mockResolvedValue({
       query: "country:se ",
-      backend: "meilisearch",
       items: [],
       totalCount: 0,
       nextOffset: null,
     });
     mockedSearchPrograms.mockResolvedValue({
       query: "country:se ",
-      backend: "meilisearch",
       items: [],
       totalCount: 0,
       nextOffset: null,
@@ -424,14 +385,12 @@ describe("SearchPage", () => {
   it("supports provider autocomplete from the keyboard, scoped to the chosen country", async () => {
     mockedSearchChannels.mockResolvedValue({
       query: "golf country:se provider:viaplay ",
-      backend: "meilisearch",
       items: [],
       totalCount: 0,
       nextOffset: null,
     });
     mockedSearchPrograms.mockResolvedValue({
       query: "golf country:se provider:viaplay ",
-      backend: "meilisearch",
       items: [],
       totalCount: 0,
       nextOffset: null,

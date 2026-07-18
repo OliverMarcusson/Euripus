@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{HashMap, HashSet},
     net::{IpAddr, SocketAddr},
     str::FromStr,
     sync::{Arc, OnceLock},
@@ -38,24 +38,16 @@ use base64::{
 };
 use chrono::{DateTime, Datelike, Duration as ChronoDuration, NaiveDate, Utc};
 use cookie::time::Duration as CookieDuration;
-use dashmap::{DashMap, DashSet};
+use dashmap::DashMap;
 use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation, decode, encode};
-use meilisearch_sdk::{
-    client::Client as MeilisearchClient,
-    documents::DocumentDeletionQuery,
-    search::{MatchingStrategies, SearchResults},
-    settings::{MinWordSizeForTypos, PaginationSetting, TypoToleranceSettings},
-    task_info::TaskInfo,
-};
 use rand::RngCore;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::{FromRow, PgPool, Postgres, QueryBuilder, Transaction, postgres::PgPoolOptions};
 use tokio::signal;
-use tokio::sync::{Mutex, RwLock, Semaphore, broadcast};
+use tokio::sync::{Mutex, Semaphore, broadcast};
 use tokio::task::{JoinHandle, JoinSet};
-use tokio_retry::{Retry, strategy::ExponentialBackoff};
 use tokio_stream::{StreamExt as TokioStreamExt, wrappers::BroadcastStream};
 use tower_http::{
     cors::{AllowOrigin, CorsLayer},
@@ -91,7 +83,7 @@ use self::receiver::{ReceiverSessionRecord, load_receiver_device};
 
 pub use app::run;
 use error::{ApiResult, AppError};
-use state::{AppState, CachedChannelVisibilityMap, MeiliReadiness, MeiliSetup, SearchIndexCounts};
+use state::{AppState, CachedChannelVisibilityMap};
 
 #[derive(Debug, Serialize, FromRow, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -160,15 +152,6 @@ struct ServerNetworkStatusResponse {
     public_ip_error: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct SearchBackendStatusResponse {
-    meilisearch: String,
-    progress_percent: Option<i32>,
-    indexed_documents: Option<i64>,
-    total_documents: Option<i64>,
-}
-
 #[derive(Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 struct SearchFilterProviderOptionResponse {
@@ -187,7 +170,6 @@ struct SearchFilterOptionsResponse {
 #[serde(rename_all = "camelCase")]
 struct ChannelSearchResponse {
     query: String,
-    backend: String,
     items: Vec<ChannelResponse>,
     total_count: i64,
     next_offset: Option<i64>,
@@ -197,16 +179,9 @@ struct ChannelSearchResponse {
 #[serde(rename_all = "camelCase")]
 struct ProgramSearchResponse {
     query: String,
-    backend: String,
     items: Vec<ProgramResponse>,
     total_count: i64,
     next_offset: Option<i64>,
-}
-
-#[derive(Debug, FromRow)]
-struct SearchDocumentCountsRow {
-    channel_documents: i64,
-    program_documents: i64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -302,132 +277,6 @@ struct PersistedChannelRecord {
     has_catchup: bool,
 }
 
-#[derive(Debug, Clone, FromRow)]
-struct PersistedChannelSyncRow {
-    id: Uuid,
-    remote_stream_id: i32,
-    category_remote_id: Option<String>,
-    name: String,
-    logo_url: Option<String>,
-    epg_channel_id: Option<String>,
-    has_catchup: bool,
-    archive_duration_hours: Option<i32>,
-    stream_extension: Option<String>,
-    hls_stream_origin: Option<String>,
-    hls_stream_path: Option<String>,
-}
-
-#[derive(Debug, Clone, FromRow)]
-struct PersistedCategoryRecord {
-    remote_category_id: String,
-    name: String,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-struct MeiliChannelDoc {
-    id: String,
-    user_id: String,
-    profile_id: String,
-    entity_id: String,
-    channel_name: String,
-    subtitle: Option<String>,
-    category_name_raw: Option<String>,
-    country_code: Option<String>,
-    provider_name: Option<String>,
-    is_ppv: bool,
-    is_vip: bool,
-    has_epg: bool,
-    broad_categories: Vec<String>,
-    event_titles: Vec<String>,
-    event_keywords: Vec<String>,
-    is_event_channel: bool,
-    is_placeholder_channel: bool,
-    is_hidden: bool,
-    has_catchup: bool,
-    archive_duration_hours: Option<i32>,
-    epg_channel_id: Option<String>,
-    search_text: String,
-    sort_rank: i32,
-    updated_at: i64,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-struct MeiliProgramDoc {
-    id: String,
-    user_id: String,
-    profile_id: String,
-    entity_id: String,
-    country_code: Option<String>,
-    provider_name: Option<String>,
-    is_ppv: bool,
-    is_vip: bool,
-    has_epg: bool,
-    broad_categories: Vec<String>,
-    channel_name: Option<String>,
-    title: String,
-    description: Option<String>,
-    search_text: String,
-    starts_at: i64,
-    ends_at: i64,
-    can_catchup: bool,
-    channel_id: Option<String>,
-    is_hidden: bool,
-    sort_priority: i32,
-}
-
-#[derive(Debug, Clone)]
-struct ChannelProgramMetadata {
-    country_code: Option<String>,
-    provider_name: Option<String>,
-    is_ppv: bool,
-    is_vip: bool,
-    broad_categories: Vec<String>,
-    is_hidden: bool,
-}
-
-#[derive(Debug)]
-struct PendingMeiliBatch {
-    task: TaskInfo,
-    phase: &'static str,
-    batch_number: usize,
-    indexed_documents: usize,
-}
-
-#[derive(Debug, FromRow)]
-struct MeiliChannelRow {
-    id: Uuid,
-    profile_id: Uuid,
-    name: String,
-    category_name: Option<String>,
-    search_country_code: Option<String>,
-    search_provider_name: Option<String>,
-    search_is_ppv: bool,
-    search_is_vip: bool,
-    has_catchup: bool,
-    archive_duration_hours: Option<i32>,
-    epg_channel_id: Option<String>,
-    has_epg: bool,
-    updated_at: DateTime<Utc>,
-}
-
-#[derive(Debug, FromRow)]
-struct MeiliProgramRow {
-    id: Uuid,
-    profile_id: Uuid,
-    channel_id: Option<Uuid>,
-    channel_name: Option<String>,
-    category_name: Option<String>,
-    search_country_code: Option<String>,
-    search_provider_name: Option<String>,
-    search_is_ppv: bool,
-    search_is_vip: bool,
-    title: String,
-    description: Option<String>,
-    start_at: DateTime<Utc>,
-    end_at: DateTime<Utc>,
-    can_catchup: bool,
-}
-
 #[derive(Debug, FromRow)]
 struct ChannelEventTitlesRow {
     channel_id: Uuid,
@@ -472,17 +321,9 @@ const DATABASE_STARTUP_TIMEOUT: Duration = Duration::from_secs(180);
 const DATABASE_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const DATABASE_RETRY_DELAY_INITIAL: Duration = Duration::from_secs(2);
 const DATABASE_RETRY_DELAY_MAX: Duration = Duration::from_secs(10);
-const MEILI_STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
 const SESSION_CACHE_TTL: Duration = Duration::from_secs(30);
 const RELAY_PROFILE_CACHE_TTL: Duration = Duration::from_secs(10);
 const PERIODIC_CHANNEL_SYNC_INTERVAL: Duration = Duration::from_secs(60 * 3);
-const MEILI_INDEX_BATCH_SIZE: i64 = 10_000;
-const MEILI_MAX_TOTAL_HITS: usize = 20_000;
-const MEILI_MAX_IN_FLIGHT_TASKS: usize = 2;
-const MEILI_TASK_POLL_INTERVAL: Duration = Duration::from_millis(250);
-const MEILI_TASK_TIMEOUT: Duration = Duration::from_secs(300);
-const MEILI_SCHEMA_VERSION_KEY: &str = "__euripus_schema_version__";
-const MEILI_SCHEMA_VERSION: &str = "v3";
 const CHANNEL_VISIBILITY_CACHE_TTL: Duration = Duration::from_secs(5 * 60);
 const RECEIVER_TTL: Duration = Duration::from_secs(45);
 const RECEIVER_SESSION_TTL_HOURS: i64 = 12;

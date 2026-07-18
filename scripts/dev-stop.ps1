@@ -31,7 +31,7 @@ if (Test-Path $statePath) {
 
 if (Get-Command docker -ErrorAction SilentlyContinue) {
     Write-Host "Stopping PostgreSQL + API..." -ForegroundColor Cyan
-    & docker compose down | Out-Host
+    & docker compose down --remove-orphans | Out-Host
 }
 
 Write-Host "Dev stack stopped." -ForegroundColor Green

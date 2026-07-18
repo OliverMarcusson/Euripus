@@ -455,6 +455,8 @@ async fn save_provider(
         return Err(AppError::BadRequest(validation.message));
     }
     let encrypted_password = encrypt_secret(&state.config.encryption_key, &effective_password)?;
+    let user_database_lock = state.user_database_lock(auth.user_id);
+    let _database_guard = user_database_lock.lock().await;
     let profile_id = if let Some(existing_profile) = existing_profile.as_ref() {
         sqlx::query(
             r#"
@@ -544,6 +546,8 @@ async fn delete_provider(
     let auth = require_auth(&state, &headers).await?;
     ensure_provider_mutable(&auth)?;
     let profile = require_target_provider_profile(&state.pool, auth.user_id, id).await?;
+    let user_database_lock = state.user_database_lock(auth.user_id);
+    let _database_guard = user_database_lock.lock().await;
 
     sync::ensure_no_active_sync(&state.pool, profile.id).await?;
 
@@ -588,25 +592,6 @@ async fn delete_provider(
         );
     }
 
-    if let Some(meili) = state.meili.as_ref() {
-        if let Err(error) =
-            search::indexing::delete_meili_profile_documents(meili, auth.user_id, profile.id).await
-        {
-            warn!(
-                user_id = %auth.user_id,
-                profile_id = %profile.id,
-                "failed to remove provider documents from Meilisearch after provider delete: {error:?}"
-            );
-        }
-        if let Err(error) = search::indexing::refresh_meili_readiness(&state).await {
-            warn!(
-                user_id = %auth.user_id,
-                profile_id = %profile.id,
-                "failed to refresh Meilisearch readiness after provider delete: {error:?}"
-            );
-        }
-    }
-
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -618,6 +603,8 @@ async fn activate_provider(
     let auth = require_auth(&state, &headers).await?;
     ensure_provider_mutable(&auth)?;
     require_target_provider_profile(&state.pool, auth.user_id, id).await?;
+    let user_database_lock = state.user_database_lock(auth.user_id);
+    let _database_guard = user_database_lock.lock().await;
 
     sqlx::query(
         "UPDATE users SET live_provider_id = $2, on_demand_provider_id = $2, active_provider_id = $2 WHERE id = $1",
@@ -629,10 +616,6 @@ async fn activate_provider(
     invalidate_channel_visibility_cache(&state, auth.user_id, None);
 
     search::indexing::rebuild_postgres_search_documents(&state, auth.user_id).await?;
-    if let Some(meili) = state.meili.as_ref() {
-        search::indexing::rebuild_meili_indexes(&state, meili, auth.user_id, None).await?;
-        search::indexing::refresh_meili_readiness(&state).await?;
-    }
 
     let provider = load_provider_profile_response(&state.pool, auth.user_id, id)
         .await?
@@ -649,6 +632,8 @@ async fn select_provider(
     let auth = require_auth(&state, &headers).await?;
     ensure_provider_mutable(&auth)?;
     require_target_provider_profile(&state.pool, auth.user_id, id).await?;
+    let user_database_lock = state.user_database_lock(auth.user_id);
+    let _database_guard = user_database_lock.lock().await;
 
     let selection_column = match payload.selection {
         ProviderSelection::Live => "live_provider_id",
@@ -664,10 +649,6 @@ async fn select_provider(
     if matches!(payload.selection, ProviderSelection::Live) {
         invalidate_channel_visibility_cache(&state, auth.user_id, None);
         search::indexing::rebuild_postgres_search_documents(&state, auth.user_id).await?;
-        if let Some(meili) = state.meili.as_ref() {
-            search::indexing::rebuild_meili_indexes(&state, meili, auth.user_id, None).await?;
-            search::indexing::refresh_meili_readiness(&state).await?;
-        }
     }
 
     let provider = load_provider_profile_response(&state.pool, auth.user_id, id)

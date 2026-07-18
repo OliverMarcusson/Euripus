@@ -107,7 +107,7 @@ wait_for_api_health() {
             if [[ $reset_attempted -eq 0 && "$logs" == *"migration "* && "$logs" == *"previously applied but has been modified"* ]]; then
                 reset_attempted=1
                 echo "Detected local migration checksum drift in the dev database. Recreating the local database volume..."
-                docker compose down -v
+                docker compose down -v --remove-orphans
                 docker compose up --build -d postgres server
                 sleep 2
                 continue

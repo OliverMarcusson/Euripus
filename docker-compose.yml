@@ -13,15 +13,6 @@ services:
       timeout: 5s
       retries: 20
 
-  meilisearch:
-    image: getmeili/meilisearch:v1.15
-    env_file:
-      - apps/server/.env
-    environment:
-      MEILI_ENV: development
-    volumes:
-      - meilisearch-data:/meili_data
-
   server:
     build:
       context: .
@@ -30,7 +21,6 @@ services:
     env_file:
       - apps/server/.env
     environment:
-      APP_MEILISEARCH_URL: http://meilisearch:7700
       NVIDIA_VISIBLE_DEVICES: all
       NVIDIA_DRIVER_CAPABILITIES: compute,video,utility
     extra_hosts:
@@ -38,8 +28,6 @@ services:
     volumes:
       - ${EURIPUS_PI_AGENT_DIR:-./.runtime/pi-agent}:/root/.pi/agent
     depends_on:
-      meilisearch:
-        condition: service_started
       postgres:
         condition: service_healthy
     healthcheck:
@@ -53,4 +41,3 @@ services:
 
 volumes:
   postgres-data:
-  meilisearch-data:

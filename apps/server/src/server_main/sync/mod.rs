@@ -5,13 +5,6 @@ mod runner;
 mod scheduler;
 
 #[derive(Debug, Clone)]
-pub(super) struct ChannelSyncDelta {
-    pub(super) changed_remote_stream_ids: Vec<i32>,
-    pub(super) removed_channel_ids: Vec<Uuid>,
-    pub(super) removed_program_ids: Vec<Uuid>,
-}
-
-#[derive(Debug, Clone)]
 pub(super) struct ChannelResolution {
     pub(super) channel_id: Uuid,
     pub(super) channel_name: String,

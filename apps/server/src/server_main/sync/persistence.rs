@@ -126,6 +126,16 @@ pub(super) async fn persist_full_sync_data(
     channels: &[XtreamChannel],
     feeds: &[FetchedEpgFeed],
 ) -> Result<Vec<EpgSourceSyncStatus>> {
+    update_sync_job_phase(
+        pool,
+        job_id,
+        "saving-programs",
+        if job_type == "full" { 6 } else { 3 },
+        job_type,
+        "Saving guide entries",
+    )
+    .await?;
+
     let persist_started_at = Instant::now();
     let mut transaction = pool.begin().await?;
     bulk_upsert_categories(&mut transaction, user_id, profile_id, categories).await?;
@@ -148,15 +158,6 @@ pub(super) async fn persist_full_sync_data(
         "resolved EPG programmes against persisted channels"
     );
 
-    update_sync_job_phase(
-        pool,
-        job_id,
-        "saving-programs",
-        if job_type == "full" { 6 } else { 3 },
-        job_type,
-        "Saving guide entries",
-    )
-    .await?;
     let programme_write_started_at = Instant::now();
     sqlx::query("DELETE FROM programs WHERE user_id = $1 AND profile_id = $2")
         .bind(user_id)
@@ -181,29 +182,10 @@ pub(super) async fn persist_channel_sync_data(
     job_id: Uuid,
     categories: &[XtreamCategory],
     channels: &[XtreamChannel],
-) -> Result<ChannelSyncDelta> {
+) -> Result<()> {
     let persist_started_at = Instant::now();
     let mut transaction = pool.begin().await?;
-    let existing_categories =
-        load_persisted_categories(&mut transaction, user_id, profile_id).await?;
-    let existing_channels =
-        load_persisted_channels_for_sync(&mut transaction, user_id, profile_id).await?;
-    let deduped_categories = dedupe_categories(categories);
     let deduped_channels = dedupe_channels(channels);
-    let changed_category_remote_ids =
-        changed_category_remote_ids(&existing_categories, &deduped_categories);
-    let mut channel_delta = determine_channel_sync_delta(
-        &existing_channels,
-        &deduped_channels,
-        &changed_category_remote_ids,
-    );
-    channel_delta.removed_program_ids = load_program_ids_for_channels(
-        &mut transaction,
-        user_id,
-        profile_id,
-        &channel_delta.removed_channel_ids,
-    )
-    .await?;
 
     bulk_upsert_categories(&mut transaction, user_id, profile_id, categories).await?;
     bulk_upsert_channels(&mut transaction, user_id, profile_id, channels).await?;
@@ -225,7 +207,7 @@ pub(super) async fn persist_channel_sync_data(
         elapsed_ms = persist_started_at.elapsed().as_millis() as u64,
         "persisted provider categories and channels"
     );
-    Ok(channel_delta)
+    Ok(())
 }
 
 pub(super) async fn persist_epg_sync_data(
@@ -236,6 +218,16 @@ pub(super) async fn persist_epg_sync_data(
     job_type: &str,
     feeds: &[FetchedEpgFeed],
 ) -> Result<Vec<EpgSourceSyncStatus>> {
+    update_sync_job_phase(
+        pool,
+        job_id,
+        "saving-programs",
+        3,
+        job_type,
+        "Saving guide entries",
+    )
+    .await?;
+
     let persist_started_at = Instant::now();
     let mut transaction = pool.begin().await?;
     let persisted_channels = load_persisted_channels(&mut transaction, user_id, profile_id).await?;
@@ -249,15 +241,6 @@ pub(super) async fn persist_epg_sync_data(
         "resolved EPG programmes against persisted channels"
     );
 
-    update_sync_job_phase(
-        pool,
-        job_id,
-        "saving-programs",
-        3,
-        job_type,
-        "Saving guide entries",
-    )
-    .await?;
     let programme_write_started_at = Instant::now();
     sqlx::query("DELETE FROM programs WHERE user_id = $1 AND profile_id = $2")
         .bind(user_id)
@@ -545,68 +528,6 @@ async fn load_persisted_channels(
     Ok(channels)
 }
 
-async fn load_persisted_categories(
-    transaction: &mut Transaction<'_, Postgres>,
-    user_id: Uuid,
-    profile_id: Uuid,
-) -> Result<Vec<PersistedCategoryRecord>> {
-    sqlx::query_as::<_, PersistedCategoryRecord>(
-        r#"
-        SELECT remote_category_id, name
-        FROM channel_categories
-        WHERE user_id = $1 AND profile_id = $2
-        "#,
-    )
-    .bind(user_id)
-    .bind(profile_id)
-    .fetch_all(&mut **transaction)
-    .await
-    .map_err(Into::into)
-}
-
-async fn load_persisted_channels_for_sync(
-    transaction: &mut Transaction<'_, Postgres>,
-    user_id: Uuid,
-    profile_id: Uuid,
-) -> Result<Vec<PersistedChannelSyncRow>> {
-    sqlx::query_as::<_, PersistedChannelSyncRow>(
-        r#"
-        SELECT
-          c.id,
-          c.remote_stream_id,
-          cc.remote_category_id AS category_remote_id,
-          c.name,
-          c.logo_url,
-          c.epg_channel_id,
-          c.has_catchup,
-          c.archive_duration_hours,
-          c.stream_extension,
-          c.hls_stream_origin,
-          c.hls_stream_path
-        FROM channels c
-        LEFT JOIN channel_categories cc ON cc.id = c.category_id
-        WHERE c.user_id = $1 AND c.profile_id = $2
-        "#,
-    )
-    .bind(user_id)
-    .bind(profile_id)
-    .fetch_all(&mut **transaction)
-    .await
-    .map_err(Into::into)
-}
-
-fn dedupe_categories(categories: &[XtreamCategory]) -> Vec<XtreamCategory> {
-    categories
-        .iter()
-        .cloned()
-        .fold(HashMap::new(), |mut categories_by_remote_id, category| {
-            categories_by_remote_id.insert(category.remote_category_id.clone(), category);
-            categories_by_remote_id
-        })
-        .into_values()
-        .collect::<Vec<_>>()
-}
-
 fn dedupe_channels(channels: &[XtreamChannel]) -> Vec<XtreamChannel> {
     channels
         .iter()
@@ -617,104 +538,6 @@ fn dedupe_channels(channels: &[XtreamChannel]) -> Vec<XtreamChannel> {
         })
         .into_values()
         .collect::<Vec<_>>()
-}
-
-fn changed_category_remote_ids(
-    existing_categories: &[PersistedCategoryRecord],
-    incoming_categories: &[XtreamCategory],
-) -> HashSet<String> {
-    let existing_by_remote_id = existing_categories
-        .iter()
-        .map(|category| (category.remote_category_id.as_str(), category))
-        .collect::<HashMap<_, _>>();
-
-    incoming_categories
-        .iter()
-        .filter(|category| {
-            existing_by_remote_id
-                .get(category.remote_category_id.as_str())
-                .is_none_or(|existing| existing.name != category.name)
-        })
-        .map(|category| category.remote_category_id.clone())
-        .collect::<HashSet<_>>()
-}
-
-fn determine_channel_sync_delta(
-    existing_channels: &[PersistedChannelSyncRow],
-    incoming_channels: &[XtreamChannel],
-    changed_category_remote_ids: &HashSet<String>,
-) -> ChannelSyncDelta {
-    let existing_by_remote_stream_id = existing_channels
-        .iter()
-        .map(|channel| (channel.remote_stream_id, channel))
-        .collect::<HashMap<_, _>>();
-    let incoming_remote_stream_ids = incoming_channels
-        .iter()
-        .map(|channel| channel.remote_stream_id)
-        .collect::<HashSet<_>>();
-
-    let changed_remote_stream_ids = incoming_channels
-        .iter()
-        .filter(|incoming| {
-            existing_by_remote_stream_id
-                .get(&incoming.remote_stream_id)
-                .is_none_or(|existing| {
-                    existing.name != incoming.name
-                        || existing.logo_url != incoming.logo_url
-                        || existing.category_remote_id != incoming.category_id
-                        || existing.epg_channel_id != incoming.epg_channel_id
-                        || existing.has_catchup != incoming.has_catchup
-                        || existing.archive_duration_hours != incoming.archive_duration_hours
-                        || existing.stream_extension != incoming.stream_extension
-                        || existing.hls_stream_origin != incoming.hls_stream_origin
-                        || existing.hls_stream_path != incoming.hls_stream_path
-                        || incoming.category_id.as_ref().is_some_and(|category_id| {
-                            changed_category_remote_ids.contains(category_id)
-                        })
-                })
-        })
-        .map(|channel| channel.remote_stream_id)
-        .collect::<Vec<_>>();
-
-    let removed_channel_ids = existing_channels
-        .iter()
-        .filter(|channel| !incoming_remote_stream_ids.contains(&channel.remote_stream_id))
-        .map(|channel| channel.id)
-        .collect::<Vec<_>>();
-
-    ChannelSyncDelta {
-        changed_remote_stream_ids,
-        removed_channel_ids,
-        removed_program_ids: Vec::new(),
-    }
-}
-
-async fn load_program_ids_for_channels(
-    transaction: &mut Transaction<'_, Postgres>,
-    user_id: Uuid,
-    profile_id: Uuid,
-    channel_ids: &[Uuid],
-) -> Result<Vec<Uuid>> {
-    if channel_ids.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    sqlx::query_scalar::<_, Uuid>(
-        r#"
-        SELECT id
-        FROM programs
-        WHERE user_id = $1
-          AND profile_id = $2
-          AND channel_id = ANY($3)
-        ORDER BY id ASC
-        "#,
-    )
-    .bind(user_id)
-    .bind(profile_id)
-    .bind(channel_ids)
-    .fetch_all(&mut **transaction)
-    .await
-    .map_err(Into::into)
 }
 
 async fn delete_stale_channels(
@@ -1097,80 +920,6 @@ mod tests {
         assert_eq!(total_phases_for_job("channels"), CHANNEL_SYNC_TOTAL_PHASES);
         assert_eq!(total_phases_for_job("epg"), EPG_SYNC_TOTAL_PHASES);
         assert_eq!(total_phases_for_job("full"), FULL_SYNC_TOTAL_PHASES);
-    }
-
-    fn sample_persisted_channel_sync_row(
-        remote_stream_id: i32,
-        category_remote_id: Option<&str>,
-        name: &str,
-    ) -> PersistedChannelSyncRow {
-        PersistedChannelSyncRow {
-            id: Uuid::from_u128(remote_stream_id as u128),
-            remote_stream_id,
-            category_remote_id: category_remote_id.map(str::to_string),
-            name: name.to_string(),
-            logo_url: Some(format!("https://example.com/{remote_stream_id}.png")),
-            epg_channel_id: Some(format!("epg-{remote_stream_id}")),
-            has_catchup: false,
-            archive_duration_hours: None,
-            stream_extension: Some("m3u8".to_string()),
-            hls_stream_origin: None,
-            hls_stream_path: None,
-        }
-    }
-
-    fn sample_xtream_channel(
-        remote_stream_id: i32,
-        category_id: Option<&str>,
-        name: &str,
-    ) -> XtreamChannel {
-        XtreamChannel {
-            remote_stream_id,
-            name: name.to_string(),
-            logo_url: Some(format!("https://example.com/{remote_stream_id}.png")),
-            category_id: category_id.map(str::to_string),
-            epg_channel_id: Some(format!("epg-{remote_stream_id}")),
-            has_catchup: false,
-            archive_duration_hours: None,
-            stream_extension: Some("m3u8".to_string()),
-            hls_stream_origin: None,
-            hls_stream_path: None,
-        }
-    }
-
-    #[test]
-    fn channel_sync_delta_only_marks_changed_and_removed_channels() {
-        let existing = vec![
-            sample_persisted_channel_sync_row(1, Some("sports"), "Sports 1"),
-            sample_persisted_channel_sync_row(2, Some("news"), "News 1"),
-            sample_persisted_channel_sync_row(3, Some("kids"), "Kids 1"),
-        ];
-        let incoming = vec![
-            sample_xtream_channel(1, Some("sports"), "Sports 1"),
-            sample_xtream_channel(2, Some("news"), "News 2"),
-            sample_xtream_channel(4, Some("movies"), "Movies 1"),
-        ];
-
-        let delta = determine_channel_sync_delta(&existing, &incoming, &HashSet::new());
-
-        assert_eq!(delta.changed_remote_stream_ids, vec![2, 4]);
-        assert_eq!(delta.removed_channel_ids, vec![Uuid::from_u128(3)]);
-    }
-
-    #[test]
-    fn channel_sync_delta_marks_channels_when_their_category_changes() {
-        let existing = vec![sample_persisted_channel_sync_row(
-            1,
-            Some("sports"),
-            "Sports 1",
-        )];
-        let incoming = vec![sample_xtream_channel(1, Some("sports"), "Sports 1")];
-        let changed_categories = HashSet::from(["sports".to_string()]);
-
-        let delta = determine_channel_sync_delta(&existing, &incoming, &changed_categories);
-
-        assert_eq!(delta.changed_remote_stream_ids, vec![1]);
-        assert!(delta.removed_channel_ids.is_empty());
     }
 
     #[test]

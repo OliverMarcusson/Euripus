@@ -52,7 +52,7 @@ fi
 
 if command -v docker >/dev/null 2>&1; then
     echo "Stopping PostgreSQL + API..."
-    docker compose down
+    docker compose down --remove-orphans
 fi
 
 echo "Dev stack stopped."
