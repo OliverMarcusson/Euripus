@@ -177,14 +177,6 @@ export function ReceiverPage() {
         }
         setSession(nextSession);
         setPairingCode(nextSession.pairingCode);
-        if (castReceiver) {
-          publishGoogleCastReceiverStatus({
-            type: "receiver_status",
-            deviceId: nextSession.device.id,
-            paired: nextSession.paired,
-            pairingCode: nextSession.pairingCode,
-          });
-        }
         if (nextSession.receiverCredential) {
           persistState({
             deviceKey: initial.deviceKey,
@@ -239,6 +231,16 @@ export function ReceiverPage() {
     }
 
     const events = new EventSource(buildEventsUrl(session.sessionToken), { withCredentials: true });
+    events.addEventListener("open", () => {
+      if (castReceiver) {
+        publishGoogleCastReceiverStatus({
+          type: "receiver_status",
+          deviceId: session.device.id,
+          paired: pairingCode === null,
+          pairingCode,
+        });
+      }
+    });
     events.addEventListener("playback_command", (event) => {
       const payload = JSON.parse((event as MessageEvent<string>).data) as RemoteDeviceEventPayload;
       if (!payload.source) {
@@ -330,7 +332,13 @@ export function ReceiverPage() {
     return () => {
       events.close();
     };
-  }, [castReceiver, initial.deviceKey, session?.device.id, session?.sessionToken]);
+  }, [
+    castReceiver,
+    initial.deviceKey,
+    pairingCode,
+    session?.device.id,
+    session?.sessionToken,
+  ]);
 
   useEffect(() => {
     if (!session?.sessionToken) {

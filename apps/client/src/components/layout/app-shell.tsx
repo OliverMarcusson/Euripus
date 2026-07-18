@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link, Outlet, useRouterState } from "@tanstack/react-router";
 import { toast } from "sonner";
@@ -230,6 +230,7 @@ function RemoteTargetMenu({
 
 function CastReceiverAutoSelector() {
   const queryClient = useQueryClient();
+  const selectionInFlightRef = useRef(false);
   const remoteTarget = useRemoteControllerStore((state) => state.target);
   const setTargetSelection = useRemoteControllerStore(
     (state) => state.setTargetSelection,
@@ -286,9 +287,14 @@ function CastReceiverAutoSelector() {
       (castReceiverPaired || !!castReceiverPairingCode) &&
       castReceiverDeviceId &&
       remoteTarget?.id !== castReceiverDeviceId &&
-      !selectMutation.isPending
+      !selectionInFlightRef.current
     ) {
-      selectMutation.mutate();
+      selectionInFlightRef.current = true;
+      selectMutation.mutate(undefined, {
+        onSettled: () => {
+          selectionInFlightRef.current = false;
+        },
+      });
     }
   }, [
     castReceiverDeviceId,
