@@ -580,19 +580,19 @@ export function ReceiverPage() {
 
   if (pairingCode) {
     return (
-      <div className="min-h-screen bg-background text-foreground">
-        <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(168,85,247,0.22),transparent_34%),radial-gradient(circle_at_80%_20%,rgba(192,132,252,0.16),transparent_28%),linear-gradient(180deg,rgba(10,10,15,0.96),rgba(5,5,10,1))]" />
-        <main className="relative grid min-h-screen place-items-center px-6 py-10">
-          <section className="flex w-full max-w-[52rem] flex-col items-center gap-8 text-center">
+      <div className="euripus-receiver min-h-screen bg-background text-foreground">
+        <div className="euripus-receiver__backdrop absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(168,85,247,0.22),transparent_34%),radial-gradient(circle_at_80%_20%,rgba(192,132,252,0.16),transparent_28%),linear-gradient(180deg,rgba(10,10,15,0.96),rgba(5,5,10,1))]" />
+        <main className="euripus-receiver__center relative grid min-h-screen place-items-center px-6 py-10">
+          <section className="euripus-receiver__panel flex w-full max-w-[52rem] flex-col items-center gap-8 text-center">
             <div className="flex flex-col items-center gap-3">
-              <p className="text-sm font-medium uppercase tracking-[0.2em] text-white/80">
+              <p className="euripus-receiver__eyebrow text-sm font-medium uppercase tracking-[0.2em] text-white/80">
                 Euripus Receiver
               </p>
               <div className="flex flex-col items-center gap-2">
-                <h1 className="text-4xl font-semibold tracking-tight text-balance text-white">
+                <h1 className="euripus-receiver__title text-4xl font-semibold tracking-tight text-balance text-white">
                   {castReceiver ? "Connecting to Euripus" : "Pair this screen"}
                 </h1>
-                <p className="max-w-2xl text-lg text-white/72 text-balance">
+                <p className="euripus-receiver__copy max-w-2xl text-lg text-white/72 text-balance">
                   {castReceiver
                     ? "This Cast device will be registered automatically."
                     : "Open Euripus on your phone, enter the code below, and choose whether to remember this screen."}
@@ -601,10 +601,10 @@ export function ReceiverPage() {
             </div>
 
             {castReceiver ? (
-              <div className="size-12 animate-spin rounded-full border-4 border-white/20 border-t-primary" />
+              <div className="euripus-receiver__spinner size-12 animate-spin rounded-full border-4 border-white/20 border-t-primary" />
             ) : (
-              <div className="inline-flex max-w-full items-center justify-center overflow-hidden rounded-lg border border-white/10 bg-white/[0.04] px-10 py-7 shadow-[0_0_0_1px_rgba(255,255,255,0.02),0_24px_80px_rgba(76,29,149,0.18)] backdrop-blur-sm">
-                <span className="block whitespace-nowrap text-center text-7xl font-semibold text-white sm:text-8xl">
+              <div className="euripus-receiver__code-frame inline-flex max-w-full items-center justify-center overflow-hidden rounded-lg border border-white/10 bg-white/[0.04] px-10 py-7 shadow-[0_0_0_1px_rgba(255,255,255,0.02),0_24px_80px_rgba(76,29,149,0.18)] backdrop-blur-sm">
+                <span className="euripus-receiver__code block whitespace-nowrap text-center text-7xl font-semibold text-white sm:text-8xl">
                   {formatPairingCode(pairingCode)}
                 </span>
               </div>
@@ -619,15 +619,15 @@ export function ReceiverPage() {
 
   if (!source) {
     return (
-      <div className="min-h-screen bg-background text-foreground">
-        <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(168,85,247,0.18),transparent_34%),radial-gradient(circle_at_80%_20%,rgba(192,132,252,0.12),transparent_28%),linear-gradient(180deg,rgba(10,10,15,0.96),rgba(5,5,10,1))]" />
-        <main className="relative grid min-h-screen place-items-center px-6 py-10">
-          <Empty className="border-0">
+      <div className="euripus-receiver min-h-screen bg-background text-foreground">
+        <div className="euripus-receiver__backdrop absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(168,85,247,0.18),transparent_34%),radial-gradient(circle_at_80%_20%,rgba(192,132,252,0.12),transparent_28%),linear-gradient(180deg,rgba(10,10,15,0.96),rgba(5,5,10,1))]" />
+        <main className="euripus-receiver__center relative grid min-h-screen place-items-center px-6 py-10">
+          <Empty className="euripus-receiver__empty border-0">
             <EmptyHeader>
-              <EmptyMedia variant="icon" className="border border-white/10 bg-white/[0.04] text-primary shadow-[0_18px_60px_rgba(76,29,149,0.22)]">
+              <EmptyMedia variant="icon" className="euripus-receiver__icon border border-white/10 bg-white/[0.04] text-primary shadow-[0_18px_60px_rgba(76,29,149,0.22)]">
                 <Tv aria-hidden="true" />
               </EmptyMedia>
-              <EmptyTitle className="text-white">Nothing is playing</EmptyTitle>
+              <EmptyTitle className="euripus-receiver__title text-white">Nothing is playing</EmptyTitle>
             </EmptyHeader>
           </Empty>
         </main>
@@ -636,7 +636,7 @@ export function ReceiverPage() {
   }
 
   return (
-    <div className="min-h-screen bg-black text-white">
+    <div className="euripus-receiver euripus-receiver--playback min-h-screen bg-black text-white">
       <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(168,85,247,0.14),transparent_30%),linear-gradient(180deg,rgba(10,10,15,0.24),rgba(10,10,15,0.4))]" />
       {source.kind === "unsupported" || playbackError ? (
         <main className="relative grid min-h-screen place-items-center px-6 py-10">

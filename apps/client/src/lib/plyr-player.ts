@@ -426,6 +426,13 @@ export function bindPlaybackSource(
     }
 
     const nextSignature = getQualitySignature(uiMode, hlsSession);
+    if (uiMode === "receiver") {
+      if (nextSignature !== qualitySignature) {
+        qualitySignature = nextSignature;
+        void video.play().catch(() => undefined);
+      }
+      return;
+    }
     if (session.plyr && nextSignature === qualitySignature) {
       return;
     }
