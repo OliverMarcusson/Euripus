@@ -4,6 +4,10 @@ const CAST_RECEIVER_SDK_URL =
 export const EURIPUS_CAST_NAMESPACE = "urn:x-cast:se.olivermarcusson.euripus.receiver";
 
 type CastReceiverContext = {
+  addCustomMessageListener: (
+    namespace: string,
+    listener: (event: unknown) => void,
+  ) => void;
   addEventListener: (eventType: string, listener: () => void) => void;
   sendCustomMessage: (
     namespace: string,
@@ -78,6 +82,11 @@ export function initializeGoogleCastReceiver() {
       }
 
       receiverContext = framework.CastReceiverContext.getInstance();
+      // CAF requires custom namespaces to be registered before start().
+      receiverContext.addCustomMessageListener(
+        EURIPUS_CAST_NAMESPACE,
+        () => undefined,
+      );
       receiverContext.addEventListener(
         framework.system.EventType.SENDER_CONNECTED,
         sendPendingStatus,
