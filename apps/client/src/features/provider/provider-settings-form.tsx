@@ -77,6 +77,20 @@ export function ProviderSettingsForm({
         <form className="flex flex-col gap-6" onSubmit={onSubmit}>
           <FieldGroup className="grid gap-6 lg:grid-cols-2">
             <Field
+              data-invalid={form.formState.errors.label ? true : undefined}
+            >
+              <FieldLabel htmlFor="providerLabel">Label</FieldLabel>
+              <Input
+                id="providerLabel"
+                placeholder="e.g. Family TV or Sports"
+                maxLength={80}
+                aria-invalid={form.formState.errors.label ? true : undefined}
+                {...form.register("label")}
+              />
+              <FieldError errors={[form.formState.errors.label]} />
+            </Field>
+
+            <Field
               data-invalid={form.formState.errors.baseUrl ? true : undefined}
             >
               <FieldLabel htmlFor="baseUrl">Base URL</FieldLabel>

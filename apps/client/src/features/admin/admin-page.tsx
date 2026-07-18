@@ -88,6 +88,7 @@ export function AdminPage() {
   const signedInAdmin = useAuthStore((state) => state.user?.isAdmin ?? false);
   const [password, setPassword] = useState("");
   const [selectedQualityPrefixes, setSelectedQualityPrefixes] = useState<string[]>([]);
+  const [qualityPrefixSearch, setQualityPrefixSearch] = useState("");
   const [includeCategoriesWithoutCountryPrefix, setIncludeCategoriesWithoutCountryPrefix] = useState(false);
   const [loginError, setLoginError] = useState<string | null>(null);
   const [draftGroup, setDraftGroup] = useState<EditableGroup>(DEFAULT_GROUP);
@@ -131,6 +132,19 @@ export function AdminPage() {
       setIncludeCategoriesWithoutCountryPrefix(qualityPrefixesQuery.data.includeCategoriesWithoutCountryPrefix);
     }
   }, [qualityPrefixesQuery.data]);
+
+  const filteredQualityPrefixes = useMemo(() => {
+    const query = qualityPrefixSearch.trim().toLocaleUpperCase();
+    const prefixes = qualityPrefixesQuery.data?.prefixes ?? [];
+    if (!query) {
+      return prefixes;
+    }
+    return prefixes.filter(
+      (entry) =>
+        entry.prefix.toLocaleUpperCase().includes(query) ||
+        entry.countryCode.toLocaleUpperCase().includes(query),
+    );
+  }, [qualityPrefixSearch, qualityPrefixesQuery.data?.prefixes]);
 
   const saveQualityPrefixesMutation = useMutation({
     mutationFn: saveAdminQualityChannelPrefixes,
@@ -389,9 +403,25 @@ export function AdminPage() {
       <Card>
         <CardHeader><CardTitle>Quality channels</CardTitle></CardHeader>
         <CardContent className="flex flex-col gap-4">
-          <p className="text-sm text-muted-foreground">Choose the country prefixes considered quality channels. Prefixes are discovered from channel and category names in the database.</p>
+          <p className="text-sm text-muted-foreground">Choose the country prefixes considered quality channels. Prefixes are discovered from channel and category names in the database, including names formatted like <code>|SE|</code>.</p>
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <Input
+              aria-label="Search quality prefixes"
+              placeholder="Search prefixes"
+              value={qualityPrefixSearch}
+              onChange={(event) => setQualityPrefixSearch(event.target.value)}
+            />
+            <Button
+              type="button"
+              variant="outline"
+              disabled={qualityPrefixesQuery.isFetching}
+              onClick={() => qualityPrefixesQuery.refetch()}
+            >
+              {qualityPrefixesQuery.isFetching ? "Refreshing..." : "Refresh prefixes"}
+            </Button>
+          </div>
           <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-            {(qualityPrefixesQuery.data?.prefixes ?? []).map((entry) => (
+            {filteredQualityPrefixes.map((entry) => (
               <label key={entry.prefix} className="flex items-center gap-3 rounded-lg border p-3">
                 <input type="checkbox" checked={selectedQualityPrefixes.includes(entry.prefix)} onChange={(event) => setSelectedQualityPrefixes((current) => event.target.checked ? [...current, entry.prefix] : current.filter((prefix) => prefix !== entry.prefix))} />
                 <span><strong>{entry.prefix}</strong><span className="block text-xs text-muted-foreground">{entry.channelCount} channels · {entry.categoryCount} categories</span></span>
@@ -399,6 +429,7 @@ export function AdminPage() {
             ))}
           </div>
           {!qualityPrefixesQuery.isPending && !(qualityPrefixesQuery.data?.prefixes.length) ? <p className="text-sm text-muted-foreground">No prefixes were found.</p> : null}
+          {!qualityPrefixesQuery.isPending && qualityPrefixesQuery.data?.prefixes.length && !filteredQualityPrefixes.length ? <p className="text-sm text-muted-foreground">No prefixes match your search.</p> : null}
           <label className="flex items-center gap-3 rounded-lg border p-3">
             <input type="checkbox" checked={includeCategoriesWithoutCountryPrefix} onChange={(event) => setIncludeCategoriesWithoutCountryPrefix(event.target.checked)} />
             <span><strong>Categories without a country prefix</strong><span className="block text-xs text-muted-foreground">Include channels in categories that do not start with a letter-only country prefix.</span></span>

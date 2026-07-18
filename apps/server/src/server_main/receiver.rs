@@ -549,7 +549,7 @@ async fn list_receiver_favorite_channels(
           LIMIT 1
         ) p ON TRUE
         WHERE f.user_id = $1
-          AND c.profile_id = (SELECT active_provider_id FROM users WHERE id = $1)
+          AND c.profile_id = (SELECT live_provider_id FROM users WHERE id = $1)
         ORDER BY f.sort_order ASC, c.name ASC
         "#,
     )

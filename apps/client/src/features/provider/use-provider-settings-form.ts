@@ -9,11 +9,11 @@ import { useEffect, useRef, useState } from "react"
 import { useForm, useWatch } from "react-hook-form"
 import { z } from "zod"
 import {
-  activateProvider,
   deleteProvider,
   getProviders,
   getSyncStatus,
   saveProvider,
+  selectProviderForContent,
   triggerProviderSync,
   validateProvider,
 } from "@/lib/api"
@@ -23,6 +23,7 @@ import {
 } from "@/lib/query-cache"
 
 export const providerSchema = z.object({
+  label: z.string().max(80),
   baseUrl: z.string().url(),
   username: z.string().min(1),
   password: z.string(),
@@ -44,6 +45,7 @@ export function createProviderFormValues(
   provider: ProviderProfile | null | undefined,
 ): ProviderFormValues {
   return {
+    label: provider?.label ?? "",
     baseUrl: provider?.baseUrl ?? "",
     username: provider?.username ?? "",
     password: "",
@@ -123,7 +125,7 @@ export function useProviderSettingsForm() {
   const selectedProvider = isCreatingProvider
     ? null
     : providers.find((provider) => provider.id === selectedProviderId) ??
-      providers.find((provider) => provider.isActive) ??
+      providers.find((provider) => provider.isLive ?? provider.isActive) ??
       providers[0] ??
       null
 
@@ -171,7 +173,7 @@ export function useProviderSettingsForm() {
 
     const nextSelectedProvider =
       providers.find((provider) => provider.id === selectedProviderId) ??
-      providers.find((provider) => provider.isActive) ??
+      providers.find((provider) => provider.isLive ?? provider.isActive) ??
       providers[0]
 
     if (!nextSelectedProvider) {
@@ -220,15 +222,33 @@ export function useProviderSettingsForm() {
       })
     },
   })
-  const activateMutation = useMutation({
-    mutationFn: activateProvider,
-    onMutate: async (providerId) => {
+  const selectionMutation = useMutation({
+    mutationFn: ({
+      providerId,
+      selection,
+    }: {
+      providerId: string
+      selection: "live" | "onDemand"
+    }) => selectProviderForContent(providerId, selection),
+    onMutate: async ({ providerId, selection }) => {
       await queryClient.cancelQueries({ queryKey: ["providers"] })
       queryClient.setQueryData<ProviderProfile[]>(["providers"], (current) =>
-        (current ?? []).map((provider) => ({
-          ...provider,
-          isActive: provider.id === providerId,
-        })),
+        (current ?? []).map((provider) => {
+          const currentIsLive = provider.isLive ?? provider.isActive
+          const currentIsOnDemand = provider.isOnDemand ?? provider.isActive
+          const isLive =
+            selection === "live" ? provider.id === providerId : currentIsLive
+          const isOnDemand =
+            selection === "onDemand"
+              ? provider.id === providerId
+              : currentIsOnDemand
+          return {
+            ...provider,
+            isLive,
+            isOnDemand,
+            isActive: Boolean(isLive),
+          }
+        }),
       )
     },
     onSettled: async () => {
@@ -326,10 +346,6 @@ export function useProviderSettingsForm() {
     setIsCreatingProvider(false)
     setSelectedProviderId(providerId)
     resetTransientState()
-    const selected = providers.find((provider) => provider.id === providerId)
-    if (selected && !selected.isActive) {
-      activateMutation.mutate(providerId)
-    }
   }
 
   function startCreatingProvider() {
@@ -387,7 +403,6 @@ export function useProviderSettingsForm() {
   }
 
   return {
-    activateMutation,
     displayedEpgSourceCount,
     feedbackMessage:
       feedbackMessage ??
@@ -403,6 +418,7 @@ export function useProviderSettingsForm() {
     providersQuery,
     saveMutation,
     selectedProviderId: provider?.id ?? null,
+    selectionMutation,
     selectProvider,
     startCreatingProvider,
     submitDelete,

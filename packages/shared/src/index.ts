@@ -53,7 +53,10 @@ export type SaveEpgSourceInput = {
 export type ProviderProfile = {
   id: string;
   providerType: "xtreme";
+  label?: string | null;
   isActive: boolean;
+  isLive?: boolean;
+  isOnDemand?: boolean;
   baseUrl: string;
   username: string;
   outputFormat: "m3u8" | "ts";
@@ -623,6 +626,7 @@ export type LoginPayload = RegisterPayload;
 
 export type SaveProviderPayload = {
   id?: string;
+  label?: string;
   baseUrl: string;
   username: string;
   password: string;

@@ -12,6 +12,10 @@ import { ProviderSettingsForm } from "@/features/provider/provider-settings-form
 import { useProviderSettingsForm } from "@/features/provider/use-provider-settings-form";
 
 function formatProviderLabel(provider: ProviderProfile) {
+  if (provider.label?.trim()) {
+    return provider.label.trim();
+  }
+
   try {
     const url = new URL(provider.baseUrl);
     return `${provider.username} · ${url.host}`;
@@ -27,6 +31,12 @@ export function ProviderSettingsSection() {
     state.form.watch("outputFormat").toUpperCase();
   const playbackMode =
     state.provider?.playbackMode ?? state.form.watch("playbackMode");
+  const liveProvider = state.providers.find(
+    (provider) => provider.isLive ?? provider.isActive,
+  );
+  const onDemandProvider = state.providers.find(
+    (provider) => provider.isOnDemand ?? provider.isActive,
+  );
 
   return (
     <div className="flex flex-col">
@@ -50,6 +60,59 @@ export function ProviderSettingsSection() {
             Add provider
           </Button>
 
+          {state.providers.length > 1 ? (
+            <div className="grid gap-4 rounded-xl border border-border/60 bg-muted/20 p-4 sm:grid-cols-2">
+              <label className="grid gap-2 text-sm font-medium" htmlFor="liveProvider">
+                Live channels provider
+                <select
+                  id="liveProvider"
+                  className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+                  value={liveProvider?.id ?? ""}
+                  disabled={state.selectionMutation.isPending}
+                  onChange={(event) =>
+                    state.selectionMutation.mutate({
+                      providerId: event.target.value,
+                      selection: "live",
+                    })
+                  }
+                >
+                  {state.providers.map((provider) => (
+                    <option key={provider.id} value={provider.id}>
+                      {formatProviderLabel(provider)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="grid gap-2 text-sm font-medium" htmlFor="onDemandProvider">
+                On-demand provider
+                <select
+                  id="onDemandProvider"
+                  className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+                  value={onDemandProvider?.id ?? ""}
+                  disabled={state.selectionMutation.isPending}
+                  onChange={(event) =>
+                    state.selectionMutation.mutate({
+                      providerId: event.target.value,
+                      selection: "onDemand",
+                    })
+                  }
+                >
+                  {state.providers.map((provider) => (
+                    <option key={provider.id} value={provider.id}>
+                      {formatProviderLabel(provider)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+          ) : null}
+
+          {state.selectionMutation.error instanceof Error ? (
+            <p className="text-sm text-destructive">
+              {state.selectionMutation.error.message}
+            </p>
+          ) : null}
+
           {state.providers.length ? (
             <div className="grid gap-2 sm:grid-cols-2">
               {state.providers.map((provider) => {
@@ -59,17 +122,20 @@ export function ProviderSettingsSection() {
                     type="button"
                     onClick={() => state.selectProvider(provider.id)}
                     className="flex flex-col items-start gap-1 rounded-lg border border-border/60 px-4 py-3 text-left transition-colors hover:bg-muted/50 data-[state=active]:border-primary/50 data-[state=active]:bg-muted"
-                    data-state={provider.isActive ? "active" : "inactive"}
-                    aria-pressed={provider.isActive}
-                    aria-label={`${formatProviderLabel(provider)}${provider.isActive ? ", active provider" : ", use provider"}`}
+                    data-state={state.selectedProviderId === provider.id ? "active" : "inactive"}
+                    aria-pressed={state.selectedProviderId === provider.id}
+                    aria-label={`${formatProviderLabel(provider)}${state.selectedProviderId === provider.id ? ", selected for editing" : ", edit provider"}`}
                   >
                     <div className="flex w-full items-center justify-between gap-3">
                       <span className="truncate text-sm font-semibold">
                         {formatProviderLabel(provider)}
                       </span>
                       <span className="flex shrink-0 items-center gap-2">
-                        {provider.isActive ? (
-                          <Badge variant="default">Active</Badge>
+                        {provider.isLive ?? provider.isActive ? (
+                          <Badge variant="default">Live</Badge>
+                        ) : null}
+                        {provider.isOnDemand ?? provider.isActive ? (
+                          <Badge variant="accent">On demand</Badge>
                         ) : null}
                         <Badge
                           variant={

@@ -271,6 +271,7 @@ struct ProviderProfileRecord {
     id: Uuid,
     user_id: Uuid,
     provider_type: String,
+    label: Option<String>,
     base_url: String,
     username: String,
     password_encrypted: String,
@@ -840,7 +841,7 @@ async fn load_channel_visibility_map(
         WHERE c.user_id = $1
           AND c.profile_id = COALESCE(
             $2::uuid,
-            (SELECT active_provider_id FROM users WHERE id = $1)
+            (SELECT live_provider_id FROM users WHERE id = $1)
           )
         "#,
     )
@@ -871,7 +872,7 @@ async fn load_channel_visibility_map(
             AND p.channel_id IS NOT NULL
             AND p.profile_id = COALESCE(
               $2::uuid,
-              (SELECT active_provider_id FROM users WHERE id = $1)
+              (SELECT live_provider_id FROM users WHERE id = $1)
             )
             AND p.end_at > NOW() - ($3 * INTERVAL '1 hour')
             AND p.start_at < NOW() + ($4 * INTERVAL '1 day')

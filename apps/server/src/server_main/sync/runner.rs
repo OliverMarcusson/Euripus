@@ -243,7 +243,7 @@ async fn run_sync_job(
     let profile = sqlx::query_as::<_, ProviderProfileRecord>(
         r#"
         SELECT
-          id, user_id, provider_type, base_url, username, password_encrypted, output_format, playback_mode,
+          id, user_id, provider_type, label, base_url, username, password_encrypted, output_format, playback_mode,
           status, last_validated_at, last_sync_at, last_sync_error, created_at, updated_at
         FROM provider_profiles
         WHERE id = $1 AND user_id = $2

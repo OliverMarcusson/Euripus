@@ -569,6 +569,16 @@ export function activateProvider(providerId: string) {
   });
 }
 
+export function selectProviderForContent(
+  providerId: string,
+  selection: "live" | "onDemand",
+) {
+  return request<ProviderProfile>(`/providers/${providerId}/select`, {
+    method: "PUT",
+    body: JSON.stringify({ selection }),
+  });
+}
+
 export function triggerProviderSync(providerId: string) {
   return request<SyncJob>(`/providers/${providerId}/sync`, { method: "POST" });
 }

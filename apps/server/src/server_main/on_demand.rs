@@ -145,7 +145,7 @@ async fn list_history(
         LEFT JOIN on_demand_categories c ON c.id = t.category_id
         LEFT JOIN on_demand_episodes e ON e.id = h.episode_id
         WHERE h.user_id = $1
-          AND t.profile_id = (SELECT active_provider_id FROM users WHERE id = $1)
+          AND t.profile_id = (SELECT on_demand_provider_id FROM users WHERE id = $1)
         ORDER BY h.last_played_at DESC
         LIMIT 100
         "#,
@@ -244,7 +244,7 @@ async fn list_categories(
         FROM on_demand_categories c
         LEFT JOIN on_demand_titles t ON t.category_id = c.id
         WHERE c.user_id = $1 AND c.media_type = $2
-          AND c.profile_id = (SELECT active_provider_id FROM users WHERE id = $1)
+          AND c.profile_id = (SELECT on_demand_provider_id FROM users WHERE id = $1)
         GROUP BY c.id ORDER BY is_favorite DESC, lower(c.name), c.id
     "#,
     )
@@ -273,7 +273,7 @@ async fn list_titles(
         r#"
         SELECT COUNT(*) FROM on_demand_titles t
         WHERE t.user_id = $1 AND t.media_type = $2
-          AND t.profile_id = (SELECT active_provider_id FROM users WHERE id = $1)
+          AND t.profile_id = (SELECT on_demand_provider_id FROM users WHERE id = $1)
           AND ($3::uuid IS NULL OR t.category_id = $3)
           AND ($4::text IS NULL OR t.name ILIKE ('%' || $4 || '%'))
           AND (NOT $5 OR EXISTS (
@@ -300,7 +300,7 @@ async fn list_titles(
           ) AS is_favorite
         FROM on_demand_titles t LEFT JOIN on_demand_categories c ON c.id = t.category_id
         WHERE t.user_id = $1 AND t.media_type = $2
-          AND t.profile_id = (SELECT active_provider_id FROM users WHERE id = $1)
+          AND t.profile_id = (SELECT on_demand_provider_id FROM users WHERE id = $1)
           AND ($3::uuid IS NULL OR t.category_id = $3)
           AND ($4::text IS NULL OR t.name ILIKE ('%' || $4 || '%'))
           AND (NOT $5 OR EXISTS (
@@ -368,7 +368,7 @@ async fn refresh_movie_details_if_stale(
           p.base_url, p.username, p.password_encrypted, p.output_format
         FROM on_demand_titles t JOIN provider_profiles p ON p.id = t.profile_id
         WHERE t.user_id = $1 AND t.id = $2 AND t.media_type = 'movie'
-          AND t.profile_id = (SELECT active_provider_id FROM users WHERE id = $1)
+          AND t.profile_id = (SELECT on_demand_provider_id FROM users WHERE id = $1)
     "#,
     )
     .bind(user_id)
@@ -425,7 +425,7 @@ async fn load_title(
           ) AS is_favorite
         FROM on_demand_titles t LEFT JOIN on_demand_categories c ON c.id = t.category_id
         WHERE t.user_id = $1 AND t.id = $2
-          AND t.profile_id = (SELECT active_provider_id FROM users WHERE id = $1)
+          AND t.profile_id = (SELECT on_demand_provider_id FROM users WHERE id = $1)
     "#,
     )
     .bind(user_id)
@@ -446,7 +446,7 @@ async fn list_series_episodes(
           p.base_url, p.username, p.password_encrypted, p.output_format
         FROM on_demand_titles t JOIN provider_profiles p ON p.id = t.profile_id
         WHERE t.user_id = $1 AND t.id = $2 AND t.media_type = 'series'
-          AND t.profile_id = (SELECT active_provider_id FROM users WHERE id = $1)
+          AND t.profile_id = (SELECT on_demand_provider_id FROM users WHERE id = $1)
     "#,
     )
     .bind(auth.user_id)
