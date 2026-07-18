@@ -16,11 +16,17 @@ async fn queue_scheduled_channel_syncs(state: AppState) -> Result<()> {
     let profiles = sqlx::query_as::<_, ProviderProfileRecord>(
         r#"
         SELECT
-          p.id, p.user_id, p.provider_type, p.base_url, p.username, p.password_encrypted, p.output_format, p.playback_mode,
+          p.id, p.user_id, p.provider_type, p.label, p.base_url, p.username, p.password_encrypted, p.output_format, p.playback_mode,
           p.status, p.last_validated_at, p.last_sync_at, p.last_sync_error, p.created_at, p.updated_at
         FROM provider_profiles p
-        JOIN users u ON u.id = p.user_id AND u.active_provider_id = p.id
+        JOIN users u ON u.id = p.user_id
         WHERE p.status = 'valid'
+        ORDER BY
+          p.user_id,
+          CASE WHEN p.id = u.live_provider_id THEN 0 ELSE 1 END,
+          p.updated_at DESC,
+          p.created_at DESC,
+          p.id
         "#,
     )
     .fetch_all(&state.pool)
@@ -45,7 +51,17 @@ async fn queue_scheduled_channel_syncs(state: AppState) -> Result<()> {
             Err(other) => return Err(anyhow!("failed to queue scheduled sync: {other:?}")),
         };
 
-        sync::spawn_sync_job(state.clone(), profile.user_id, profile.id, job.id);
+        let profile_id = profile.id;
+        let job_id = job.id;
+        if let Err(error) =
+            sync::spawn_sync_job(state.clone(), profile.user_id, profile_id, job_id).await
+        {
+            error!(
+                %profile_id,
+                %job_id,
+                "scheduled sync task stopped unexpectedly: {error}"
+            );
+        }
     }
 
     Ok(())

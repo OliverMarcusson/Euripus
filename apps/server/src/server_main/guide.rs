@@ -200,7 +200,7 @@ async fn get_channel(
         FROM channels c
         LEFT JOIN channel_categories cc ON cc.id = c.category_id
         WHERE c.user_id = $1 AND c.id = $2
-          AND c.profile_id = (SELECT active_provider_id FROM users WHERE id = $1)
+          AND c.profile_id = (SELECT live_provider_id FROM users WHERE id = $1)
         "#,
     )
     .bind(auth.user_id)
@@ -1112,11 +1112,11 @@ pub(super) async fn quality_channel_ids(
           AND (
             NOT EXISTS (SELECT 1 FROM admin_quality_channel_prefixes)
             OR EXISTS (SELECT 1 FROM admin_quality_channel_prefixes q
-              WHERE UPPER((regexp_match(c.name, '^[[:space:]]*([A-Za-z0-9]{2,3})[[:space:]]*\|'))[1]) = RTRIM(q.prefix, '|')
-                 OR UPPER((regexp_match(COALESCE(cc.name, ''), '^[[:space:]]*([A-Za-z0-9]{2,3})[[:space:]]*\|'))[1]) = RTRIM(q.prefix, '|'))
+              WHERE UPPER((regexp_match(c.name, '^[[:space:]]*[|]?[[:space:]]*([A-Za-z0-9]{2,3})[[:space:]]*[|]'))[1]) = RTRIM(q.prefix, '|')
+                 OR UPPER((regexp_match(COALESCE(cc.name, ''), '^[[:space:]]*[|]?[[:space:]]*([A-Za-z0-9]{2,3})[[:space:]]*[|]'))[1]) = RTRIM(q.prefix, '|'))
             OR (
               COALESCE((SELECT include_categories_without_country_prefix FROM admin_quality_channel_settings WHERE singleton = TRUE), FALSE)
-              AND COALESCE(cc.name, '') !~ '^[[:space:]]*[A-Za-z]{2,3}[[:space:]]*\|'
+              AND COALESCE(cc.name, '') !~ '^[[:space:]]*[|]?[[:space:]]*[A-Za-z]{2,3}[[:space:]]*[|]'
             )
           )
     "#).bind(user_id).bind(candidate_ids).fetch_all(pool).await?)

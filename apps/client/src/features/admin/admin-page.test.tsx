@@ -196,7 +196,9 @@ describe("AdminPage JSON import", () => {
     fireEvent.change((await screen.findAllByRole("combobox"))[2], {
       target: { value: "provider" },
     });
-    const [valueInput, patternsInput, countryCodesInput] = screen.getAllByRole("textbox").slice(5);
+    const valueInput = screen.getByPlaceholderText("SE or viaplay or ppv");
+    const patternsInput = screen.getByPlaceholderText("SE:,SE|");
+    const countryCodesInput = screen.getByPlaceholderText("se,uk");
     fireEvent.change(valueInput, {
       target: { value: "viaplay" },
     });
@@ -278,6 +280,40 @@ describe("AdminPage JSON import", () => {
       "true",
     );
     expect(await screen.findByRole("button", { name: /expand viaplay/i })).toBeInTheDocument();
+  });
+
+  it("filters discovered quality prefixes", async () => {
+    mockedGetAdminQualityChannelPrefixes.mockResolvedValue({
+      prefixes: [
+        {
+          prefix: "SE|",
+          countryCode: "SE",
+          channelCount: 10,
+          categoryCount: 2,
+          selected: true,
+        },
+        {
+          prefix: "US|",
+          countryCode: "US",
+          channelCount: 20,
+          categoryCount: 3,
+          selected: false,
+        },
+      ],
+      includeCategoriesWithoutCountryPrefix: false,
+    });
+
+    renderAdminPage();
+
+    expect(await screen.findByText("SE|")).toBeInTheDocument();
+    expect(screen.getByText("US|")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("Search quality prefixes"), {
+      target: { value: "us" },
+    });
+
+    expect(screen.queryByText("SE|")).not.toBeInTheDocument();
+    expect(screen.getByText("US|")).toBeInTheDocument();
   });
 
   it("renders saved rule cards collapsed by default and expands on click", async () => {

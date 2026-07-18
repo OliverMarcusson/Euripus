@@ -341,19 +341,21 @@ async fn list_quality_channel_prefixes(
     let rows = sqlx::query_as::<_, AdminQualityPrefixResponse>(
         r#"
         WITH channel_prefixes AS (
-          SELECT UPPER((regexp_match(c.name, '^[[:space:]]*([A-Za-z0-9]{2,3})[[:space:]]*\|'))[1]) || '|' AS prefix,
+          SELECT UPPER((regexp_match(c.name, '^[[:space:]]*[|]?[[:space:]]*([A-Za-z0-9]{2,3})[[:space:]]*[|]'))[1]) || '|' AS prefix,
                  COUNT(*)::bigint AS channel_count
           FROM channels c
-          WHERE c.name ~ '^[[:space:]]*[A-Za-z0-9]{2,3}[[:space:]]*\|'
+          WHERE c.name ~ '^[[:space:]]*[|]?[[:space:]]*[A-Za-z0-9]{2,3}[[:space:]]*[|]'
           GROUP BY 1
         ), category_prefixes AS (
-          SELECT UPPER((regexp_match(cc.name, '^[[:space:]]*([A-Za-z0-9]{2,3})[[:space:]]*\|'))[1]) || '|' AS prefix,
+          SELECT UPPER((regexp_match(cc.name, '^[[:space:]]*[|]?[[:space:]]*([A-Za-z0-9]{2,3})[[:space:]]*[|]'))[1]) || '|' AS prefix,
                  COUNT(*)::bigint AS category_count
           FROM channel_categories cc
-          WHERE cc.name ~ '^[[:space:]]*[A-Za-z0-9]{2,3}[[:space:]]*\|'
+          WHERE cc.name ~ '^[[:space:]]*[|]?[[:space:]]*[A-Za-z0-9]{2,3}[[:space:]]*[|]'
           GROUP BY 1
         ), discovered AS (
-          SELECT prefix FROM channel_prefixes UNION SELECT prefix FROM category_prefixes
+          SELECT prefix FROM channel_prefixes
+          UNION SELECT prefix FROM category_prefixes
+          UNION SELECT prefix FROM admin_quality_channel_prefixes
         )
         SELECT d.prefix, RTRIM(d.prefix, '|') AS country_code,
                COALESCE(cp.channel_count, 0) AS channel_count,
@@ -1040,7 +1042,9 @@ async fn save_managed_provider(
         sqlx::query("INSERT INTO provider_profiles (id, user_id, provider_type, base_url, username, password_encrypted, output_format, playback_mode, status, last_validated_at) VALUES ($1, $2, 'xtreme', $3, $4, $5, $6, $7, 'valid', NOW())")
             .bind(id).bind(user_id).bind(&payload.base_url).bind(&payload.username).bind(encrypt_secret(&state.config.encryption_key, &password)?).bind(output_format_as_str(output_format)).bind(playback_mode_as_str(playback_mode)).execute(&state.pool).await?;
     }
-    sqlx::query("UPDATE users SET active_provider_id = $2 WHERE id = $1")
+    sqlx::query(
+        "UPDATE users SET live_provider_id = $2, on_demand_provider_id = $2, active_provider_id = $2 WHERE id = $1",
+    )
         .bind(user_id)
         .bind(id)
         .execute(&state.pool)

@@ -7,6 +7,7 @@ pub(super) fn shared_router() -> Router<AppState> {
         .route("/providers/xtreme", post(save_provider))
         .route("/providers/{id}", delete(delete_provider))
         .route("/providers/{id}/activate", put(activate_provider))
+        .route("/providers/{id}/select", put(select_provider))
         .route("/providers/{id}/sync", post(trigger_sync))
         .route("/providers/{id}/sync-status", get(get_sync_status))
 }
@@ -16,7 +17,10 @@ pub(super) fn shared_router() -> Router<AppState> {
 struct ProviderProfileResponse {
     id: Uuid,
     provider_type: String,
+    label: Option<String>,
     is_active: bool,
+    is_live: bool,
+    is_on_demand: bool,
     base_url: String,
     username: String,
     output_format: String,
@@ -51,6 +55,8 @@ struct EpgSourceResponse {
 #[serde(rename_all = "camelCase")]
 struct SaveProviderPayload {
     id: Option<Uuid>,
+    #[serde(default)]
+    label: String,
     base_url: String,
     username: String,
     password: String,
@@ -75,6 +81,19 @@ struct ValidateProviderResponse {
     valid: bool,
     status: String,
     message: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SelectProviderPayload {
+    selection: ProviderSelection,
+}
+
+#[derive(Debug, Deserialize, Clone, Copy)]
+#[serde(rename_all = "camelCase")]
+enum ProviderSelection {
+    Live,
+    OnDemand,
 }
 
 async fn load_epg_sources(
@@ -110,12 +129,19 @@ async fn load_epg_sources(
 fn provider_profile_response_from_record(
     provider: ProviderProfileRecord,
     epg_sources: Vec<EpgSourceResponse>,
-    active_provider_id: Option<Uuid>,
+    live_provider_id: Option<Uuid>,
+    on_demand_provider_id: Option<Uuid>,
 ) -> ProviderProfileResponse {
+    let is_live = live_provider_id == Some(provider.id);
+    let is_on_demand = on_demand_provider_id == Some(provider.id);
     ProviderProfileResponse {
         id: provider.id,
         provider_type: provider.provider_type,
-        is_active: active_provider_id == Some(provider.id),
+        label: provider.label,
+        // Keep the legacy active flag aligned with live-channel selection.
+        is_active: is_live,
+        is_live,
+        is_on_demand,
         base_url: provider.base_url,
         username: provider.username,
         output_format: provider.output_format,
@@ -139,7 +165,7 @@ async fn load_provider_profile_record(
     sqlx::query_as::<_, ProviderProfileRecord>(
         r#"
         SELECT
-          id, user_id, provider_type, base_url, username, password_encrypted, output_format, playback_mode,
+          id, user_id, provider_type, label, base_url, username, password_encrypted, output_format, playback_mode,
           status, last_validated_at, last_sync_at, last_sync_error, created_at, updated_at
         FROM provider_profiles
         WHERE user_id = $1 AND id = $2
@@ -163,16 +189,26 @@ async fn load_provider_profile_response(
     };
 
     let epg_sources = load_epg_sources(pool, provider.id).await?;
-    let active_provider_id =
-        sqlx::query_scalar::<_, Option<Uuid>>("SELECT active_provider_id FROM users WHERE id = $1")
-            .bind(user_id)
-            .fetch_one(pool)
-            .await?;
+    let (live_provider_id, on_demand_provider_id) = load_provider_selections(pool, user_id).await?;
     Ok(Some(provider_profile_response_from_record(
         provider,
         epg_sources,
-        active_provider_id,
+        live_provider_id,
+        on_demand_provider_id,
     )))
+}
+
+async fn load_provider_selections(
+    pool: &PgPool,
+    user_id: Uuid,
+) -> Result<(Option<Uuid>, Option<Uuid>), AppError> {
+    sqlx::query_as::<_, (Option<Uuid>, Option<Uuid>)>(
+        "SELECT live_provider_id, on_demand_provider_id FROM users WHERE id = $1",
+    )
+    .bind(user_id)
+    .fetch_one(pool)
+    .await
+    .map_err(Into::into)
 }
 
 async fn load_provider_profile_responses(
@@ -182,7 +218,7 @@ async fn load_provider_profile_responses(
     let providers = sqlx::query_as::<_, ProviderProfileRecord>(
         r#"
         SELECT
-          id, user_id, provider_type, base_url, username, password_encrypted, output_format, playback_mode,
+          id, user_id, provider_type, label, base_url, username, password_encrypted, output_format, playback_mode,
           status, last_validated_at, last_sync_at, last_sync_error, created_at, updated_at
         FROM provider_profiles
         WHERE user_id = $1
@@ -193,18 +229,15 @@ async fn load_provider_profile_responses(
     .fetch_all(pool)
     .await?;
 
-    let active_provider_id =
-        sqlx::query_scalar::<_, Option<Uuid>>("SELECT active_provider_id FROM users WHERE id = $1")
-            .bind(user_id)
-            .fetch_one(pool)
-            .await?;
+    let (live_provider_id, on_demand_provider_id) = load_provider_selections(pool, user_id).await?;
     let mut responses = Vec::with_capacity(providers.len());
     for provider in providers {
         let epg_sources = load_epg_sources(pool, provider.id).await?;
         responses.push(provider_profile_response_from_record(
             provider,
             epg_sources,
-            active_provider_id,
+            live_provider_id,
+            on_demand_provider_id,
         ));
     }
 
@@ -213,6 +246,16 @@ async fn load_provider_profile_responses(
 
 fn stored_password_reentry_message() -> String {
     "Stored provider password could not be decrypted. Re-enter your provider password and save the profile again.".to_string()
+}
+
+fn normalize_provider_label(value: &str) -> Result<Option<String>, AppError> {
+    let label = value.trim();
+    if label.chars().count() > 80 {
+        return Err(AppError::BadRequest(
+            "Provider labels must be 80 characters or fewer.".to_string(),
+        ));
+    }
+    Ok((!label.is_empty()).then(|| label.to_string()))
 }
 
 fn resolve_effective_password(
@@ -386,6 +429,7 @@ async fn save_provider(
     ensure_provider_mutable(&auth)?;
     let output_format = normalize_output_format(&payload.output_format)?;
     let playback_mode = normalize_playback_mode(&payload.playback_mode)?;
+    let label = normalize_provider_label(&payload.label)?;
     let epg_sources = normalize_epg_source_payloads(payload.epg_sources)?;
     let existing_profile = match payload.id {
         Some(profile_id) => {
@@ -417,11 +461,12 @@ async fn save_provider(
             UPDATE provider_profiles
             SET
               provider_type = 'xtreme',
-              base_url = $3,
-              username = $4,
-              password_encrypted = $5,
-              output_format = $6,
-              playback_mode = $7,
+              label = $3,
+              base_url = $4,
+              username = $5,
+              password_encrypted = $6,
+              output_format = $7,
+              playback_mode = $8,
               status = 'valid',
               last_validated_at = NOW(),
               last_sync_error = NULL,
@@ -431,6 +476,7 @@ async fn save_provider(
         )
         .bind(auth.user_id)
         .bind(existing_profile.id)
+        .bind(&label)
         .bind(&payload.base_url)
         .bind(&payload.username)
         .bind(encrypted_password)
@@ -444,13 +490,14 @@ async fn save_provider(
         sqlx::query(
             r#"
             INSERT INTO provider_profiles (
-              id, user_id, provider_type, base_url, username, password_encrypted, output_format, playback_mode, status, last_validated_at, last_sync_error
+              id, user_id, provider_type, label, base_url, username, password_encrypted, output_format, playback_mode, status, last_validated_at, last_sync_error
             )
-            VALUES ($1, $2, 'xtreme', $3, $4, $5, $6, $7, 'valid', NOW(), NULL)
+            VALUES ($1, $2, 'xtreme', $3, $4, $5, $6, $7, $8, 'valid', NOW(), NULL)
             "#,
         )
         .bind(profile_id)
         .bind(auth.user_id)
+        .bind(&label)
         .bind(&payload.base_url)
         .bind(&payload.username)
         .bind(encrypted_password)
@@ -462,7 +509,13 @@ async fn save_provider(
     };
 
     sqlx::query(
-        "UPDATE users SET active_provider_id = COALESCE(active_provider_id, $2) WHERE id = $1",
+        r#"
+        UPDATE users
+        SET live_provider_id = COALESCE(live_provider_id, $2),
+            on_demand_provider_id = COALESCE(on_demand_provider_id, $2),
+            active_provider_id = COALESCE(active_provider_id, $2)
+        WHERE id = $1
+        "#,
     )
     .bind(auth.user_id)
     .bind(profile_id)
@@ -503,10 +556,18 @@ async fn delete_provider(
     sqlx::query(
         r#"
         UPDATE users
-        SET active_provider_id = COALESCE(
-          active_provider_id,
-          (SELECT id FROM provider_profiles WHERE user_id = $1 ORDER BY updated_at DESC, created_at DESC, id ASC LIMIT 1)
-        )
+        SET live_provider_id = COALESCE(
+              live_provider_id,
+              (SELECT id FROM provider_profiles WHERE user_id = $1 ORDER BY updated_at DESC, created_at DESC, id ASC LIMIT 1)
+            ),
+            on_demand_provider_id = COALESCE(
+              on_demand_provider_id,
+              (SELECT id FROM provider_profiles WHERE user_id = $1 ORDER BY updated_at DESC, created_at DESC, id ASC LIMIT 1)
+            ),
+            active_provider_id = COALESCE(
+              active_provider_id,
+              (SELECT id FROM provider_profiles WHERE user_id = $1 ORDER BY updated_at DESC, created_at DESC, id ASC LIMIT 1)
+            )
         WHERE id = $1
         "#,
     )
@@ -558,17 +619,55 @@ async fn activate_provider(
     ensure_provider_mutable(&auth)?;
     require_target_provider_profile(&state.pool, auth.user_id, id).await?;
 
-    sqlx::query("UPDATE users SET active_provider_id = $2 WHERE id = $1")
-        .bind(auth.user_id)
-        .bind(id)
-        .execute(&state.pool)
-        .await?;
+    sqlx::query(
+        "UPDATE users SET live_provider_id = $2, on_demand_provider_id = $2, active_provider_id = $2 WHERE id = $1",
+    )
+    .bind(auth.user_id)
+    .bind(id)
+    .execute(&state.pool)
+    .await?;
     invalidate_channel_visibility_cache(&state, auth.user_id, None);
 
     search::indexing::rebuild_postgres_search_documents(&state, auth.user_id).await?;
     if let Some(meili) = state.meili.as_ref() {
         search::indexing::rebuild_meili_indexes(&state, meili, auth.user_id, None).await?;
         search::indexing::refresh_meili_readiness(&state).await?;
+    }
+
+    let provider = load_provider_profile_response(&state.pool, auth.user_id, id)
+        .await?
+        .ok_or_else(|| AppError::NotFound("Provider profile not found.".to_string()))?;
+    Ok(Json(provider))
+}
+
+async fn select_provider(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+    Json(payload): Json<SelectProviderPayload>,
+) -> ApiResult<ProviderProfileResponse> {
+    let auth = require_auth(&state, &headers).await?;
+    ensure_provider_mutable(&auth)?;
+    require_target_provider_profile(&state.pool, auth.user_id, id).await?;
+
+    let selection_column = match payload.selection {
+        ProviderSelection::Live => "live_provider_id",
+        ProviderSelection::OnDemand => "on_demand_provider_id",
+    };
+    let query = format!("UPDATE users SET {selection_column} = $2 WHERE id = $1");
+    sqlx::query(&query)
+        .bind(auth.user_id)
+        .bind(id)
+        .execute(&state.pool)
+        .await?;
+
+    if matches!(payload.selection, ProviderSelection::Live) {
+        invalidate_channel_visibility_cache(&state, auth.user_id, None);
+        search::indexing::rebuild_postgres_search_documents(&state, auth.user_id).await?;
+        if let Some(meili) = state.meili.as_ref() {
+            search::indexing::rebuild_meili_indexes(&state, meili, auth.user_id, None).await?;
+            search::indexing::refresh_meili_readiness(&state).await?;
+        }
     }
 
     let provider = load_provider_profile_response(&state.pool, auth.user_id, id)

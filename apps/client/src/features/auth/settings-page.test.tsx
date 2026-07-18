@@ -3,7 +3,6 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ProviderProfile } from "@euripus/shared";
 import { SettingsPage } from "@/features/auth/settings-page";
 import {
-  activateProvider,
   deleteProvider,
   getProviders,
   getRecents,
@@ -12,6 +11,7 @@ import {
   getSyncStatus,
   pairReceiver,
   saveProvider,
+  selectProviderForContent,
   startChannelPlayback,
   startRemoteChannelPlayback,
   triggerProviderSync,
@@ -34,7 +34,6 @@ vi.mock("@/lib/api", () => ({
     selectedCalendarName: null,
   }),
   selectGoogleCalendar: vi.fn(),
-  activateProvider: vi.fn(),
   deleteProvider: vi.fn(),
   getProviders: vi.fn(),
   getRecents: vi.fn(),
@@ -44,6 +43,7 @@ vi.mock("@/lib/api", () => ({
   pairReceiver: vi.fn(),
   removeFavorite: vi.fn(),
   saveProvider: vi.fn(),
+  selectProviderForContent: vi.fn(),
   startChannelPlayback: vi.fn(),
   startRemoteChannelPlayback: vi.fn(),
   triggerProviderSync: vi.fn(),
@@ -51,7 +51,6 @@ vi.mock("@/lib/api", () => ({
   validateProvider: vi.fn(),
 }));
 
-const mockedActivateProvider = vi.mocked(activateProvider);
 const mockedDeleteProvider = vi.mocked(deleteProvider);
 const mockedGetRecents = vi.mocked(getRecents);
 const mockedGetProviders = vi.mocked(getProviders);
@@ -60,6 +59,7 @@ const mockedGetServerNetworkStatus = vi.mocked(getServerNetworkStatus);
 const mockedGetSyncStatus = vi.mocked(getSyncStatus);
 const mockedPairReceiver = vi.mocked(pairReceiver);
 const mockedSaveProvider = vi.mocked(saveProvider);
+const mockedSelectProviderForContent = vi.mocked(selectProviderForContent);
 const mockedStartChannelPlayback = vi.mocked(startChannelPlayback);
 const mockedStartRemoteChannelPlayback = vi.mocked(startRemoteChannelPlayback);
 const mockedTriggerProviderSync = vi.mocked(triggerProviderSync);
@@ -71,22 +71,26 @@ describe("SettingsPage", () => {
     mockedDeleteProvider.mockResolvedValue();
     mockedGetRecents.mockResolvedValue([]);
     mockedGetProviders.mockResolvedValue([]);
-    mockedActivateProvider.mockImplementation(async (providerId) => ({
-      id: providerId,
-      providerType: "xtreme",
-      isActive: true,
-      baseUrl: "https://provider.example.com",
-      username: "demo",
-      outputFormat: "m3u8",
-      playbackMode: "direct",
-      status: "valid",
-      lastValidatedAt: null,
-      lastSyncAt: null,
-      lastSyncError: null,
-      createdAt: "2026-04-04T10:00:00.000Z",
-      updatedAt: "2026-04-04T10:00:00.000Z",
-      epgSources: [],
-    }));
+    mockedSelectProviderForContent.mockImplementation(
+      async (providerId, selection) => ({
+        id: providerId,
+        providerType: "xtreme",
+        isActive: selection === "live",
+        isLive: selection === "live",
+        isOnDemand: selection === "onDemand",
+        baseUrl: "https://provider.example.com",
+        username: "demo",
+        outputFormat: "m3u8",
+        playbackMode: "direct",
+        status: "valid",
+        lastValidatedAt: null,
+        lastSyncAt: null,
+        lastSyncError: null,
+        createdAt: "2026-04-04T10:00:00.000Z",
+        updatedAt: "2026-04-04T10:00:00.000Z",
+        epgSources: [],
+      }),
+    );
     mockedGetRemoteReceivers.mockResolvedValue([]);
     mockedPairReceiver.mockResolvedValue({
       id: "receiver-1",
@@ -450,11 +454,12 @@ describe("SettingsPage", () => {
     ).toBeDisabled();
   });
 
-  it("switches between multiple saved providers", async () => {
+  it("edits saved providers and selects them independently by content type", async () => {
     mockedGetProviders.mockResolvedValue([
       {
         id: "provider-1",
         providerType: "xtreme",
+        label: "Main TV",
         isActive: true,
         baseUrl: "https://alpha.example.com",
         username: "alpha",
@@ -471,6 +476,7 @@ describe("SettingsPage", () => {
       {
         id: "provider-2",
         providerType: "xtreme",
+        label: "Sports",
         isActive: false,
         baseUrl: "https://beta.example.com",
         username: "beta",
@@ -495,21 +501,36 @@ describe("SettingsPage", () => {
     expect(
       await screen.findByDisplayValue("https://alpha.example.com"),
     ).toBeInTheDocument();
+    expect((screen.getByLabelText("Label") as HTMLInputElement).value).toBe(
+      "Main TV",
+    );
 
     fireEvent.click(
-      (await screen.findByText("beta · beta.example.com")).closest("button")!,
+      await screen.findByRole("button", {
+        name: /Sports, edit provider/i,
+      }),
     );
 
     expect(
       await screen.findByDisplayValue("https://beta.example.com"),
     ).toBeInTheDocument();
     expect(screen.getByDisplayValue("beta")).toBeInTheDocument();
+    expect((screen.getByLabelText("Label") as HTMLInputElement).value).toBe(
+      "Sports",
+    );
+
+    fireEvent.change(screen.getByLabelText("Live channels provider"), {
+      target: { value: "provider-2" },
+    });
     await waitFor(() =>
-      expect(mockedActivateProvider).toHaveBeenCalledWith(
+      expect(mockedSelectProviderForContent).toHaveBeenCalledWith(
         "provider-2",
-        expect.anything(),
+        "live",
       ),
     );
+    expect(
+      (screen.getByLabelText("On-demand provider") as HTMLSelectElement).value,
+    ).toBe("provider-1");
   });
 
   it("deletes the selected provider and falls back to another saved provider", async () => {
