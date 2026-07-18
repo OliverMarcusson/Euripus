@@ -20,6 +20,7 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty";
 import { PlyrSurface } from "@/components/player/plyr-surface";
+import type { PlaybackFailure } from "@/lib/hls";
 import {
   initializeGoogleCastReceiver,
   isGoogleCastReceiver,
@@ -151,6 +152,42 @@ export function ReceiverPage() {
   const updatePlaybackErrorState = (nextPlaybackError: string | null) => {
     playbackErrorRef.current = nextPlaybackError;
     setPlaybackError(nextPlaybackError);
+  };
+
+  const handleReceiverPlaybackFailure = (failure: PlaybackFailure) => {
+    const message =
+      failure.kind === "provider-unavailable"
+        ? failure.message
+        : failure.reason === "hls"
+          ? "This stream's video format is not supported by this Cast device."
+          : "Playback failed on the receiver.";
+    const currentSource = sourceRef.current;
+    const pending = pendingCommandRef.current;
+
+    updateBufferingState(false);
+    updatePlaybackErrorState(message);
+    pendingCommandRef.current = null;
+
+    if (!session?.sessionToken) {
+      return;
+    }
+    if (pending) {
+      void acknowledgeReceiverCommand(session.sessionToken, pending.id, {
+        status: "failed",
+        errorMessage: message,
+      }).catch(() => undefined);
+    }
+    void updateReceiverPlaybackState(session.sessionToken, {
+      title: currentSource?.title ?? null,
+      sourceKind: currentSource?.kind ?? null,
+      live: currentSource?.live ?? null,
+      catchup: currentSource?.catchup ?? null,
+      paused: true,
+      buffering: false,
+      positionSeconds: null,
+      durationSeconds: null,
+      errorMessage: message,
+    }).catch(() => undefined);
   };
 
   useEffect(() => {
@@ -651,6 +688,7 @@ export function ReceiverPage() {
           <PlyrSurface
             ariaLabel={`Playing ${displaySourceTitle}`}
             className="contents"
+            onPlaybackFailure={handleReceiverPlaybackFailure}
             source={source}
             uiMode="receiver"
             videoClassName="euripus-plyr-media relative h-screen w-screen bg-black object-contain"
