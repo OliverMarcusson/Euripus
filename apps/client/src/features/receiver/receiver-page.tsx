@@ -26,6 +26,7 @@ import {
   publishGoogleCastReceiverStatus,
 } from "@/lib/google-cast-receiver";
 import { formatEventChannelTitle } from "@/lib/utils";
+import { createUuid } from "@/lib/uuid";
 
 const RECEIVER_STORAGE_KEY = "euripus-receiver-device";
 const RECEIVER_HEARTBEAT_MS = 15_000;
@@ -43,18 +44,18 @@ type ReceiverPersistedState = {
 
 function loadPersistedState(): ReceiverPersistedState {
   if (typeof window === "undefined") {
-    return { deviceKey: crypto.randomUUID(), receiverCredential: null };
+    return { deviceKey: createUuid(), receiverCredential: null };
   }
 
   const raw = window.localStorage.getItem(RECEIVER_STORAGE_KEY);
   if (!raw) {
-    return { deviceKey: crypto.randomUUID(), receiverCredential: null };
+    return { deviceKey: createUuid(), receiverCredential: null };
   }
 
   try {
     return JSON.parse(raw) as ReceiverPersistedState;
   } catch {
-    return { deviceKey: crypto.randomUUID(), receiverCredential: null };
+    return { deviceKey: createUuid(), receiverCredential: null };
   }
 }
 
