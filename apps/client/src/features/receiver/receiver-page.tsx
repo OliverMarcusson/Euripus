@@ -1,26 +1,17 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   PlaybackSource,
   ReceiverPlaybackStatePayload,
-  ReceiverSession,
 } from "@euripus/shared";
 import { Tv } from "lucide-react";
 import {
   API_BASE_URL,
   acknowledgeReceiverCommand,
-  createReceiverSession,
-  heartbeatReceiver,
   startReceiverCastTranscode,
   stopReceiverCastTranscode,
   updateReceiverPlaybackState,
 } from "@/lib/api";
 import type { RemoteDeviceEventPayload } from "@/lib/remote-events";
-import {
-  Empty,
-  EmptyHeader,
-  EmptyMedia,
-  EmptyTitle,
-} from "@/components/ui/empty";
 import { PlyrSurface } from "@/components/player/plyr-surface";
 import type { PlaybackFailure } from "@/lib/hls";
 import {
@@ -30,12 +21,15 @@ import {
 } from "@/lib/google-cast-receiver";
 import { formatEventChannelTitle } from "@/lib/utils";
 import { createUuid } from "@/lib/uuid";
+import { useReceiverSession } from "@/features/receiver/use-receiver-session";
+import {
+  ReceiverSpinner,
+  ReceiverStatusScreen,
+} from "@/features/receiver/receiver-status-screen";
 
 const RECEIVER_STORAGE_KEY = "euripus-receiver-device";
-const RECEIVER_HEARTBEAT_MS = 15_000;
 const RECEIVER_PLAYBACK_SYNC_INTERVAL_MS = 3_000;
 const SEEK_COMPLETION_TOLERANCE_SECONDS = 1.5;
-const PREPARING_CAST_TRANSCODE_MESSAGE = "Preparing a compatible stream...";
 
 type PendingCommand =
   | { id: string; kind: "playback_source" | "play" | "pause" | "stop" }
@@ -75,13 +69,6 @@ function buildEventsUrl(sessionToken: string) {
   const url = new URL(`${baseUrl}/receiver/events`);
   url.searchParams.set("sessionToken", sessionToken);
   return url.toString();
-}
-
-function detectFormFactorHint() {
-  if (typeof window === "undefined") {
-    return "large-screen";
-  }
-  return window.innerWidth >= 960 ? "large-screen" : "desktop";
 }
 
 function formatPairingCode(code: string) {
@@ -142,12 +129,23 @@ function describeVideoError(video: HTMLVideoElement | null) {
 export function ReceiverPage() {
   const initial = useMemo(loadPersistedState, []);
   const castReceiver = useMemo(isGoogleCastReceiver, []);
-  const [session, setSession] = useState<ReceiverSession | null>(null);
-  const [pairingCode, setPairingCode] = useState<string | null>(null);
+  const persistReceiverCredential = useCallback(
+    (receiverCredential: string) => {
+      persistState({
+        deviceKey: initial.deviceKey,
+        receiverCredential,
+      });
+    },
+    [initial.deviceKey],
+  );
   const [source, setSource] = useState<PlaybackSource | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [castFrameworkError, setCastFrameworkError] = useState<string | null>(
+    null,
+  );
   const [buffering, setBuffering] = useState(false);
   const [playbackError, setPlaybackError] = useState<string | null>(null);
+  const [startingPlayback, setStartingPlayback] = useState(false);
+  const [preparingTranscode, setPreparingTranscode] = useState(false);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const displaySourceTitle = source
     ? formatEventChannelTitle(source.title)
@@ -163,6 +161,20 @@ export function ReceiverPage() {
   const pendingPlaybackSyncTimerRef = useRef<number | null>(null);
   const activeCastTranscodeRef = useRef(false);
   const castTranscodeRequestInFlightRef = useRef(false);
+  const preparingTranscodeRef = useRef(false);
+  const preparedTranscodeUrlRef = useRef<string | null>(null);
+  const {
+    completePairing,
+    error: receiverSessionError,
+    pairingCode,
+    session,
+  } = useReceiverSession({
+    castReceiver,
+    deviceKey: initial.deviceKey,
+    initialReceiverCredential: initial.receiverCredential,
+    persistReceiverCredential,
+  });
+  const error = castFrameworkError ?? receiverSessionError;
 
   const updateSourceState = (nextSource: PlaybackSource | null) => {
     sourceRef.current = nextSource;
@@ -179,12 +191,34 @@ export function ReceiverPage() {
     setPlaybackError(nextPlaybackError);
   };
 
+  const beginTranscodePreparation = () => {
+    preparingTranscodeRef.current = true;
+    preparedTranscodeUrlRef.current = null;
+    setPreparingTranscode(true);
+  };
+
+  const finishTranscodePreparation = () => {
+    preparingTranscodeRef.current = false;
+    preparedTranscodeUrlRef.current = null;
+    setPreparingTranscode(false);
+  };
+
+  const finishTranscodePreparationWhenReady = () => {
+    if (
+      preparingTranscodeRef.current &&
+      preparedTranscodeUrlRef.current === sourceRef.current?.url
+    ) {
+      finishTranscodePreparation();
+    }
+  };
+
   const failReceiverPlayback = (message: string) => {
     const currentSource = sourceRef.current;
     const pending = pendingCommandRef.current;
 
     updateBufferingState(false);
     updatePlaybackErrorState(message);
+    setStartingPlayback(false);
     pendingCommandRef.current = null;
 
     if (!session?.sessionToken) {
@@ -222,8 +256,9 @@ export function ReceiverPage() {
     if (canRetryWithTranscoding && !castTranscodeRequestInFlightRef.current) {
       castTranscodeRequestInFlightRef.current = true;
       const originalSourceUrl = currentSource.url;
-      updateBufferingState(false);
-      updatePlaybackErrorState(PREPARING_CAST_TRANSCODE_MESSAGE);
+      beginTranscodePreparation();
+      updateBufferingState(true);
+      updatePlaybackErrorState(null);
       try {
         const transcodedSource = await startReceiverCastTranscode(
           session.sessionToken,
@@ -234,7 +269,7 @@ export function ReceiverPage() {
           return;
         }
         activeCastTranscodeRef.current = true;
-        updatePlaybackErrorState(null);
+        preparedTranscodeUrlRef.current = transcodedSource.url;
         updateBufferingState(true);
         updateSourceState(transcodedSource);
         return;
@@ -243,6 +278,7 @@ export function ReceiverPage() {
           transcodeError instanceof Error
             ? transcodeError.message
             : "The server could not prepare a compatible stream.";
+        finishTranscodePreparation();
         failReceiverPlayback(message);
         return;
       } finally {
@@ -250,6 +286,7 @@ export function ReceiverPage() {
       }
     }
 
+    finishTranscodePreparation();
     failReceiverPlayback(describeReceiverFailure(failure));
   };
 
@@ -260,7 +297,7 @@ export function ReceiverPage() {
     let active = true;
     void initializeGoogleCastReceiver().then((started) => {
       if (active && !started) {
-        setError(
+        setCastFrameworkError(
           "Could not start the Google Cast receiver. Reload this screen or cast again.",
         );
       }
@@ -269,45 +306,6 @@ export function ReceiverPage() {
       active = false;
     };
   }, [castReceiver]);
-
-  useEffect(() => {
-    let active = true;
-
-    async function bootstrap() {
-      try {
-        const nextSession = await createReceiverSession({
-          deviceKey: initial.deviceKey,
-          name: castReceiver ? "Google Cast receiver" : "Browser receiver",
-          platform: castReceiver ? "google-cast" : "web",
-          formFactorHint: castReceiver ? "tv" : detectFormFactorHint(),
-          appKind: castReceiver ? "receiver-google-cast" : "receiver-web",
-          publicOrigin:
-            typeof window === "undefined" ? null : window.location.origin,
-          receiverCredential: initial.receiverCredential,
-        });
-        if (!active) {
-          return;
-        }
-        setSession(nextSession);
-        setPairingCode(nextSession.pairingCode);
-        if (nextSession.receiverCredential) {
-          persistState({
-            deviceKey: initial.deviceKey,
-            receiverCredential: nextSession.receiverCredential,
-          });
-        }
-      } catch (nextError) {
-        if (active) {
-          setError(nextError instanceof Error ? nextError.message : "Receiver startup failed.");
-        }
-      }
-    }
-
-    void bootstrap();
-    return () => {
-      active = false;
-    };
-  }, [castReceiver, initial.deviceKey, initial.receiverCredential]);
 
   useEffect(() => {
     sourceRef.current = source;
@@ -332,17 +330,6 @@ export function ReceiverPage() {
       return;
     }
 
-    const heartbeat = () => void heartbeatReceiver(session.sessionToken).catch(() => undefined);
-    heartbeat();
-    const timer = window.setInterval(heartbeat, RECEIVER_HEARTBEAT_MS);
-    return () => window.clearInterval(timer);
-  }, [session?.sessionToken]);
-
-  useEffect(() => {
-    if (!session?.sessionToken) {
-      return;
-    }
-
     const events = new EventSource(buildEventsUrl(session.sessionToken), { withCredentials: true });
     events.addEventListener("open", () => {
       if (castReceiver) {
@@ -359,11 +346,13 @@ export function ReceiverPage() {
       if (!payload.source) {
         return;
       }
+      finishTranscodePreparation();
       if (activeCastTranscodeRef.current) {
         activeCastTranscodeRef.current = false;
         void stopReceiverCastTranscode(session.sessionToken).catch(() => undefined);
       }
       if (payload.source.kind === "unsupported") {
+        setStartingPlayback(false);
         updatePlaybackErrorState(
           payload.source.unsupportedReason ??
             "This stream is not supported on the receiver.",
@@ -381,6 +370,7 @@ export function ReceiverPage() {
       }
       updatePlaybackErrorState(null);
       updateBufferingState(true);
+      setStartingPlayback(true);
       pendingCommandRef.current = {
         id: payload.command.id,
         kind: "playback_source",
@@ -425,6 +415,8 @@ export function ReceiverPage() {
       }).catch(() => undefined);
       if (commandType === "stop") {
         video?.pause();
+        finishTranscodePreparation();
+        setStartingPlayback(false);
         updatePlaybackErrorState(null);
         updateSourceState(null);
         updateBufferingState(false);
@@ -445,13 +437,7 @@ export function ReceiverPage() {
     });
     events.addEventListener("pairing_complete", (event) => {
       const payload = JSON.parse((event as MessageEvent<string>).data) as RemoteDeviceEventPayload;
-      if (payload.receiverCredential) {
-        persistState({
-          deviceKey: initial.deviceKey,
-          receiverCredential: payload.receiverCredential,
-        });
-      }
-      setPairingCode(null);
+      completePairing(payload.receiverCredential);
       if (castReceiver) {
         publishGoogleCastReceiverStatus({
           type: "receiver_status",
@@ -466,7 +452,7 @@ export function ReceiverPage() {
     };
   }, [
     castReceiver,
-    initial.deviceKey,
+    completePairing,
     pairingCode,
     session?.device.id,
     session?.sessionToken,
@@ -652,6 +638,8 @@ export function ReceiverPage() {
       maybeCompletePendingCommand();
     };
     const handlePlaying = () => {
+      finishTranscodePreparationWhenReady();
+      setStartingPlayback(false);
       updateBufferingState(false);
       updatePlaybackErrorState(null);
       syncPlaybackState({ immediate: true });
@@ -686,7 +674,16 @@ export function ReceiverPage() {
       maybeCompletePendingCommand();
     };
     const handleError = () => {
+      if (
+        castTranscodeRequestInFlightRef.current ||
+        preparingTranscodeRef.current
+      ) {
+        updateBufferingState(true);
+        syncPlaybackState({ immediate: true, force: true });
+        return;
+      }
       const nextError = describeVideoError(video);
+      setStartingPlayback(false);
       updateBufferingState(false);
       updatePlaybackErrorState(nextError);
       syncPlaybackState({ immediate: true, force: true });
@@ -722,120 +719,114 @@ export function ReceiverPage() {
 
   if (pairingCode) {
     return (
-      <div className="euripus-receiver min-h-screen bg-background text-foreground">
-        <div className="euripus-receiver__backdrop absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(168,85,247,0.22),transparent_34%),radial-gradient(circle_at_80%_20%,rgba(192,132,252,0.16),transparent_28%),linear-gradient(180deg,rgba(10,10,15,0.96),rgba(5,5,10,1))]" />
-        <main className="euripus-receiver__center relative grid min-h-screen place-items-center px-6 py-10">
-          <section className="euripus-receiver__panel flex w-full max-w-[52rem] flex-col items-center gap-8 text-center">
-            <div className="flex flex-col items-center gap-3">
-              <p className="euripus-receiver__eyebrow text-sm font-medium uppercase tracking-[0.2em] text-white/80">
-                Euripus Receiver
-              </p>
-              <div className="flex flex-col items-center gap-2">
-                <h1 className="euripus-receiver__title text-4xl font-semibold tracking-tight text-balance text-white">
-                  {castReceiver ? "Connecting to Euripus" : "Pair this screen"}
-                </h1>
-                <p className="euripus-receiver__copy max-w-2xl text-lg text-white/72 text-balance">
-                  {castReceiver
-                    ? "This Cast device will be registered automatically."
-                    : "Open Euripus on your phone, enter the code below, and choose whether to remember this screen."}
-                </p>
-              </div>
-            </div>
+      <ReceiverStatusScreen
+        description={
+          castReceiver
+            ? undefined
+            : "Open Euripus on your phone, enter the code below, and choose whether to remember this screen."
+        }
+        notice={error}
+        role="status"
+        title={castReceiver ? "Connecting to Euripus" : "Pair this screen"}
+      >
+        {castReceiver ? (
+          <ReceiverSpinner />
+        ) : (
+          <div className="euripus-receiver__code-frame">
+            <span className="euripus-receiver__code">
+              {formatPairingCode(pairingCode)}
+            </span>
+          </div>
+        )}
+      </ReceiverStatusScreen>
+    );
+  }
 
-            {castReceiver ? (
-              <div className="euripus-receiver__spinner size-12 animate-spin rounded-full border-4 border-white/20 border-t-primary" />
-            ) : (
-              <div className="euripus-receiver__code-frame inline-flex max-w-full items-center justify-center overflow-hidden rounded-lg border border-white/10 bg-white/[0.04] px-10 py-7 shadow-[0_0_0_1px_rgba(255,255,255,0.02),0_24px_80px_rgba(76,29,149,0.18)] backdrop-blur-sm">
-                <span className="euripus-receiver__code block whitespace-nowrap text-center text-7xl font-semibold text-white sm:text-8xl">
-                  {formatPairingCode(pairingCode)}
-                </span>
-              </div>
-            )}
+  if (error) {
+    return (
+      <ReceiverStatusScreen
+        description={error}
+        role="alert"
+        title="Receiver unavailable"
+        tone="error"
+      >
+        <div className="euripus-receiver__icon">
+          <Tv aria-hidden="true" />
+        </div>
+      </ReceiverStatusScreen>
+    );
+  }
 
-            {error ? <p className="text-sm text-destructive">{error}</p> : null}
-          </section>
-        </main>
-      </div>
+  if (!session) {
+    return (
+      <ReceiverStatusScreen
+        role="status"
+        title="Starting receiver"
+      >
+        <ReceiverSpinner />
+      </ReceiverStatusScreen>
     );
   }
 
   if (!source) {
     return (
-      <div className="euripus-receiver min-h-screen bg-background text-foreground">
-        <div className="euripus-receiver__backdrop absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(168,85,247,0.18),transparent_34%),radial-gradient(circle_at_80%_20%,rgba(192,132,252,0.12),transparent_28%),linear-gradient(180deg,rgba(10,10,15,0.96),rgba(5,5,10,1))]" />
-        <main className="euripus-receiver__center relative grid min-h-screen place-items-center px-6 py-10">
-          <Empty className="euripus-receiver__empty border-0">
-            <EmptyHeader>
-              <EmptyMedia variant="icon" className="euripus-receiver__icon border border-white/10 bg-white/[0.04] text-primary shadow-[0_18px_60px_rgba(76,29,149,0.22)]">
-                <Tv aria-hidden="true" />
-              </EmptyMedia>
-              <EmptyTitle className="euripus-receiver__title text-white">Nothing is playing</EmptyTitle>
-            </EmptyHeader>
-          </Empty>
-        </main>
-      </div>
+      <ReceiverStatusScreen title="Nothing is playing">
+        <div className="euripus-receiver__icon">
+          <Tv aria-hidden="true" />
+        </div>
+      </ReceiverStatusScreen>
     );
   }
 
-  if (playbackError === PREPARING_CAST_TRANSCODE_MESSAGE) {
+  if (source.kind === "unsupported" || playbackError) {
     return (
-      <div className="euripus-receiver min-h-screen bg-background text-foreground">
-        <div className="euripus-receiver__backdrop absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(168,85,247,0.22),transparent_34%),radial-gradient(circle_at_80%_20%,rgba(192,132,252,0.16),transparent_28%),linear-gradient(180deg,rgba(10,10,15,0.96),rgba(5,5,10,1))]" />
-        <main className="euripus-receiver__center relative grid min-h-screen place-items-center px-6 py-10">
-          <section
-            aria-live="polite"
-            className="euripus-receiver__panel flex w-full max-w-[52rem] flex-col items-center gap-8 text-center"
-            role="status"
-          >
-            <div className="flex flex-col items-center gap-3">
-              <p className="euripus-receiver__eyebrow text-sm font-medium uppercase tracking-[0.2em] text-white/80">
-                Euripus Receiver
-              </p>
-              <div className="flex flex-col items-center gap-2">
-                <h1 className="euripus-receiver__title text-4xl font-semibold tracking-tight text-balance text-white">
-                  Preparing a compatible stream
-                </h1>
-                <p className="euripus-receiver__copy max-w-2xl text-lg text-white/72 text-balance">
-                  This stream needs a quick conversion before it can play on
-                  this Cast device.
-                </p>
-              </div>
-            </div>
-
-            <div
-              aria-hidden="true"
-              className="euripus-receiver__spinner size-12 animate-spin rounded-full border-4 border-white/20 border-t-primary"
-            />
-          </section>
-        </main>
-      </div>
+      <ReceiverStatusScreen
+        description={
+          playbackError ??
+          source.unsupportedReason ??
+          "This stream is not supported on the receiver."
+        }
+        role="alert"
+        title="Playback unavailable"
+        tone="error"
+      >
+        <div className="euripus-receiver__icon">
+          <Tv aria-hidden="true" />
+        </div>
+      </ReceiverStatusScreen>
     );
   }
 
   return (
-    <div className="euripus-receiver euripus-receiver--playback min-h-screen bg-black text-white">
-      <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(168,85,247,0.14),transparent_30%),linear-gradient(180deg,rgba(10,10,15,0.24),rgba(10,10,15,0.4))]" />
-      {source.kind === "unsupported" || playbackError ? (
-        <main className="relative grid min-h-screen place-items-center px-6 py-10">
-          <div className="max-w-2xl rounded-lg border border-amber-400/30 bg-amber-400/10 p-6 text-amber-100">
-            {playbackError ??
-              source.unsupportedReason ??
-              "This stream is not supported on the receiver."}
-          </div>
-        </main>
-      ) : (
-        <div className="euripus-plyr-shell euripus-plyr-shell--receiver relative h-screen w-screen">
-          <PlyrSurface
-            ariaLabel={`Playing ${displaySourceTitle}`}
-            className="contents"
-            onPlaybackFailure={handleReceiverPlaybackFailure}
-            source={source}
-            uiMode="receiver"
-            videoClassName="euripus-plyr-media relative h-screen w-screen bg-black object-contain"
-            videoRef={videoRef}
-          />
-        </div>
-      )}
+    <div className="euripus-receiver euripus-receiver--playback">
+      <div className="euripus-plyr-shell euripus-plyr-shell--receiver">
+        <PlyrSurface
+          ariaLabel={`Playing ${displaySourceTitle}`}
+          className="euripus-receiver__player"
+          onPlaybackFailure={handleReceiverPlaybackFailure}
+          source={source}
+          uiMode="receiver"
+          videoClassName="euripus-plyr-media"
+          videoRef={videoRef}
+        />
+      </div>
+      {preparingTranscode ? (
+        <ReceiverStatusScreen
+          overlay
+          role="status"
+          title="Preparing a compatible stream"
+        >
+          <ReceiverSpinner />
+        </ReceiverStatusScreen>
+      ) : startingPlayback ? (
+        <ReceiverStatusScreen
+          overlay
+          role="status"
+          title="Loading stream"
+        >
+          <ReceiverSpinner />
+        </ReceiverStatusScreen>
+      ) : null}
     </div>
   );
 }

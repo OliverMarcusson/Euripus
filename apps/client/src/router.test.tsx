@@ -23,7 +23,7 @@ describe("router session redirects", () => {
   it("waits for hydration on the index route", () => {
     render(<IndexRedirect />);
 
-    expect(screen.getByText("Loading session...")).toBeInTheDocument();
+    expect(screen.getByText("Loading Euripus")).toBeInTheDocument();
   });
 
   it("sends hydrated guests to auth from the index route", () => {

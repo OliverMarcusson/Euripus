@@ -11,10 +11,43 @@ import { SearchPage } from "@/features/search/search-page";
 import { SportsPage } from "@/features/sports/sports-page";
 import { SettingsPage } from "@/features/auth/settings-page";
 import { ReceiverPage } from "@/features/receiver/receiver-page";
+import {
+  ReceiverSpinner,
+  ReceiverStatusScreen,
+} from "@/features/receiver/receiver-status-screen";
 import { useAuthStore } from "@/store/auth-store";
 
 export function SessionBootstrapFallback() {
-  return <div className="grid min-h-screen place-items-center">Loading session...</div>;
+  return (
+    <ReceiverStatusScreen
+      role="status"
+      title="Loading Euripus"
+    >
+      <ReceiverSpinner />
+    </ReceiverStatusScreen>
+  );
+}
+
+function RouteErrorPage({ message }: { message: string }) {
+  return (
+    <ReceiverStatusScreen
+      description={message}
+      eyebrow="Euripus"
+      role="alert"
+      title="Something went wrong"
+      tone="error"
+    />
+  );
+}
+
+function RouteNotFoundPage() {
+  return (
+    <ReceiverStatusScreen
+      eyebrow="Euripus"
+      title="Page not found"
+      tone="error"
+    />
+  );
 }
 
 export function RequireAuth({ children }: { children: ReactNode }) {
@@ -60,6 +93,8 @@ export function IndexRedirect() {
 
 const rootRoute = createRootRoute({
   component: Outlet,
+  errorComponent: ({ error }) => <RouteErrorPage message={error.message} />,
+  notFoundComponent: RouteNotFoundPage,
 });
 
 const authenticatedRoute = createRoute({
