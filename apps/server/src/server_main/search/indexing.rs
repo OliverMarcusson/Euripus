@@ -1,6 +1,8 @@
 use super::rules;
 use super::*;
 
+const SEARCH_INDEX_BATCH_SIZE: usize = 1000;
+
 #[derive(Debug, FromRow)]
 struct ChannelSearchBuildRow {
     id: Uuid,
@@ -65,10 +67,14 @@ async fn load_channel_search_build_rows(
     .map_err(Into::into)
 }
 
-async fn load_program_search_build_rows(
-    pool: &PgPool,
+async fn load_program_search_build_rows<'e, E>(
+    executor: E,
     user_id: Uuid,
-) -> Result<Vec<ProgramSearchBuildRow>> {
+    after_id: Option<Uuid>,
+) -> Result<Vec<ProgramSearchBuildRow>>
+where
+    E: sqlx::Executor<'e, Database = Postgres>,
+{
     sqlx::query_as::<_, ProgramSearchBuildRow>(
         r#"
         SELECT
@@ -87,10 +93,15 @@ async fn load_program_search_build_rows(
         LEFT JOIN channels c ON c.id = p.channel_id
         LEFT JOIN channel_categories cc ON cc.id = c.category_id
         WHERE p.user_id = $1
+          AND ($2::uuid IS NULL OR p.id > $2)
+        ORDER BY p.id
+        LIMIT $3
         "#,
     )
     .bind(user_id)
-    .fetch_all(pool)
+    .bind(after_id)
+    .bind(SEARCH_INDEX_BATCH_SIZE as i64)
+    .fetch_all(executor)
     .await
     .map_err(Into::into)
 }
@@ -190,38 +201,48 @@ pub(in crate::server_main) async fn refresh_search_metadata(
 
     apply_channel_search_metadata_updates(pool, &channel_updates).await?;
 
-    let program_rows = load_program_search_build_rows(pool, user_id).await?;
-    let mut program_updates = Vec::with_capacity(program_rows.len());
-    for row in &program_rows {
-        let metadata = row
-            .channel_id
-            .and_then(|channel_id| channel_metadata.get(&channel_id).cloned())
-            .unwrap_or_else(|| {
-                rules::evaluate_patterns(
-                    &compiled_rules,
-                    rules::AdminSearchEvaluationInput {
-                        channel_name: row.channel_name.as_deref(),
-                        category_name: row.category_name.as_deref(),
-                        program_title: Some(&row.title),
-                    },
-                )
-            });
+    let mut program_rows = 0usize;
+    let mut after_program_id = None;
+    loop {
+        let batch = load_program_search_build_rows(pool, user_id, after_program_id).await?;
+        let Some(last_row) = batch.last() else {
+            break;
+        };
+        after_program_id = Some(last_row.id);
+        program_rows += batch.len();
 
-        program_updates.push((
-            row.id,
-            metadata.country_code,
-            metadata.provider_name,
-            metadata.is_ppv,
-            metadata.is_vip,
-        ));
+        let mut program_updates = Vec::with_capacity(batch.len());
+        for row in &batch {
+            let metadata = row
+                .channel_id
+                .and_then(|channel_id| channel_metadata.get(&channel_id).cloned())
+                .unwrap_or_else(|| {
+                    rules::evaluate_patterns(
+                        &compiled_rules,
+                        rules::AdminSearchEvaluationInput {
+                            channel_name: row.channel_name.as_deref(),
+                            category_name: row.category_name.as_deref(),
+                            program_title: Some(&row.title),
+                        },
+                    )
+                });
+
+            program_updates.push((
+                row.id,
+                metadata.country_code,
+                metadata.provider_name,
+                metadata.is_ppv,
+                metadata.is_vip,
+            ));
+        }
+
+        apply_program_search_metadata_updates(pool, &program_updates).await?;
     }
-
-    apply_program_search_metadata_updates(pool, &program_updates).await?;
 
     info!(
         user_id = %user_id,
         channel_rows = channel_rows.len(),
-        program_rows = program_rows.len(),
+        program_rows,
         elapsed_ms = started_at.elapsed().as_millis() as u64,
         "refreshed PostgreSQL search metadata"
     );
@@ -242,21 +263,6 @@ pub(in crate::server_main) async fn rebuild_postgres_search_documents(
         .filter(|row| visible_channel_ids.contains(&row.id))
         .map(build_channel_search_document_row)
         .collect::<Vec<_>>();
-    let program_rows = load_program_search_build_rows(pool, user_id).await?;
-    let program_documents = program_rows
-        .iter()
-        .filter(|row| {
-            row.channel_id
-                .map(|channel_id| visible_channel_ids.contains(&channel_id))
-                .unwrap_or(true)
-        })
-        .map(build_program_search_document_row)
-        .collect::<Vec<_>>();
-
-    let mut document_rows = Vec::with_capacity(channel_documents.len() + program_documents.len());
-    document_rows.extend(channel_documents.iter().cloned());
-    document_rows.extend(program_documents.iter().cloned());
-
     let mut transaction = pool.begin().await?;
     sqlx::query(
         r#"
@@ -268,13 +274,41 @@ pub(in crate::server_main) async fn rebuild_postgres_search_documents(
     .bind(user_id)
     .execute(&mut *transaction)
     .await?;
-    insert_search_documents(&mut transaction, user_id, &document_rows).await?;
+    insert_search_documents(&mut transaction, user_id, &channel_documents).await?;
+
+    let mut program_documents = 0usize;
+    let mut after_program_id = None;
+    loop {
+        let batch = load_program_search_build_rows(
+            &mut *transaction,
+            user_id,
+            after_program_id,
+        )
+        .await?;
+        let Some(last_row) = batch.last() else {
+            break;
+        };
+        after_program_id = Some(last_row.id);
+
+        let documents = batch
+            .iter()
+            .filter(|row| {
+                row.channel_id
+                    .map(|channel_id| visible_channel_ids.contains(&channel_id))
+                    .unwrap_or(true)
+            })
+            .map(build_program_search_document_row)
+            .collect::<Vec<_>>();
+        program_documents += documents.len();
+        insert_search_documents(&mut transaction, user_id, &documents).await?;
+    }
+
     transaction.commit().await?;
 
     info!(
         user_id = %user_id,
         channel_documents = channel_documents.len(),
-        program_documents = program_documents.len(),
+        program_documents,
         elapsed_ms = started_at.elapsed().as_millis() as u64,
         "rebuilt PostgreSQL fallback search documents"
     );
@@ -297,7 +331,7 @@ async fn apply_channel_search_metadata_updates(
         return Ok(());
     }
 
-    for chunk in updates.chunks(1000) {
+    for chunk in updates.chunks(SEARCH_INDEX_BATCH_SIZE) {
         let mut query = QueryBuilder::<Postgres>::new(
             "UPDATE channels AS c SET \
              search_country_code = v.search_country_code, \
@@ -332,7 +366,7 @@ async fn apply_program_search_metadata_updates(
         return Ok(());
     }
 
-    for chunk in updates.chunks(1000) {
+    for chunk in updates.chunks(SEARCH_INDEX_BATCH_SIZE) {
         let mut query = QueryBuilder::<Postgres>::new(
             "UPDATE programs AS p SET \
              search_country_code = v.search_country_code, \
@@ -368,7 +402,7 @@ async fn insert_search_documents(
         return Ok(());
     }
 
-    for chunk in rows.chunks(1000) {
+    for chunk in rows.chunks(SEARCH_INDEX_BATCH_SIZE) {
         let mut query = QueryBuilder::<Postgres>::new(
             "INSERT INTO search_documents \
              (user_id, entity_type, entity_id, title, subtitle, search_text, starts_at, ends_at) ",

@@ -391,11 +391,32 @@ async fn create_receiver_session(
                               WHEN receiver_devices.owner_user_id IS NULL THEN EXCLUDED.device_name
                               ELSE receiver_devices.device_name
                           END,
+                          owner_user_id = CASE
+                              WHEN receiver_devices.revoked_at IS NOT NULL THEN NULL
+                              ELSE receiver_devices.owner_user_id
+                          END,
+                          remembered = CASE
+                              WHEN receiver_devices.revoked_at IS NOT NULL THEN FALSE
+                              ELSE receiver_devices.remembered
+                          END,
+                          receiver_credential_hash = CASE
+                              WHEN receiver_devices.revoked_at IS NOT NULL THEN NULL
+                              ELSE receiver_devices.receiver_credential_hash
+                          END,
+                          paired_at = CASE
+                              WHEN receiver_devices.revoked_at IS NOT NULL THEN NULL
+                              ELSE receiver_devices.paired_at
+                          END,
                           platform = EXCLUDED.platform,
                           form_factor_hint = EXCLUDED.form_factor_hint,
                           app_kind = EXCLUDED.app_kind,
                           last_public_origin = EXCLUDED.last_public_origin,
                           last_seen_at = NOW(),
+                          -- A receiver keeps its device key in local storage after
+                          -- it is unpaired. Let that physical device return as a
+                          -- fresh anonymous receiver instead of issuing a session
+                          -- whose first authenticated request will be rejected.
+                          revoked_at = NULL,
                           updated_at = NOW()
             RETURNING id, owner_user_id, device_name, platform, form_factor_hint, app_kind,
                    remembered, last_seen_at,
