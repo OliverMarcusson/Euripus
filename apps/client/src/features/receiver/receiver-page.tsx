@@ -35,6 +35,7 @@ const RECEIVER_STORAGE_KEY = "euripus-receiver-device";
 const RECEIVER_HEARTBEAT_MS = 15_000;
 const RECEIVER_PLAYBACK_SYNC_INTERVAL_MS = 3_000;
 const SEEK_COMPLETION_TOLERANCE_SECONDS = 1.5;
+const PREPARING_CAST_TRANSCODE_MESSAGE = "Preparing a compatible stream...";
 
 type PendingCommand =
   | { id: string; kind: "playback_source" | "play" | "pause" | "stop" }
@@ -222,7 +223,7 @@ export function ReceiverPage() {
       castTranscodeRequestInFlightRef.current = true;
       const originalSourceUrl = currentSource.url;
       updateBufferingState(false);
-      updatePlaybackErrorState("Preparing a compatible stream...");
+      updatePlaybackErrorState(PREPARING_CAST_TRANSCODE_MESSAGE);
       try {
         const transcodedSource = await startReceiverCastTranscode(
           session.sessionToken,
@@ -771,6 +772,41 @@ export function ReceiverPage() {
               <EmptyTitle className="euripus-receiver__title text-white">Nothing is playing</EmptyTitle>
             </EmptyHeader>
           </Empty>
+        </main>
+      </div>
+    );
+  }
+
+  if (playbackError === PREPARING_CAST_TRANSCODE_MESSAGE) {
+    return (
+      <div className="euripus-receiver min-h-screen bg-background text-foreground">
+        <div className="euripus-receiver__backdrop absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(168,85,247,0.22),transparent_34%),radial-gradient(circle_at_80%_20%,rgba(192,132,252,0.16),transparent_28%),linear-gradient(180deg,rgba(10,10,15,0.96),rgba(5,5,10,1))]" />
+        <main className="euripus-receiver__center relative grid min-h-screen place-items-center px-6 py-10">
+          <section
+            aria-live="polite"
+            className="euripus-receiver__panel flex w-full max-w-[52rem] flex-col items-center gap-8 text-center"
+            role="status"
+          >
+            <div className="flex flex-col items-center gap-3">
+              <p className="euripus-receiver__eyebrow text-sm font-medium uppercase tracking-[0.2em] text-white/80">
+                Euripus Receiver
+              </p>
+              <div className="flex flex-col items-center gap-2">
+                <h1 className="euripus-receiver__title text-4xl font-semibold tracking-tight text-balance text-white">
+                  Preparing a compatible stream
+                </h1>
+                <p className="euripus-receiver__copy max-w-2xl text-lg text-white/72 text-balance">
+                  This stream needs a quick conversion before it can play on
+                  this Cast device.
+                </p>
+              </div>
+            </div>
+
+            <div
+              aria-hidden="true"
+              className="euripus-receiver__spinner size-12 animate-spin rounded-full border-4 border-white/20 border-t-primary"
+            />
+          </section>
         </main>
       </div>
     );
