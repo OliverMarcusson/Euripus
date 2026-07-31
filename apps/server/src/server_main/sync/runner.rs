@@ -568,14 +568,5 @@ async fn refresh_search_documents(state: &AppState, user_id: Uuid, job_id: Uuid)
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn channel_sync_jobs_refresh_channels_without_epg() {
-        assert!(should_refresh_channels("channels", 5));
-        assert!(!should_sync_epg("channels"));
-        assert!(should_refresh_channels("epg", 0));
-        assert!(should_sync_epg("epg"));
-    }
-}
+#[path = "runner_tests.rs"]
+mod tests;
