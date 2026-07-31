@@ -99,6 +99,26 @@ function normalizePlaybackSyncState(
   };
 }
 
+export function describeReceiverFailure(failure: PlaybackFailure) {
+  if (failure.kind === "provider-unavailable") {
+    return failure.message;
+  }
+
+  switch (failure.reason) {
+    case "codec":
+      return "This stream's video format is not supported by this Cast device.";
+    case "network":
+      return "The receiver lost connection to this stream.";
+    case "hls":
+      return "This stream could not be played on the receiver.";
+    case "stall":
+    case "unexpected-end":
+      return "This stream stopped unexpectedly.";
+    default:
+      return "Playback failed on the receiver.";
+  }
+}
+
 function describeVideoError(video: HTMLVideoElement | null) {
   const mediaError = video?.error;
   if (!mediaError) {
@@ -194,8 +214,7 @@ export function ReceiverPage() {
       castReceiver &&
       failure.kind === "recoverable" &&
       failure.reason === "codec" &&
-      currentSource?.kind === "hls" &&
-      currentSource.live &&
+      (currentSource?.kind === "hls" || currentSource?.kind === "progressive") &&
       !currentSource.url.includes("/api/transcode/") &&
       !!session?.sessionToken;
 
@@ -203,7 +222,7 @@ export function ReceiverPage() {
       castTranscodeRequestInFlightRef.current = true;
       const originalSourceUrl = currentSource.url;
       updateBufferingState(false);
-      updatePlaybackErrorState("Preparing a compatible live stream...");
+      updatePlaybackErrorState("Preparing a compatible stream...");
       try {
         const transcodedSource = await startReceiverCastTranscode(
           session.sessionToken,
@@ -222,7 +241,7 @@ export function ReceiverPage() {
         const message =
           transcodeError instanceof Error
             ? transcodeError.message
-            : "The server could not prepare a compatible live stream.";
+            : "The server could not prepare a compatible stream.";
         failReceiverPlayback(message);
         return;
       } finally {
@@ -230,19 +249,25 @@ export function ReceiverPage() {
       }
     }
 
-    failReceiverPlayback(
-      failure.kind === "provider-unavailable"
-        ? failure.message
-        : failure.kind === "recoverable" &&
-            (failure.reason === "codec" || failure.reason === "hls")
-          ? "This stream's video format is not supported by this Cast device."
-          : "Playback failed on the receiver.",
-    );
+    failReceiverPlayback(describeReceiverFailure(failure));
   };
 
   useEffect(() => {
-    void initializeGoogleCastReceiver();
-  }, []);
+    if (!castReceiver) {
+      return;
+    }
+    let active = true;
+    void initializeGoogleCastReceiver().then((started) => {
+      if (active && !started) {
+        setError(
+          "Could not start the Google Cast receiver. Reload this screen or cast again.",
+        );
+      }
+    });
+    return () => {
+      active = false;
+    };
+  }, [castReceiver]);
 
   useEffect(() => {
     let active = true;
@@ -368,6 +393,16 @@ export function ReceiverPage() {
       const payload = JSON.parse((event as MessageEvent<string>).data) as RemoteDeviceEventPayload;
       const video = videoRef.current;
       const commandType = payload.command.commandType;
+      // A transcode is served as a rolling window with no seekable range
+      // behind it, so accepting a seek would strand playback.
+      if (commandType === "seek" && activeCastTranscodeRef.current) {
+        void acknowledgeReceiverCommand(session.sessionToken, payload.command.id, {
+          status: "failed",
+          errorMessage:
+            "Seeking is not available while this stream is being converted.",
+        }).catch(() => undefined);
+        return;
+      }
       pendingCommandRef.current =
         commandType === "seek"
           ? {

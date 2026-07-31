@@ -48,8 +48,26 @@ The App ID is public sender configuration, not a secret.
 4. Euripus automatically registers, remembers, and selects the Cast receiver. The TV briefly displays a connecting screen; no pairing code is shown.
 5. Content selection and play, pause, seek, and stop then use the normal Euripus receiver controls.
 
+## Receiver startup
+
+A Cast sender keeps its launch request pending until the receiver calls
+`CastReceiverContext.start()`. The Euripus client bundle is too large to boot
+within that window on Chromecast hardware, so `apps/client/public/cast-receiver-bootstrap.js`
+starts the framework from `index.html`, before the bundle loads. It self-guards
+to Cast devices, so it is inert in normal browsers.
+
+The bootstrap owns the Cast custom-message channel. Because custom messages are
+not buffered, the receiver repeats its status every two seconds until a sender
+acknowledges it, and answers `request_receiver_status` from senders that
+attached late or rejoined a running session after a reload. Keep the namespace
+in that file in sync with `EURIPUS_CAST_NAMESPACE`; a test asserts they match.
+
 ## Troubleshooting
 
+- A receiver stuck on the connecting spinner with no pairing code usually means
+  `createReceiverSession` failed; check the browser-facing API from the Cast
+  device's network. If the framework itself failed to start, the receiver now
+  shows an explicit error instead of spinning forever.
 - `APP_NOT_INSTALLED` usually means App ID `EEC1D3B6` is not available to the device, the unpublished app and test device belong to different developer accounts, or device registration has not propagated.
 - Register the canonical `tv.marcusson.dev` URL directly; do not register the redirecting `pb.marcusson.dev` URL.
 - The receiver URL must remain publicly reachable over HTTPS.

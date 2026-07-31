@@ -8,6 +8,7 @@ import { router } from "@/router";
 import { useBootstrapSession } from "@/hooks/use-bootstrap-session";
 import { useThemeSync } from "@/hooks/use-theme-sync";
 import { initializeGoogleCast } from "@/lib/google-cast";
+import { isGoogleCastReceiver } from "@/lib/google-cast-receiver";
 import { registerPwaServiceWorker } from "@/lib/pwa";
 import { QUERY_CACHE_GC_TIME_MS } from "@/lib/query-cache";
 import { useThemeStore } from "@/store/theme-store";
@@ -31,6 +32,11 @@ function Bootstrapper() {
   const resolvedTheme = useThemeStore((state) => state.resolvedTheme);
 
   useEffect(() => {
+    // A Cast device is only ever a receiver. Skip the PWA shell cache and the
+    // sender SDK so neither competes with receiver startup.
+    if (isGoogleCastReceiver()) {
+      return;
+    }
     registerPwaServiceWorker();
     void initializeGoogleCast();
   }, []);

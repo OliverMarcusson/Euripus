@@ -99,25 +99,24 @@ async fn start_cast_transcode(
     }
     let owner_user_id = device.owner_user_id.ok_or(AppError::Unauthorized)?;
 
-    if !payload.live {
-        return Err(AppError::BadRequest(
-            "Only live Cast streams can be transcoded.".to_string(),
-        ));
-    }
-
-    let source_url = Url::parse(&payload.source_url).map_err(|_| {
-        AppError::BadRequest("The live playback source URL is invalid.".to_string())
-    })?;
-    if source_url.path() != "/api/relay/hls" {
-        return Err(AppError::BadRequest(
-            "Only Euripus live HLS relay sources can be transcoded.".to_string(),
-        ));
-    }
+    let source_url = Url::parse(&payload.source_url)
+        .map_err(|_| AppError::BadRequest("The playback source URL is invalid.".to_string()))?;
+    // On-demand titles reach Cast as progressive `/api/relay/raw` sources;
+    // live channels arrive as `/api/relay/hls`.
+    let relay_kind = match source_url.path() {
+        "/api/relay/hls" => RelayAssetKind::Hls,
+        "/api/relay/raw" => RelayAssetKind::Raw,
+        _ => {
+            return Err(AppError::BadRequest(
+                "Only Euripus relay sources can be transcoded.".to_string(),
+            ));
+        }
+    };
     let relay_token = source_url
         .query_pairs()
         .find_map(|(name, value)| (name == "token").then(|| value.into_owned()))
         .ok_or_else(|| AppError::BadRequest("The relay token is missing.".to_string()))?;
-    let relay = validate_relay_token(&state, &relay_token, RelayAssetKind::Hls).await?;
+    let relay = validate_relay_token(&state, &relay_token, relay_kind).await?;
     if relay.user_id != owner_user_id {
         return Err(AppError::Forbidden(
             "The receiver does not own this playback source.".to_string(),
@@ -172,6 +171,7 @@ async fn start_cast_transcode(
         relay.upstream_url.as_str(),
         &playlist_path,
         &segment_pattern,
+        payload.live,
     );
     let mut child = match command.spawn() {
         Ok(child) => child,
@@ -303,11 +303,26 @@ async fn serve_cast_transcode_file(
         .map_err(|error| AppError::Internal(anyhow!(error)))
 }
 
+/// Presets and rate control are encoder-specific: NVENC rejects libx264's
+/// preset names and `-crf`, and libx264 rejects `-rc`/`-cq` outright. Bitrate
+/// caps, profile, and level are understood by both. Unknown encoders get only
+/// the portable flags rather than a guess that fails at spawn time.
+fn encoder_tuning_args(encoder: &str) -> &'static [&'static str] {
+    if encoder.contains("nvenc") {
+        &["-preset", "p4", "-tune", "ll", "-rc", "vbr", "-cq", "23"]
+    } else if encoder.starts_with("libx26") {
+        &["-preset", "veryfast", "-crf", "23"]
+    } else {
+        &[]
+    }
+}
+
 fn build_ffmpeg_command(
     encoder: &str,
     upstream_url: &str,
     playlist_path: &FilePath,
     segment_pattern: &FilePath,
+    live: bool,
 ) -> Command {
     let mut command = Command::new("ffmpeg");
     command
@@ -328,6 +343,12 @@ fn build_ffmpeg_command(
             "5",
             "-user_agent",
             "Euripus Cast Transcoder/1.0",
+        ])
+        // A live upstream paces itself. A file would be encoded as fast as the
+        // GPU allows and race past the segment window, so read it at 1x and let
+        // the player sit a buffer's length behind the encoder.
+        .args(if live { &[][..] } else { &["-re"][..] })
+        .args([
             "-i",
             upstream_url,
             "-map",
@@ -338,18 +359,13 @@ fn build_ffmpeg_command(
             "scale=w='min(1920,iw)':h='min(1080,ih)':force_original_aspect_ratio=decrease:force_divisible_by=2,fps=30,format=yuv420p",
             "-c:v",
             encoder,
-            "-preset",
-            "p4",
-            "-tune",
-            "ll",
+        ])
+        .args(encoder_tuning_args(encoder))
+        .args([
             "-profile:v",
             "high",
             "-level:v",
             "4.1",
-            "-rc",
-            "vbr",
-            "-cq",
-            "23",
             "-b:v",
             "6000k",
             "-maxrate",
@@ -370,12 +386,9 @@ fn build_ffmpeg_command(
             "48000",
             "-f",
             "hls",
-            "-hls_time",
-            "2",
-            "-hls_list_size",
-            "8",
-            "-hls_delete_threshold",
-            "4",
+        ])
+        .args(segment_window_args(live))
+        .args([
             "-hls_flags",
             "delete_segments+omit_endlist+independent_segments+temp_file",
             "-hls_segment_filename",
@@ -383,6 +396,18 @@ fn build_ffmpeg_command(
         .arg(segment_pattern)
         .arg(playlist_path);
     command
+}
+
+/// Both profiles roll segments off disk rather than retaining the whole
+/// stream. On-demand gets a much longer window so the player keeps a healthy
+/// buffer, at a cost of roughly 450 MB per stream; seeking outside the window
+/// is not supported.
+fn segment_window_args(live: bool) -> &'static [&'static str] {
+    if live {
+        &["-hls_time", "2", "-hls_list_size", "8", "-hls_delete_threshold", "4"]
+    } else {
+        &["-hls_time", "4", "-hls_list_size", "150", "-hls_delete_threshold", "10"]
+    }
 }
 
 fn transcoded_source_response(
@@ -394,6 +419,8 @@ fn transcoded_source_response(
         kind: "hls".to_string(),
         url,
         headers: HashMap::new(),
+        // Always a rolling-window playlist with no end list, including for
+        // on-demand, so the player must treat it as live and not seek.
         live: true,
         catchup: payload.catchup,
         expires_at: Some(expires_at),
@@ -460,6 +487,7 @@ mod tests {
             "https://provider.example.com/live.m3u8",
             FilePath::new("/tmp/output/index.m3u8"),
             FilePath::new("/tmp/output/segment-%09d.ts"),
+            true,
         );
         let args = command
             .as_std()
@@ -473,6 +501,88 @@ mod tests {
         assert!(joined.contains("-level:v 4.1"));
         assert!(joined.contains("fps=30"));
         assert!(joined.contains("-hls_time 2"));
+    }
+
+    fn joined_args(command: &Command) -> String {
+        command
+            .as_std()
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    #[test]
+    fn paces_on_demand_input_and_keeps_a_longer_segment_window() {
+        let on_demand = build_ffmpeg_command(
+            "h264_nvenc",
+            "https://provider.example.com/movie.mkv",
+            FilePath::new("/tmp/output/index.m3u8"),
+            FilePath::new("/tmp/output/segment-%09d.ts"),
+            false,
+        );
+        let joined = joined_args(&on_demand);
+
+        // Without -re the GPU races past the window and deletes segments the
+        // player has not reached yet.
+        assert!(joined.contains("-re -i https://provider.example.com/movie.mkv"));
+        assert!(joined.contains("-hls_list_size 150"));
+        assert!(joined.contains("-hls_time 4"));
+        // Still a rolling window, so disk stays bounded.
+        assert!(joined.contains("delete_segments"));
+    }
+
+    #[test]
+    fn does_not_pace_a_live_upstream() {
+        let live = build_ffmpeg_command(
+            "h264_nvenc",
+            "https://provider.example.com/live.m3u8",
+            FilePath::new("/tmp/output/index.m3u8"),
+            FilePath::new("/tmp/output/segment-%09d.ts"),
+            true,
+        );
+        let joined = joined_args(&live);
+
+        assert!(!joined.contains("-re "));
+        assert!(joined.contains("-hls_list_size 8"));
+    }
+
+    #[test]
+    fn tunes_each_encoder_with_flags_it_accepts() {
+        assert_eq!(
+            encoder_tuning_args("h264_nvenc"),
+            ["-preset", "p4", "-tune", "ll", "-rc", "vbr", "-cq", "23"]
+        );
+        assert_eq!(
+            encoder_tuning_args("libx264"),
+            ["-preset", "veryfast", "-crf", "23"]
+        );
+        assert!(encoder_tuning_args("h264_vaapi").is_empty());
+    }
+
+    #[test]
+    fn omits_nvenc_only_rate_control_for_software_encoding() {
+        let command = build_ffmpeg_command(
+            "libx264",
+            "https://provider.example.com/live.m3u8",
+            FilePath::new("/tmp/output/index.m3u8"),
+            FilePath::new("/tmp/output/segment-%09d.ts"),
+            true,
+        );
+        let joined = command
+            .as_std()
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        assert!(joined.contains("-c:v libx264"));
+        assert!(joined.contains("-preset veryfast"));
+        assert!(!joined.contains("-rc vbr"));
+        assert!(!joined.contains("-cq 23"));
+        // Portable flags stay regardless of encoder.
+        assert!(joined.contains("-profile:v high"));
+        assert!(joined.contains("-maxrate 8000k"));
     }
 
     #[test]

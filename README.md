@@ -71,7 +71,9 @@ The receiver is hosted at `https://tv.marcusson.dev/receiver?cast=1`. A Google C
 
 ### NVIDIA Cast live transcoding
 
-Older Chromecast models can reject otherwise valid provider streams that use H.264 levels above their decoder limit. Euripus can retry a failed live Cast stream through an on-demand NVIDIA NVENC transcode. The process starts only after the receiver reports a codec failure, is limited to one active stream, and stops when playback changes or after 45 seconds without segment requests.
+Cast devices reject streams whose codecs they cannot decode: H.264 levels above the decoder limit, HEVC, and audio such as MP2 or AC-3. Euripus can retry a failed Cast stream through an on-demand NVIDIA NVENC transcode. The process starts only after the receiver reports a codec failure, is limited to one active stream, and stops when playback changes or after 45 seconds without segment requests.
+
+Live channels and on-demand titles are both eligible. On-demand input is read at 1x and served through a rolling ten-minute segment window, which bounds disk use to roughly 450 MB per stream but means seeking is unavailable while a title is being converted; the receiver rejects seek commands with an explicit message. `APP_CAST_TRANSCODE_DIRECTORY` should point at real disk rather than a tmpfs.
 
 1. Install the NVIDIA Container Toolkit on the deployment host.
 2. Set `APP_CAST_TRANSCODING_ENABLED=true` and `APP_CAST_TRANSCODE_ENCODER=h264_nvenc` in `apps/server/.env`.

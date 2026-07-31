@@ -85,7 +85,7 @@ describe("IPTV HLS helpers", () => {
     expect(controller.destroy).not.toHaveBeenCalled();
   });
 
-  it("requests external recovery on fatal errors", () => {
+  it("reports a fatal network error as a network failure, not a format one", () => {
     const controller = {
       destroy: vi.fn(),
       recoverMediaError: vi.fn(),
@@ -100,25 +100,48 @@ describe("IPTV HLS helpers", () => {
       { onFatalRecoveryNeeded },
     );
 
-    expect(onFatalRecoveryNeeded).toHaveBeenCalledTimes(1);
+    expect(onFatalRecoveryNeeded).toHaveBeenCalledWith("network");
     expect(controller.destroy).not.toHaveBeenCalled();
     expect(controller.startLoad).not.toHaveBeenCalled();
     expect(controller.recoverMediaError).not.toHaveBeenCalled();
   });
 
-  it("classifies fatal SourceBuffer codec failures for Cast fallback", () => {
-    expect(
-      isFatalHlsCodecError({
-        fatal: true,
-        details: Hls.ErrorDetails.BUFFER_ADD_CODEC_ERROR,
-      }),
-    ).toBe(true);
-    expect(
-      isFatalHlsCodecError({
-        fatal: false,
-        details: Hls.ErrorDetails.BUFFER_ADD_CODEC_ERROR,
-      }),
-    ).toBe(false);
+  it("treats an unrecoverable media error as a codec failure", () => {
+    const controller = {
+      destroy: vi.fn(),
+      recoverMediaError: vi.fn(),
+      startLoad: vi.fn(),
+    };
+    const recoveryState = { mediaRecoveryAttempts: 0 };
+    const onFatalRecoveryNeeded = vi.fn();
+    const mediaError = {
+      type: Hls.ErrorTypes.MEDIA_ERROR,
+      fatal: false,
+    } as ErrorData;
+
+    handleIptvHlsError(controller, mediaError, recoveryState, {
+      onFatalRecoveryNeeded,
+    });
+    handleIptvHlsError(controller, mediaError, recoveryState, {
+      onFatalRecoveryNeeded,
+    });
+
+    expect(onFatalRecoveryNeeded).toHaveBeenCalledWith("codec");
+  });
+
+  it("classifies every fatal codec failure hls.js reports for Cast fallback", () => {
+    const codecDetails = [
+      Hls.ErrorDetails.BUFFER_ADD_CODEC_ERROR,
+      Hls.ErrorDetails.BUFFER_INCOMPATIBLE_CODECS_ERROR,
+      Hls.ErrorDetails.MANIFEST_INCOMPATIBLE_CODECS_ERROR,
+      Hls.ErrorDetails.FRAG_PARSING_ERROR,
+    ];
+
+    codecDetails.forEach((details) => {
+      expect(isFatalHlsCodecError({ fatal: true, details })).toBe(true);
+      expect(isFatalHlsCodecError({ fatal: false, details })).toBe(false);
+    });
+
     expect(
       isFatalHlsCodecError({
         fatal: true,

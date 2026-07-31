@@ -9,6 +9,9 @@ export const EURIPUS_CAST_RECEIVER_APP_ID = "EEC1D3B6";
 
 const APP_ID_CONFIGURED = true;
 
+const STATUS_REQUEST_INTERVAL_MS = 2_000;
+const STATUS_REQUEST_ATTEMPTS = 30;
+
 type ReceiverStatusMessage = {
   type: "receiver_status";
   deviceId: string;
@@ -22,6 +25,7 @@ type CastSession = {
     listener: (namespace: string, message: unknown) => void,
   ) => void;
   getCastDevice: () => { friendlyName?: string };
+  sendMessage: (namespace: string, message: unknown) => Promise<void>;
 };
 
 type CastContext = {
@@ -112,6 +116,39 @@ function parseReceiverStatus(message: unknown): ReceiverStatusMessage | null {
   return null;
 }
 
+function sendToReceiver(session: CastSession, message: unknown) {
+  try {
+    void Promise.resolve(
+      session.sendMessage(EURIPUS_CAST_NAMESPACE, message),
+    ).catch(() => undefined);
+  } catch {
+    // The session can end between observing it and sending.
+  }
+}
+
+/**
+ * Custom Cast messages are not buffered, so a status broadcast the receiver
+ * sent before this sender attached its listener is lost. That also covers
+ * rejoining an already-running session after a sender reload, where the
+ * receiver has no reason to announce itself again.
+ */
+function requestReceiverStatus(session: CastSession) {
+  let attemptsLeft = STATUS_REQUEST_ATTEMPTS;
+  sendToReceiver(session, { type: "request_receiver_status" });
+  const timer = window.setInterval(() => {
+    attemptsLeft -= 1;
+    if (
+      castContext?.getCurrentSession() !== session ||
+      useGoogleCastStore.getState().receiverDeviceId ||
+      attemptsLeft <= 0
+    ) {
+      window.clearInterval(timer);
+      return;
+    }
+    sendToReceiver(session, { type: "request_receiver_status" });
+  }, STATUS_REQUEST_INTERVAL_MS);
+}
+
 function observeSession(session: CastSession) {
   if (observedSessions.has(session)) {
     return;
@@ -125,8 +162,17 @@ function observeSession(session: CastSession) {
         receiverPaired: status.paired,
         receiverPairingCode: status.pairingCode,
       });
+      sendToReceiver(session, { type: "receiver_status_ack" });
     }
   });
+  // A newly observed session has not reported itself yet, so any retained
+  // status belongs to a previous receiver and would stop the request loop.
+  useGoogleCastStore.setState({
+    receiverDeviceId: null,
+    receiverPaired: false,
+    receiverPairingCode: null,
+  });
+  requestReceiverStatus(session);
 }
 
 function syncSessionState() {

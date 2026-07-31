@@ -49,10 +49,18 @@ export type HlsQualityOption = {
 
 type HlsErrorController = Pick<Hls, "destroy" | "recoverMediaError" | "startLoad">;
 type HlsLiveSyncController = Pick<Hls, "liveSyncPosition">;
+export type PlaybackFailureReason =
+  | "codec"
+  | "network"
+  | "hls"
+  | "video-error"
+  | "stall"
+  | "unexpected-end";
+
 export type PlaybackFailure =
   | {
       kind: "recoverable";
-      reason: "codec" | "hls" | "video-error" | "stall" | "unexpected-end";
+      reason: PlaybackFailureReason;
     }
   | {
       kind: "provider-unavailable";
@@ -113,10 +121,25 @@ export function isIptvHlsSupported() {
   return Hls.isSupported();
 }
 
+/**
+ * Every way hls.js reports "this device cannot decode this stream".
+ *
+ * BUFFER_ADD_CODEC_ERROR is addSourceBuffer throwing; the INCOMPATIBLE_CODECS
+ * pair is a CODECS attribute MediaSource rejects up front; a fatal
+ * FRAG_PARSING_ERROR is audio the transmuxer cannot handle at all, which on
+ * IPTV is usually MP2 or AC-3. All four are fixed by transcoding.
+ */
+const FATAL_CODEC_ERROR_DETAILS: ReadonlySet<string> = new Set([
+  Hls.ErrorDetails.BUFFER_ADD_CODEC_ERROR,
+  Hls.ErrorDetails.BUFFER_INCOMPATIBLE_CODECS_ERROR,
+  Hls.ErrorDetails.MANIFEST_INCOMPATIBLE_CODECS_ERROR,
+  Hls.ErrorDetails.FRAG_PARSING_ERROR,
+]);
+
 export function isFatalHlsCodecError(
   data: Pick<ErrorData, "details" | "fatal">,
 ) {
-  return data.fatal && data.details === Hls.ErrorDetails.BUFFER_ADD_CODEC_ERROR;
+  return data.fatal && FATAL_CODEC_ERROR_DETAILS.has(data.details);
 }
 
 export function isProviderPlaceholderHlsError(
@@ -145,11 +168,15 @@ export function handleIptvHlsError(
   {
     onFatalRecoveryNeeded,
   }: {
-    onFatalRecoveryNeeded?: () => void;
+    onFatalRecoveryNeeded?: (reason: PlaybackFailureReason) => void;
   } = {},
 ) {
   if (data.fatal) {
-    onFatalRecoveryNeeded?.();
+    // A dead upstream and an undecodable stream need very different remedies,
+    // and telling the two apart keeps the receiver from blaming the format.
+    onFatalRecoveryNeeded?.(
+      data.type === Hls.ErrorTypes.NETWORK_ERROR ? "network" : "hls",
+    );
     return;
   }
 
@@ -165,7 +192,9 @@ export function handleIptvHlsError(
       return;
     }
 
-    onFatalRecoveryNeeded?.();
+    // recoverMediaError() already failed once, so this is not a transient
+    // buffer fault. Transcoding is the remaining option.
+    onFatalRecoveryNeeded?.("codec");
   }
 }
 
@@ -360,8 +389,8 @@ export function createIptvHls(
     }
 
     handleIptvHlsError(hls, data, recoveryState, {
-      onFatalRecoveryNeeded: () => {
-        onPlaybackFailure?.({ kind: "recoverable", reason: "hls" });
+      onFatalRecoveryNeeded: (reason) => {
+        onPlaybackFailure?.({ kind: "recoverable", reason });
       },
     });
   };

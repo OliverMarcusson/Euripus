@@ -8,6 +8,7 @@ import {
   type HlsSession,
   type LivePlaybackPreference,
   type PlaybackFailure,
+  type PlaybackFailureReason,
 } from "@/lib/hls";
 import {
   inferPlaybackOwnershipHint,
@@ -95,6 +96,31 @@ function getQualitySignature(uiMode: PlayerUiMode, hlsSession?: HlsSession) {
     AUTO_HLS_QUALITY,
     ...(hlsSession?.qualityOptions ?? []).map((option) => option.value),
   ].join(",");
+}
+
+// Spec-defined MediaError codes, inlined because the global is not available
+// in every environment this module is exercised in.
+const MEDIA_ERR_NETWORK = 2;
+const MEDIA_ERR_DECODE = 3;
+const MEDIA_ERR_SRC_NOT_SUPPORTED = 4;
+
+/**
+ * A decode failure or an outright rejected source is the media element saying
+ * the device cannot play this stream, which is exactly what the Cast transcode
+ * fallback exists for. Everything else stays a generic playback error.
+ */
+export function mediaErrorFailureReason(
+  mediaError: Pick<MediaError, "code"> | null,
+): PlaybackFailureReason {
+  switch (mediaError?.code) {
+    case MEDIA_ERR_DECODE:
+    case MEDIA_ERR_SRC_NOT_SUPPORTED:
+      return "codec";
+    case MEDIA_ERR_NETWORK:
+      return "network";
+    default:
+      return "video-error";
+  }
 }
 
 function resetMediaElement(video: HTMLVideoElement) {
@@ -345,7 +371,10 @@ export function bindPlaybackSource(
       mediaErrorCode: video.error?.code ?? null,
       mediaErrorMessage: video.error?.message ?? null,
     });
-    reportFailure({ kind: "recoverable", reason: "video-error" });
+    reportFailure({
+      kind: "recoverable",
+      reason: mediaErrorFailureReason(video.error),
+    });
   };
 
   const handlePlaybackPause = () => {

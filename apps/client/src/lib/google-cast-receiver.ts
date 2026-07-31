@@ -1,30 +1,7 @@
-const CAST_RECEIVER_SDK_URL =
-  "https://www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js";
-
 export const EURIPUS_CAST_NAMESPACE = "urn:x-cast:se.olivermarcusson.euripus.receiver";
 
-type CastReceiverContext = {
-  addCustomMessageListener: (
-    namespace: string,
-    listener: (event: unknown) => void,
-  ) => void;
-  addEventListener: (eventType: string, listener: () => void) => void;
-  sendCustomMessage: (
-    namespace: string,
-    senderId: string | undefined,
-    message: unknown,
-  ) => void;
-  start: (options?: Record<string, unknown>) => void;
-};
-
-type CastReceiverWindow = Window & {
-  cast?: {
-    framework?: {
-      CastReceiverContext: { getInstance: () => CastReceiverContext };
-      system: { EventType: { SENDER_CONNECTED: string } };
-    };
-  };
-};
+const BOOTSTRAP_READY_TIMEOUT_MS = 15_000;
+const BOOTSTRAP_POLL_INTERVAL_MS = 100;
 
 export type CastReceiverStatus = {
   type: "receiver_status";
@@ -33,9 +10,28 @@ export type CastReceiverStatus = {
   pairingCode: string | null;
 };
 
-let receiverContext: CastReceiverContext | null = null;
-let initialization: Promise<boolean> | null = null;
-let pendingStatus: CastReceiverStatus | null = null;
+/**
+ * Installed by `public/cast-receiver-bootstrap.js`, which starts the Cast
+ * receiver framework before this bundle loads. See that file for why.
+ */
+type CastReceiverBootstrap = {
+  namespace: string;
+  status: CastReceiverStatus | null;
+  started: boolean;
+  failed: boolean;
+  publish: (status: CastReceiverStatus) => void;
+};
+
+type CastReceiverWindow = Window & {
+  __euripusCastReceiver?: CastReceiverBootstrap;
+};
+
+function bootstrap() {
+  if (typeof window === "undefined") {
+    return undefined;
+  }
+  return (window as CastReceiverWindow).__euripusCastReceiver;
+}
 
 export function isGoogleCastReceiver() {
   if (typeof window === "undefined") {
@@ -48,69 +44,34 @@ export function isGoogleCastReceiver() {
   );
 }
 
-function sendPendingStatus() {
-  if (!receiverContext || !pendingStatus) {
-    return;
-  }
-  receiverContext.sendCustomMessage(
-    EURIPUS_CAST_NAMESPACE,
-    undefined,
-    pendingStatus,
-  );
-}
-
 export function publishGoogleCastReceiverStatus(status: CastReceiverStatus) {
-  pendingStatus = status;
-  sendPendingStatus();
+  bootstrap()?.publish(status);
 }
 
+/**
+ * Resolves once the bootstrap has started the Cast receiver framework, or
+ * false if it gave up. The framework starts independently of this call; this
+ * only exists so the receiver UI can report a failed start.
+ */
 export function initializeGoogleCastReceiver() {
   if (!isGoogleCastReceiver()) {
     return Promise.resolve(false);
   }
-  if (initialization) {
-    return initialization;
-  }
 
-  initialization = new Promise<boolean>((resolve) => {
-    const targetWindow = window as CastReceiverWindow;
-    const start = () => {
-      const framework = targetWindow.cast?.framework;
-      if (!framework) {
+  return new Promise<boolean>((resolve) => {
+    const deadline = Date.now() + BOOTSTRAP_READY_TIMEOUT_MS;
+    const poll = () => {
+      const current = bootstrap();
+      if (current?.started) {
+        resolve(true);
+        return;
+      }
+      if (!current || current.failed || Date.now() >= deadline) {
         resolve(false);
         return;
       }
-
-      receiverContext = framework.CastReceiverContext.getInstance();
-      // CAF requires custom namespaces to be registered before start().
-      receiverContext.addCustomMessageListener(
-        EURIPUS_CAST_NAMESPACE,
-        () => undefined,
-      );
-      receiverContext.addEventListener(
-        framework.system.EventType.SENDER_CONNECTED,
-        sendPendingStatus,
-      );
-      receiverContext.start({
-        disableIdleTimeout: true,
-        statusText: "Euripus Receiver",
-      });
-      sendPendingStatus();
-      resolve(true);
+      window.setTimeout(poll, BOOTSTRAP_POLL_INTERVAL_MS);
     };
-
-    if (targetWindow.cast?.framework) {
-      start();
-      return;
-    }
-
-    const script = document.createElement("script");
-    script.src = CAST_RECEIVER_SDK_URL;
-    script.async = true;
-    script.onload = start;
-    script.onerror = () => resolve(false);
-    document.head.append(script);
+    poll();
   });
-
-  return initialization;
 }

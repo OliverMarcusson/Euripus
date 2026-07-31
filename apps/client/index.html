@@ -10,6 +10,9 @@
     <link rel="apple-touch-icon" href="/icon-192.png" />
     <link rel="manifest" href="/manifest.webmanifest" />
     <title>Euripus</title>
+    <!-- Must run before the module bundle: Cast senders keep the launch
+         pending until the receiver starts. Self-guards to Cast devices. -->
+    <script src="/cast-receiver-bootstrap.js"></script>
   </head>
   <body class="bg-background text-foreground">
     <div id="root"></div>
