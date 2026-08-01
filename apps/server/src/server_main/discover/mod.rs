@@ -42,6 +42,7 @@ struct DiscoverQuery {
     media_type: Option<String>,
     country_mode: Option<String>,
     country: Option<String>,
+    available_only: Option<bool>,
     offset: Option<i64>,
     limit: Option<i64>,
 }
@@ -163,14 +164,23 @@ async fn list_titles(
         query.country_mode.as_deref(),
         query.country.as_deref(),
     )?;
+    let available_only = query.available_only.unwrap_or(false);
     let offset = query.offset.unwrap_or(0).max(0);
     let limit = query
         .limit
         .unwrap_or(DISCOVER_DEFAULT_LIMIT)
         .clamp(1, DISCOVER_MAX_LIMIT);
 
-    let total_count =
-        count_chart_titles(&state.pool, chart, media_type, country_mode, &country_code).await?;
+    let total_count = count_chart_titles(
+        &state.pool,
+        auth.user_id,
+        chart,
+        media_type,
+        country_mode,
+        &country_code,
+        available_only,
+    )
+    .await?;
     let rows = load_chart_titles(
         &state.pool,
         auth.user_id,
@@ -178,6 +188,7 @@ async fn list_titles(
         media_type,
         country_mode,
         &country_code,
+        available_only,
         offset,
         limit,
     )

@@ -6,7 +6,7 @@ import type {
   DiscoverTitle,
   OnDemandMediaType,
 } from "@euripus/shared";
-import { Compass, Star, Tv } from "lucide-react";
+import { Compass, Library, Star, Tv } from "lucide-react";
 import { PageHeader } from "@/components/layout/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -53,6 +53,7 @@ export function DiscoverPage() {
   const [chart, setChart] = useState<DiscoverChart>("trending");
   const [countryMode, setCountryMode] = useState<DiscoverCountryMode>("global");
   const [country, setCountry] = useState<string>();
+  const [availableOnly, setAvailableOnly] = useState(false);
   const [offset, setOffset] = useState(0);
   const [selected, setSelected] = useState<DiscoverTitle | null>(null);
 
@@ -88,13 +89,13 @@ export function DiscoverPage() {
     if (chartsForMode.length && !chartsForMode.includes(chart)) setChart(chartsForMode[0]);
   }, [chartsForMode, chart]);
 
-  useEffect(() => { setOffset(0); }, [mediaType, chart, countryMode, country]);
+  useEffect(() => { setOffset(0); }, [mediaType, chart, countryMode, country, availableOnly]);
 
   const ready = countryMode === "global" || !!country;
   const titlesQuery = useQuery({
-    queryKey: ["discover", "titles", mediaType, chart, countryMode, country, offset],
+    queryKey: ["discover", "titles", mediaType, chart, countryMode, country, availableOnly, offset],
     queryFn: () =>
-      getDiscoverTitles(mediaType, { chart, countryMode, country, offset, limit: PAGE_SIZE }),
+      getDiscoverTitles(mediaType, { chart, countryMode, country, availableOnly, offset, limit: PAGE_SIZE }),
     enabled: !!config?.enabled && ready && chartsForMode.includes(chart),
   });
   const page = titlesQuery.data;
@@ -149,6 +150,14 @@ export function DiscoverPage() {
             {CHART_LABELS[option]}
           </Button>
         ))}
+        <Button
+          size="sm"
+          variant={availableOnly ? "default" : "outline"}
+          aria-pressed={availableOnly}
+          onClick={() => setAvailableOnly((value) => !value)}
+        >
+          <Library className="size-4" /> Only in my providers
+        </Button>
       </div>
 
       {/*
@@ -165,11 +174,13 @@ export function DiscoverPage() {
       {titlesQuery.isPending ? <Card><CardContent className="p-8 text-muted-foreground">Loading titles...</CardContent></Card> : null}
       {titlesQuery.isError ? <Card><CardContent className="p-8 text-destructive">Unable to load Discover charts.</CardContent></Card> : null}
       {!titlesQuery.isPending && !titlesQuery.isError && !page?.items.length ? (
-        <Empty><EmptyHeader><EmptyMedia variant="icon"><Compass /></EmptyMedia><EmptyTitle>This chart has not been fetched yet</EmptyTitle></EmptyHeader></Empty>
+        <Empty><EmptyHeader><EmptyMedia variant="icon"><Compass /></EmptyMedia><EmptyTitle>{availableOnly ? "Nothing on this chart is in your providers" : "This chart has not been fetched yet"}</EmptyTitle></EmptyHeader></Empty>
       ) : null}
 
       {page?.items.length ? <>
-        <p className="text-sm text-muted-foreground">{page.availableCount} of {page.items.length} on this page are in your providers.</p>
+        {availableOnly ? null : (
+          <p className="text-sm text-muted-foreground">{page.availableCount} of {page.items.length} on this page are in your providers.</p>
+        )}
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
           {page.items.map((title) => (
             <DiscoverCard key={`${title.mediaType}-${title.tmdbId}`} title={title} onOpen={() => setSelected(title)} />

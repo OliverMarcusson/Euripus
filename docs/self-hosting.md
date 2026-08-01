@@ -121,6 +121,8 @@ Neither is a "most watched in Sweden" chart, because TMDB does not publish one.
 
 Titles are matched to your catalog by normalized name and release year, including TMDB's localized alternative titles. Alternative titles are backfilled in the background at up to 120 titles per refresh cycle, so match quality improves over the first few cycles after enabling this.
 
+Each name expands to a set of candidate keys rather than one canonical string, and a match is any overlap. The candidates cover the raw name, the name with provider quality and platform tags stripped (`EN |`, `4K |`, `NF |`, in any order), and the name with trailing season and year markers removed (`S01`, `Season 2`, `(2022)`). `&` and `and` are treated alike. Because the raw name is always one of the candidates, tag stripping can only add reach — a title whose real name begins with a tag word, such as *Sky High* or *Max Payne*, still matches itself and is not confused with *High* or *Payne*.
+
 The free TMDB tier is for non-commercial use and requires attribution, which the Discover page displays.
 
 ## Optional Mullvad Routing

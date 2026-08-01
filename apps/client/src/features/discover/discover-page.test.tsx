@@ -137,6 +137,59 @@ describe("DiscoverPage", () => {
     ).toBeInTheDocument();
   });
 
+  it("filters unavailable titles on the server so paging stays consistent", async () => {
+    renderPage();
+    await waitFor(() => expect(mockedTitles).toHaveBeenCalled());
+    mockedTitles.mockClear();
+    mockedTitles.mockResolvedValue({
+      items: [title({ rank: 1, tmdbId: 1, title: "Owned Movie", onDemandTitleId: "od-1", providerLabel: "Main TV" })],
+      totalCount: 1,
+      nextOffset: null,
+      availableCount: 1,
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /Only in my providers/ }));
+
+    // Filtering has to happen server-side, otherwise totalCount would still say 2 while
+    // the grid shows one card.
+    await waitFor(() => {
+      expect(mockedTitles).toHaveBeenLastCalledWith("movie", expect.objectContaining({
+        availableOnly: true,
+        offset: 0,
+      }));
+    });
+    expect(await screen.findByText("Owned Movie")).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText("Missing Movie")).not.toBeInTheDocument());
+    // The ratio line is noise once unmatched rows are gone.
+    expect(screen.queryByText(/on this page are in your providers/)).not.toBeInTheDocument();
+  });
+
+  it("returns to the first page when the availability filter changes", async () => {
+    mockedTitles.mockResolvedValue({
+      items: [title({ rank: 41, tmdbId: 41, title: "Page Two Movie" })],
+      totalCount: 200,
+      nextOffset: 80,
+      availableCount: 0,
+    });
+    renderPage();
+    expect(await screen.findByText("Page Two Movie")).toBeInTheDocument();
+
+    // Paging follows the server's nextOffset rather than adding a page size locally.
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    await waitFor(() => {
+      expect(mockedTitles).toHaveBeenLastCalledWith("movie", expect.objectContaining({ offset: 80 }));
+    });
+
+    // An offset into the unfiltered chart is meaningless once the chart is filtered.
+    fireEvent.click(screen.getByRole("button", { name: /Only in my providers/ }));
+    await waitFor(() => {
+      expect(mockedTitles).toHaveBeenLastCalledWith("movie", expect.objectContaining({
+        availableOnly: true,
+        offset: 0,
+      }));
+    });
+  });
+
   it("explains what to configure when the server has no TMDB key", async () => {
     mockedCharts.mockResolvedValue({ enabled: false, countries: [], charts: [], lastRefreshedAt: null });
     renderPage();

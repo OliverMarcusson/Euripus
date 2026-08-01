@@ -649,6 +649,7 @@ export function getDiscoverTitles(
     chart?: DiscoverChart;
     countryMode?: DiscoverCountryMode;
     country?: string;
+    availableOnly?: boolean;
     offset?: number;
     limit?: number;
   } = {},
@@ -660,6 +661,7 @@ export function getDiscoverTitles(
   if (options.country && options.countryMode && options.countryMode !== "global") {
     params.set("country", options.country);
   }
+  if (options.availableOnly) params.set("availableOnly", "true");
   if (options.offset != null) params.set("offset", String(options.offset));
   if (options.limit != null) params.set("limit", String(options.limit));
   return request<DiscoverPage>(`/discover/titles?${params.toString()}`);

@@ -294,8 +294,9 @@ async fn upsert_title(
     let date = item.date();
 
     // match_keys is built by the same SQL normalizer the on_demand_titles generated column
-    // uses, so the two sides cannot drift. Existing alternative titles are preserved on
-    // conflict; only the primary and original keys are refreshed here.
+    // uses, so the two sides cannot drift. Alternative titles are fetched separately, so
+    // the recompute reads whatever raw ones the row already carries rather than dropping
+    // them.
     sqlx::query(
         r#"
         INSERT INTO tmdb_titles (
@@ -305,9 +306,7 @@ async fn upsert_title(
         )
         SELECT
           $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
-          ARRAY(SELECT DISTINCT k FROM unnest(ARRAY[
-            discover_match_key($3), discover_match_key($4)
-          ]) AS k WHERE k <> ''),
+          discover_title_match_keys($3, $4, '{}'),
           NOW()
         ON CONFLICT (media_type, tmdb_id) DO UPDATE SET
           title = EXCLUDED.title,
@@ -322,10 +321,8 @@ async fn upsert_title(
           vote_average = EXCLUDED.vote_average,
           vote_count = EXCLUDED.vote_count,
           popularity = EXCLUDED.popularity,
-          match_keys = ARRAY(
-            SELECT DISTINCT k
-            FROM unnest(tmdb_titles.match_keys || EXCLUDED.match_keys) AS k
-            WHERE k <> ''
+          match_keys = discover_title_match_keys(
+            EXCLUDED.title, EXCLUDED.original_title, tmdb_titles.alternative_titles
           ),
           refreshed_at = NOW()
         "#,
@@ -390,18 +387,16 @@ async fn backfill_alternative_titles(state: &AppState) -> Result<()> {
             .filter(|value| !value.is_empty())
             .collect::<Vec<_>>();
 
-        // Stamp the timestamp even when TMDB returned nothing, otherwise this title is
+        // The raw names are stored alongside the derived keys so a future change to the
+        // normalizer can recompute locally instead of re-querying TMDB for every title.
+        //
+        // The timestamp is stamped even when TMDB returned nothing, otherwise this title is
         // retried on every cycle forever and starves the rest of the queue.
         sqlx::query(
             r#"
             UPDATE tmdb_titles SET
-              match_keys = ARRAY(
-                SELECT DISTINCT k
-                FROM unnest(match_keys || ARRAY(
-                  SELECT discover_match_key(n) FROM unnest($3::text[]) AS n
-                )) AS k
-                WHERE k <> ''
-              ),
+              alternative_titles = $3::text[],
+              match_keys = discover_title_match_keys(title, original_title, $3::text[]),
               alternative_titles_fetched_at = NOW()
             WHERE media_type = $1 AND tmdb_id = $2
             "#,

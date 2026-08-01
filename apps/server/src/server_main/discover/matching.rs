@@ -29,6 +29,10 @@ pub(super) struct DiscoverTitleRow {
 /// a match key, because provider catalogs are full of remakes that normalize identically
 /// ("The Thing", "Dune"). Without the year preference a 2021 chart entry would happily
 /// bind to a 1984 rip.
+///
+/// `available_only` drops unmatched rows server-side rather than letting the client filter
+/// the page it received, which would leave the paging footer describing rows that are no
+/// longer on screen. Ranks keep their chart positions, so a filtered page reads #1, #4, #7.
 pub(super) async fn load_chart_titles(
     pool: &PgPool,
     user_id: Uuid,
@@ -36,6 +40,7 @@ pub(super) async fn load_chart_titles(
     media_type: &str,
     country_mode: &str,
     country_code: &str,
+    available_only: bool,
     offset: i64,
     limit: i64,
 ) -> Result<Vec<DiscoverTitleRow>, AppError> {
@@ -66,7 +71,7 @@ pub(super) async fn load_chart_titles(
           JOIN provider_profiles p ON p.id = o.profile_id
           WHERE o.user_id = $1
             AND o.media_type = e.media_type
-            AND o.match_key = ANY(t.match_keys)
+            AND o.match_keys && t.match_keys
           ORDER BY
             CASE
               WHEN t.release_year IS NULL THEN 1
@@ -80,8 +85,9 @@ pub(super) async fn load_chart_titles(
           AND e.media_type = $3
           AND e.country_mode = $4
           AND e.country_code = $5
+          AND (NOT $6 OR matched.id IS NOT NULL)
         ORDER BY e.rank
-        OFFSET $6 LIMIT $7
+        OFFSET $7 LIMIT $8
         "#,
     )
     .bind(user_id)
@@ -89,6 +95,7 @@ pub(super) async fn load_chart_titles(
     .bind(media_type)
     .bind(country_mode)
     .bind(country_code)
+    .bind(available_only)
     .bind(offset)
     .bind(limit)
     .fetch_all(pool)
@@ -96,23 +103,44 @@ pub(super) async fn load_chart_titles(
     Ok(rows)
 }
 
+/// Counts the chart under the same filter the page query uses, so the paging footer and
+/// the grid cannot disagree.
+///
+/// Availability is tested with EXISTS rather than the page query's lateral join: which
+/// specific catalog row wins the year tie-break does not change whether the title counts.
 pub(super) async fn count_chart_titles(
     pool: &PgPool,
+    user_id: Uuid,
     chart: &str,
     media_type: &str,
     country_mode: &str,
     country_code: &str,
+    available_only: bool,
 ) -> Result<i64, AppError> {
     let total = sqlx::query_scalar::<_, i64>(
         r#"
-        SELECT COUNT(*) FROM tmdb_chart_entries
-        WHERE chart = $1 AND media_type = $2 AND country_mode = $3 AND country_code = $4
+        SELECT COUNT(*)
+        FROM tmdb_chart_entries e
+        JOIN tmdb_titles t
+          ON t.media_type = e.media_type AND t.tmdb_id = e.tmdb_id
+        WHERE e.chart = $2
+          AND e.media_type = $3
+          AND e.country_mode = $4
+          AND e.country_code = $5
+          AND (NOT $6 OR EXISTS (
+            SELECT 1 FROM on_demand_titles o
+            WHERE o.user_id = $1
+              AND o.media_type = e.media_type
+              AND o.match_keys && t.match_keys
+          ))
         "#,
     )
+    .bind(user_id)
     .bind(chart)
     .bind(media_type)
     .bind(country_mode)
     .bind(country_code)
+    .bind(available_only)
     .fetch_one(pool)
     .await?;
     Ok(total)
