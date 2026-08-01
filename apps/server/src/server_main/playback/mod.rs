@@ -183,15 +183,13 @@ async fn resolve_on_demand_playback_source_for_target(
           e.name, 'series'::text AS media_type, e.remote_id, e.container_extension,
           p.base_url, p.username AS provider_username, p.password_encrypted, p.output_format, p.playback_mode
           FROM on_demand_episodes e JOIN provider_profiles p ON p.id=e.profile_id
-          WHERE e.user_id=$1 AND e.id=$2
-            AND e.profile_id = (SELECT on_demand_provider_id FROM users WHERE id = $1)"#
+          WHERE e.user_id=$1 AND e.id=$2"#
     } else {
         r#"SELECT t.profile_id, t.id AS title_id, NULL::uuid AS episode_id,
           t.name, t.media_type, t.remote_id, t.container_extension,
           p.base_url, p.username AS provider_username, p.password_encrypted, p.output_format, p.playback_mode
           FROM on_demand_titles t JOIN provider_profiles p ON p.id=t.profile_id
-          WHERE t.user_id=$1 AND t.id=$2 AND t.media_type='movie'
-            AND t.profile_id = (SELECT on_demand_provider_id FROM users WHERE id = $1)"#
+          WHERE t.user_id=$1 AND t.id=$2 AND t.media_type='movie'"#
     };
     let row = sqlx::query_as::<_, OnDemandPlaybackRecord>(query)
         .bind(user_id)

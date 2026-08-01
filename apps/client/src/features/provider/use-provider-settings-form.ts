@@ -228,25 +228,17 @@ export function useProviderSettingsForm() {
       selection,
     }: {
       providerId: string
-      selection: "live" | "onDemand"
+      selection: "live"
     }) => selectProviderForContent(providerId, selection),
-    onMutate: async ({ providerId, selection }) => {
+    onMutate: async ({ providerId }) => {
       await queryClient.cancelQueries({ queryKey: ["providers"] })
       queryClient.setQueryData<ProviderProfile[]>(["providers"], (current) =>
         (current ?? []).map((provider) => {
-          const currentIsLive = provider.isLive ?? provider.isActive
-          const currentIsOnDemand = provider.isOnDemand ?? provider.isActive
-          const isLive =
-            selection === "live" ? provider.id === providerId : currentIsLive
-          const isOnDemand =
-            selection === "onDemand"
-              ? provider.id === providerId
-              : currentIsOnDemand
+          const isLive = provider.id === providerId
           return {
             ...provider,
             isLive,
-            isOnDemand,
-            isActive: Boolean(isLive),
+            isActive: isLive,
           }
         }),
       )

@@ -566,7 +566,7 @@ export function activateProvider(providerId: string) {
 
 export function selectProviderForContent(
   providerId: string,
-  selection: "live" | "onDemand",
+  selection: "live",
 ) {
   return request<ProviderProfile>(`/providers/${providerId}/select`, {
     method: "PUT",

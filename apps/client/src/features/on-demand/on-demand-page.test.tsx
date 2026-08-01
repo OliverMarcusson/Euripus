@@ -36,7 +36,7 @@ describe("OnDemandPage", () => {
     mockedCategories.mockResolvedValue([{ id: "movies", mediaType: "movie", name: "Movies", titleCount: 1, isFavorite: false }]);
     mockedHistory.mockResolvedValue([]);
     mockedTitles.mockResolvedValue({
-      items: [{ id: "title-1", mediaType: "movie", name: "Example Movie", categoryId: "movies", categoryName: "Movies", posterUrl: null, backdropUrl: null, plot: "A movie.", genre: "Drama", castNames: null, director: null, releaseDate: "2026", rating: 8, durationMinutes: 90, containerExtension: "mp4", isFavorite: false }],
+      items: [{ id: "title-1", mediaType: "movie", name: "Example Movie", categoryId: "movies", categoryName: "Movies", posterUrl: null, backdropUrl: null, plot: "A movie.", genre: "Drama", castNames: null, director: null, releaseDate: "2026", rating: 8, durationMinutes: 90, containerExtension: "mp4", isFavorite: false, providerLabel: "Main TV" }],
       totalCount: 1,
       nextOffset: null,
     });
@@ -47,6 +47,19 @@ describe("OnDemandPage", () => {
     expect(await screen.findByText("Example Movie")).toBeInTheDocument();
     fireEvent.change(screen.getByPlaceholderText("Search movies"), { target: { value: "example" } });
     await waitFor(() => expect(mockedTitles).toHaveBeenLastCalledWith("movie", expect.objectContaining({ query: "example" })));
+  });
+
+  it("labels same-named titles with the provider each came from", async () => {
+    const [title] = (await mockedTitles("movie", {})).items;
+    mockedTitles.mockResolvedValue({
+      items: [title, { ...title, id: "title-2", providerLabel: "Backup provider" }],
+      totalCount: 2,
+      nextOffset: null,
+    });
+    renderPage();
+    expect(await screen.findByText("Main TV")).toBeInTheDocument();
+    expect(screen.getByText("Backup provider")).toBeInTheDocument();
+    expect(screen.getAllByText("Example Movie")).toHaveLength(2);
   });
 
   it("switches to the series catalog", async () => {

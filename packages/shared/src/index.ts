@@ -56,7 +56,6 @@ export type ProviderProfile = {
   label?: string | null;
   isActive: boolean;
   isLive?: boolean;
-  isOnDemand?: boolean;
   baseUrl: string;
   username: string;
   outputFormat: "m3u8" | "ts";
@@ -277,6 +276,7 @@ export type OnDemandTitle = {
   durationMinutes: number | null;
   containerExtension: string | null;
   isFavorite: boolean;
+  providerLabel: string;
 };
 
 export type OnDemandEpisode = {

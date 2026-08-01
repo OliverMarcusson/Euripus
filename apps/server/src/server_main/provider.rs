@@ -20,7 +20,6 @@ struct ProviderProfileResponse {
     label: Option<String>,
     is_active: bool,
     is_live: bool,
-    is_on_demand: bool,
     base_url: String,
     username: String,
     output_format: String,
@@ -89,11 +88,12 @@ struct SelectProviderPayload {
     selection: ProviderSelection,
 }
 
+/// Live channels are the only content type bound to a single provider. On-demand merges
+/// every provider's catalogue, so it has nothing to select.
 #[derive(Debug, Deserialize, Clone, Copy)]
 #[serde(rename_all = "camelCase")]
 enum ProviderSelection {
     Live,
-    OnDemand,
 }
 
 async fn load_epg_sources(
@@ -130,10 +130,8 @@ fn provider_profile_response_from_record(
     provider: ProviderProfileRecord,
     epg_sources: Vec<EpgSourceResponse>,
     live_provider_id: Option<Uuid>,
-    on_demand_provider_id: Option<Uuid>,
 ) -> ProviderProfileResponse {
     let is_live = live_provider_id == Some(provider.id);
-    let is_on_demand = on_demand_provider_id == Some(provider.id);
     ProviderProfileResponse {
         id: provider.id,
         provider_type: provider.provider_type,
@@ -141,7 +139,6 @@ fn provider_profile_response_from_record(
         // Keep the legacy active flag aligned with live-channel selection.
         is_active: is_live,
         is_live,
-        is_on_demand,
         base_url: provider.base_url,
         username: provider.username,
         output_format: provider.output_format,
@@ -189,26 +186,23 @@ async fn load_provider_profile_response(
     };
 
     let epg_sources = load_epg_sources(pool, provider.id).await?;
-    let (live_provider_id, on_demand_provider_id) = load_provider_selections(pool, user_id).await?;
+    let live_provider_id = load_live_provider_selection(pool, user_id).await?;
     Ok(Some(provider_profile_response_from_record(
         provider,
         epg_sources,
         live_provider_id,
-        on_demand_provider_id,
     )))
 }
 
-async fn load_provider_selections(
+async fn load_live_provider_selection(
     pool: &PgPool,
     user_id: Uuid,
-) -> Result<(Option<Uuid>, Option<Uuid>), AppError> {
-    sqlx::query_as::<_, (Option<Uuid>, Option<Uuid>)>(
-        "SELECT live_provider_id, on_demand_provider_id FROM users WHERE id = $1",
-    )
-    .bind(user_id)
-    .fetch_one(pool)
-    .await
-    .map_err(Into::into)
+) -> Result<Option<Uuid>, AppError> {
+    sqlx::query_scalar::<_, Option<Uuid>>("SELECT live_provider_id FROM users WHERE id = $1")
+        .bind(user_id)
+        .fetch_one(pool)
+        .await
+        .map_err(Into::into)
 }
 
 async fn load_provider_profile_responses(
@@ -229,7 +223,7 @@ async fn load_provider_profile_responses(
     .fetch_all(pool)
     .await?;
 
-    let (live_provider_id, on_demand_provider_id) = load_provider_selections(pool, user_id).await?;
+    let live_provider_id = load_live_provider_selection(pool, user_id).await?;
     let mut responses = Vec::with_capacity(providers.len());
     for provider in providers {
         let epg_sources = load_epg_sources(pool, provider.id).await?;
@@ -237,7 +231,6 @@ async fn load_provider_profile_responses(
             provider,
             epg_sources,
             live_provider_id,
-            on_demand_provider_id,
         ));
     }
 
@@ -514,7 +507,6 @@ async fn save_provider(
         r#"
         UPDATE users
         SET live_provider_id = COALESCE(live_provider_id, $2),
-            on_demand_provider_id = COALESCE(on_demand_provider_id, $2),
             active_provider_id = COALESCE(active_provider_id, $2)
         WHERE id = $1
         "#,
@@ -564,10 +556,6 @@ async fn delete_provider(
               live_provider_id,
               (SELECT id FROM provider_profiles WHERE user_id = $1 ORDER BY updated_at DESC, created_at DESC, id ASC LIMIT 1)
             ),
-            on_demand_provider_id = COALESCE(
-              on_demand_provider_id,
-              (SELECT id FROM provider_profiles WHERE user_id = $1 ORDER BY updated_at DESC, created_at DESC, id ASC LIMIT 1)
-            ),
             active_provider_id = COALESCE(
               active_provider_id,
               (SELECT id FROM provider_profiles WHERE user_id = $1 ORDER BY updated_at DESC, created_at DESC, id ASC LIMIT 1)
@@ -606,13 +594,11 @@ async fn activate_provider(
     let user_database_lock = state.user_database_lock(auth.user_id);
     let _database_guard = user_database_lock.lock().await;
 
-    sqlx::query(
-        "UPDATE users SET live_provider_id = $2, on_demand_provider_id = $2, active_provider_id = $2 WHERE id = $1",
-    )
-    .bind(auth.user_id)
-    .bind(id)
-    .execute(&state.pool)
-    .await?;
+    sqlx::query("UPDATE users SET live_provider_id = $2, active_provider_id = $2 WHERE id = $1")
+        .bind(auth.user_id)
+        .bind(id)
+        .execute(&state.pool)
+        .await?;
     invalidate_channel_visibility_cache(&state, auth.user_id, None);
 
     search::indexing::rebuild_postgres_search_documents(&state, auth.user_id).await?;
@@ -635,21 +621,15 @@ async fn select_provider(
     let user_database_lock = state.user_database_lock(auth.user_id);
     let _database_guard = user_database_lock.lock().await;
 
-    let selection_column = match payload.selection {
-        ProviderSelection::Live => "live_provider_id",
-        ProviderSelection::OnDemand => "on_demand_provider_id",
-    };
-    let query = format!("UPDATE users SET {selection_column} = $2 WHERE id = $1");
-    sqlx::query(&query)
+    let ProviderSelection::Live = payload.selection;
+    sqlx::query("UPDATE users SET live_provider_id = $2 WHERE id = $1")
         .bind(auth.user_id)
         .bind(id)
         .execute(&state.pool)
         .await?;
 
-    if matches!(payload.selection, ProviderSelection::Live) {
-        invalidate_channel_visibility_cache(&state, auth.user_id, None);
-        search::indexing::rebuild_postgres_search_documents(&state, auth.user_id).await?;
-    }
+    invalidate_channel_visibility_cache(&state, auth.user_id, None);
+    search::indexing::rebuild_postgres_search_documents(&state, auth.user_id).await?;
 
     let provider = load_provider_profile_response(&state.pool, auth.user_id, id)
         .await?

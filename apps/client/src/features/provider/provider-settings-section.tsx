@@ -34,9 +34,6 @@ export function ProviderSettingsSection() {
   const liveProvider = state.providers.find(
     (provider) => provider.isLive ?? provider.isActive,
   );
-  const onDemandProvider = state.providers.find(
-    (provider) => provider.isOnDemand ?? provider.isActive,
-  );
 
   return (
     <div className="flex flex-col">
@@ -61,7 +58,7 @@ export function ProviderSettingsSection() {
           </Button>
 
           {state.providers.length > 1 ? (
-            <div className="grid gap-4 rounded-xl border border-border/60 bg-muted/20 p-4 sm:grid-cols-2">
+            <div className="grid gap-4 rounded-xl border border-border/60 bg-muted/20 p-4">
               <label className="grid gap-2 text-sm font-medium" htmlFor="liveProvider">
                 Live channels provider
                 <select
@@ -83,27 +80,9 @@ export function ProviderSettingsSection() {
                   ))}
                 </select>
               </label>
-              <label className="grid gap-2 text-sm font-medium" htmlFor="onDemandProvider">
-                On-demand provider
-                <select
-                  id="onDemandProvider"
-                  className="h-9 rounded-md border border-input bg-background px-3 text-sm"
-                  value={onDemandProvider?.id ?? ""}
-                  disabled={state.selectionMutation.isPending}
-                  onChange={(event) =>
-                    state.selectionMutation.mutate({
-                      providerId: event.target.value,
-                      selection: "onDemand",
-                    })
-                  }
-                >
-                  {state.providers.map((provider) => (
-                    <option key={provider.id} value={provider.id}>
-                      {formatProviderLabel(provider)}
-                    </option>
-                  ))}
-                </select>
-              </label>
+              <p className="text-xs text-muted-foreground">
+                On demand combines the catalogues from every provider.
+              </p>
             </div>
           ) : null}
 
@@ -133,9 +112,6 @@ export function ProviderSettingsSection() {
                       <span className="flex shrink-0 items-center gap-2">
                         {provider.isLive ?? provider.isActive ? (
                           <Badge variant="default">Live</Badge>
-                        ) : null}
-                        {provider.isOnDemand ?? provider.isActive ? (
-                          <Badge variant="accent">On demand</Badge>
                         ) : null}
                         <Badge
                           variant={

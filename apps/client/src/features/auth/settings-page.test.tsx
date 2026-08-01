@@ -77,7 +77,6 @@ describe("SettingsPage", () => {
         providerType: "xtreme",
         isActive: selection === "live",
         isLive: selection === "live",
-        isOnDemand: selection === "onDemand",
         baseUrl: "https://provider.example.com",
         username: "demo",
         outputFormat: "m3u8",
@@ -454,7 +453,7 @@ describe("SettingsPage", () => {
     ).toBeDisabled();
   });
 
-  it("edits saved providers and selects them independently by content type", async () => {
+  it("edits saved providers and selects the live channels provider", async () => {
     mockedGetProviders.mockResolvedValue([
       {
         id: "provider-1",
@@ -528,9 +527,8 @@ describe("SettingsPage", () => {
         "live",
       ),
     );
-    expect(
-      (screen.getByLabelText("On-demand provider") as HTMLSelectElement).value,
-    ).toBe("provider-1");
+    // On demand merges every provider's catalogue, so it has nothing to select.
+    expect(screen.queryByLabelText("On-demand provider")).toBeNull();
   });
 
   it("deletes the selected provider and falls back to another saved provider", async () => {
