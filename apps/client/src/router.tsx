@@ -3,6 +3,7 @@ import { Outlet, createRootRoute, createRoute, createRouter, Navigate } from "@t
 import { AppShell } from "@/components/layout/app-shell";
 import { AdminPage } from "@/features/admin/admin-page";
 import { AuthPage } from "@/features/auth/auth-page";
+import { DiscoverPage } from "@/features/discover/discover-page";
 import { FavoritesPage } from "@/features/channels/favorites-page";
 import { GuidePage } from "@/features/channels/guide-page";
 import { PpvFavoritesPage } from "@/features/channels/ppv-favorites-page";
@@ -133,6 +134,12 @@ const onDemandRoute = createRoute({
   component: OnDemandPage,
 });
 
+const discoverRoute = createRoute({
+  getParentRoute: () => authenticatedRoute,
+  path: "/discover",
+  component: DiscoverPage,
+});
+
 const searchRoute = createRoute({
   getParentRoute: () => authenticatedRoute,
   path: "/search",
@@ -177,6 +184,7 @@ const routeTree = rootRoute.addChildren([
   authenticatedRoute.addChildren([
     guideRoute,
     onDemandRoute,
+    discoverRoute,
     sportsRoute,
     searchRoute,
     favoritesRoute,

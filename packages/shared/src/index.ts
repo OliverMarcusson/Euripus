@@ -312,6 +312,53 @@ export type OnDemandPage = {
   nextOffset: number | null;
 };
 
+export type DiscoverChart = "trending" | "popular" | "top_rated";
+
+/**
+ * TMDB has no per-country popularity, so a country is applied one of two ways:
+ * `available_in` filters by where a title is licensed to stream, `from` by where it was
+ * made. Neither is a true "most watched in Sweden" chart, because TMDB does not have one.
+ */
+export type DiscoverCountryMode = "global" | "available_in" | "from";
+
+export type DiscoverChartOption = {
+  chart: DiscoverChart;
+  countryMode: DiscoverCountryMode;
+};
+
+export type DiscoverCharts = {
+  enabled: boolean;
+  countries: string[];
+  charts: DiscoverChartOption[];
+  lastRefreshedAt: string | null;
+};
+
+export type DiscoverTitle = {
+  rank: number;
+  tmdbId: number;
+  mediaType: OnDemandMediaType;
+  title: string;
+  originalTitle: string;
+  originCountries: string[];
+  overview: string | null;
+  posterUrl: string | null;
+  backdropUrl: string | null;
+  releaseDate: string | null;
+  releaseYear: number | null;
+  voteAverage: number | null;
+  voteCount: number | null;
+  /** Null when no title in the user's providers matched, so the card is not playable. */
+  onDemandTitleId: string | null;
+  providerLabel: string | null;
+};
+
+export type DiscoverPage = {
+  items: DiscoverTitle[];
+  totalCount: number;
+  nextOffset: number | null;
+  availableCount: number;
+};
+
 export type Program = {
   id: string;
   channelId: string | null;

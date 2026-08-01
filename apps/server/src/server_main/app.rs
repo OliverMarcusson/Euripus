@@ -49,6 +49,7 @@ pub async fn run() -> Result<()> {
     let periodic_state = state.clone();
     sync::spawn_periodic_sync_worker(periodic_state);
     transcode::spawn_reaper(state.clone());
+    discover::spawn_refresh_worker(state.clone());
 
     let bind_address: SocketAddr = state.config.bind_address;
     let cors = build_cors_layer(&state.config)?;
@@ -193,6 +194,7 @@ pub(super) fn shared_api_router() -> Router<AppState> {
         .route("/server/network", get(get_server_network_status))
         .merge(admin::browser_router())
         .merge(auth::shared_router())
+        .merge(discover::shared_router())
         .merge(provider::shared_router())
         .merge(guide::shared_router())
         .merge(google_calendar::router())

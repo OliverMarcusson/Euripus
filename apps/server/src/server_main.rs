@@ -60,6 +60,7 @@ use uuid::Uuid;
 mod admin;
 mod app;
 mod auth;
+mod discover;
 mod error;
 mod google_calendar;
 mod guide;

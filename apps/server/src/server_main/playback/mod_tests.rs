@@ -44,6 +44,8 @@ fn sample_app_state_with_public_origin(public_origin: Option<&str>) -> AppState 
             admin_password: None,
             pi_executable: "pi".to_string(),
             pi_model: "gpt-5.6-terra".to_string(),
+            tmdb_api_key: None,
+            tmdb_countries: Vec::new(),
         }),
         provider_http_client: reqwest::Client::new(),
         relay_http_client: reqwest::Client::new(),

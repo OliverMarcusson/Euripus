@@ -20,6 +20,10 @@ import type {
   AuthSession,
   ChannelSearchResults,
   Channel,
+  DiscoverChart,
+  DiscoverCharts,
+  DiscoverCountryMode,
+  DiscoverPage,
   FavoriteChannelEntry,
   FavoriteEntry,
   FavoriteOrderPayload,
@@ -633,6 +637,32 @@ export function removeOnDemandTitleFavorite(id: string) {
 
 export function getSeriesEpisodes(id: string) {
   return request<OnDemandEpisode[]>(`/on-demand/series/${id}/episodes`);
+}
+
+export function getDiscoverCharts() {
+  return request<DiscoverCharts>("/discover/charts");
+}
+
+export function getDiscoverTitles(
+  mediaType: OnDemandMediaType,
+  options: {
+    chart?: DiscoverChart;
+    countryMode?: DiscoverCountryMode;
+    country?: string;
+    offset?: number;
+    limit?: number;
+  } = {},
+) {
+  const params = new URLSearchParams({ type: mediaType });
+  if (options.chart) params.set("chart", options.chart);
+  if (options.countryMode) params.set("countryMode", options.countryMode);
+  // The server rejects a country on the global chart, so only send it when it applies.
+  if (options.country && options.countryMode && options.countryMode !== "global") {
+    params.set("country", options.country);
+  }
+  if (options.offset != null) params.set("offset", String(options.offset));
+  if (options.limit != null) params.set("limit", String(options.limit));
+  return request<DiscoverPage>(`/discover/titles?${params.toString()}`);
 }
 
 export function getChannels(qualityChannelsOnly = false) {

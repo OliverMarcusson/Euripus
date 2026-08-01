@@ -97,6 +97,32 @@ Euripus requests only calendar-event write access and read-only calendar-list ac
 
 For an external consent screen left in Google Cloud's testing mode, Google may expire refresh tokens after seven days. Publish the OAuth app for durable connections, subject to Google's consent and verification requirements.
 
+## Optional TMDB Discover Charts
+
+Discover browses TMDB movie and series charts and marks which titles your providers actually carry.
+
+1. Create a free TMDB account and request an API key under **Settings → API**.
+2. Set these values in `apps/server/.env`:
+
+   ```bash
+   # Either a v3 API key or a v4 bearer token.
+   APP_TMDB_API_KEY=your-tmdb-api-key
+   APP_TMDB_COUNTRIES=SE,US,GB,NO,DK,FI
+   ```
+
+Charts refresh every six hours. Each country in `APP_TMDB_COUNTRIES` adds chart refreshes per cycle, so keep the list to countries you actually browse.
+
+TMDB has **no per-country popularity data**, so Discover's country filter offers the two dimensions TMDB does support:
+
+- **Available in** — globally popular titles licensed to stream in that country.
+- **From** — titles produced in that country.
+
+Neither is a "most watched in Sweden" chart, because TMDB does not publish one.
+
+Titles are matched to your catalog by normalized name and release year, including TMDB's localized alternative titles. Alternative titles are backfilled in the background at up to 120 titles per refresh cycle, so match quality improves over the first few cycles after enabling this.
+
+The free TMDB tier is for non-commercial use and requires attribution, which the Discover page displays.
+
 ## Optional Mullvad Routing
 
 If you want Euripus server-side traffic to leave through Mullvad, enable it in `.env.selfhosted-images`:

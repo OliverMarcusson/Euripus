@@ -10,6 +10,7 @@ import {
   Film,
   LogOut,
   MonitorUp,
+  Compass,
   Pause,
   Play,
   Search,
@@ -62,6 +63,7 @@ import { useChannelSettingsStore } from "@/store/channel-settings-store";
 const navigation = [
   { to: "/guide", label: "Guide", icon: TvMinimal },
   { to: "/on-demand", label: "On Demand", icon: Film },
+  { to: "/discover", label: "Discover", icon: Compass },
   { to: "/sports", label: "Sports", icon: Trophy },
   { to: "/search", label: "Search", icon: Search },
   { to: "/favorites", label: "Favorites", icon: Heart },

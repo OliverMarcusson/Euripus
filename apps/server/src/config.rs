@@ -32,6 +32,8 @@ pub struct Config {
     pub admin_password: Option<String>,
     pub pi_executable: String,
     pub pi_model: String,
+    pub tmdb_api_key: Option<String>,
+    pub tmdb_countries: Vec<String>,
 }
 
 impl Config {
@@ -106,6 +108,13 @@ impl Config {
         let admin_password = read_optional_env("APP_ADMIN_PASSWORD")?;
         let pi_executable = read_env_or_default("APP_PI_EXECUTABLE", "pi")?;
         let pi_model = read_env_or_default("APP_PI_MODEL", "gpt-5.6-terra")?;
+        let tmdb_api_key = read_optional_env("APP_TMDB_API_KEY")?;
+        // Discover refreshes one chart per country per mode per media type, so the country
+        // list is a deliberate shortlist rather than every ISO 3166-1 code.
+        let tmdb_countries = parse_country_codes(&read_env_or_default(
+            "APP_TMDB_COUNTRIES",
+            "SE,US,GB,NO,DK,FI",
+        )?)?;
         let decoded_key = STANDARD
             .decode(read_env("APP_ENCRYPTION_KEY_B64")?)
             .context("APP_ENCRYPTION_KEY_B64 must be valid base64")?;
@@ -140,8 +149,34 @@ impl Config {
             admin_password,
             pi_executable,
             pi_model,
+            tmdb_api_key,
+            tmdb_countries,
         })
     }
+}
+
+fn parse_country_codes(value: &str) -> Result<Vec<String>> {
+    let mut codes = Vec::new();
+    for code in value
+        .split(',')
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+    {
+        if code.len() != 2
+            || !code
+                .chars()
+                .all(|character| character.is_ascii_alphabetic())
+        {
+            return Err(anyhow::anyhow!(
+                "APP_TMDB_COUNTRIES must be a comma-separated list of two-letter country codes, got {code}"
+            ));
+        }
+        let code = code.to_ascii_uppercase();
+        if !codes.contains(&code) {
+            codes.push(code);
+        }
+    }
+    Ok(codes)
 }
 
 fn read_env(name: &str) -> Result<String> {
